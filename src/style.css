@@ -1,0 +1,120 @@
+/* QWidget */
+QWidget {
+    background-color: #333333;
+}
+/* QLabel with ID 'label' */
+QLabel#label {
+    color: #888888;
+    background-color: #444444;
+    font-weight: bold;
+}
+/* QLabel with ID 'label' in active state */
+QLabel#label:active {
+    color: #e9e9e9;
+}
+/* QPushButton with ID 'button' */
+QPushButton#button {
+    color: #888888;
+    background-color: #444444;
+    font-weight: bold;
+    border: none;
+    padding: 5px;
+}
+/* QPushButton with ID 'button' in active state */
+QPushButton#button:active {
+    color: #e9e9e9;
+}
+/* QPushButton with ID 'button' on hover */
+QPushButton#button:hover {
+    color: #ffffff;
+}
+
+/* Miikka */
+
+/* QTabWidget */
+QTabWidget {
+    font-size: 18px;
+}
+QTabWidget::pane {
+    border: 0px;
+}
+QTabBar::tab {
+    background-color: #444444;
+    color: #888888;
+    padding-left: 16px;
+    padding-right: 16px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+    font-size: 18;
+    margin-left: 4px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+QTabBar::tab:hover {
+    color: #e9e9e9;
+}
+QTabBar::tab:selected {
+    background-color: #333333;
+    color: #e9e9e9;
+    border-bottom: 0px;
+}
+/* QTabBar tab with ID 'status_tab' */
+#status_tab {
+    background-color: #ff0000;
+    color: #888888;
+    padding-left: 16px;
+    padding-right: 16px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+    font-size: 18;
+    margin-left: 4px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+/* QSpinBox with ID 'spin_box' */
+#spin_box {
+    color: #000000;
+    background-color: #ffffff;
+    font-size: 24px;
+}
+/* QDoubleSpinBox with ID 'double_spin_box' */
+#double_spin_box {
+    color: #000000;
+    background-color: #ffffff;
+    font-size: 24px;
+}
+/* QLineEdit with ID 'line_edit' */
+#line_edit {
+    color: #000000;
+    background-color: #ffffff;
+}
+/* QTextEdit with ID 'text_edit' */
+#text_edit {
+    color: #000000;
+    background-color: #ffffff;
+}
+/* QPushButton with ID 'toggle_button' */
+#button_widget {
+    color: #888888;
+    background-color: gray;
+    font-weight: bold;
+    border: none;
+    padding: 5px;
+}
+#button_widget:active {
+    color: #e9e9e9;
+}
+#button_widget:hover {
+    color: #ffffff;
+}
+#button_widget:pressed {
+    border: 5px solid #e9e9e9;
+}
+/* ParameterTree */
+ParameterTree {
+    background-color: #bebebe;
+}
+/* ParameterTree's children */
+ParameterTree * {
+    background-color: #bebebe;
+}
