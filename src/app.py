@@ -18,7 +18,18 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.2.2"
+version_number = "0.3.0"
+
+# Define instrument types
+CPC = 1
+PSM = 2
+Electrometer = 3
+CO2_sensor = 4
+RHTP = 5
+eDiluter = 6
+PSM2 = 7
+TSI_CPC = 8
+Example_device = -1
 
 # Set the LC_ALL environment variable to US English (en_US)
 locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
@@ -41,20 +52,24 @@ class SerialDeviceConnection():
     def __init__(self):
         self.serial_port = "NaN"
         self.timeout = 0.2
+        self.baud_rate = 115200
         # store comport name currently in use
         self.port_in_use = "NaN"
         
     def set_port(self, serial_port):
-            self.serial_port = serial_port
+        self.serial_port = serial_port
+    
+    def set_baud_rate(self, baud_rate):
+        self.baud_rate = baud_rate
     
     # open serial connection
     def connect(self):
         try: # Try to close with the port that was last used (needed if the port has been changed)
-            self.connection = Serial(self.port_in_use, 115200, timeout=self.timeout) #, rtscts=True)
+            self.connection = Serial(self.port_in_use, self.baud_rate, timeout=self.timeout) #, rtscts=True)
             self.connection.close()
         except: # if fails (i.e. port has not been open) continue normally
             pass
-        self.connection = Serial(self.serial_port, 115200, timeout=self.timeout) #, rtscts=True)
+        self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout) #, rtscts=True)
         self.port_in_use = self.serial_port
         print("Connected to %s" % self.serial_port)
     
@@ -63,7 +78,7 @@ class SerialDeviceConnection():
         # if connection exist, it is closed
         try:
             # Try to close with the port that was last used (needed if the port has been changed)
-            self.connection = Serial(self.port_in_use, 115200, timeout=self.timeout) #, rtscts=True)
+            self.connection = Serial(self.port_in_use, self.baud_rate, timeout=self.timeout) #, rtscts=True)
             self.connection.close()
             #print("Connection closed")
         except:
@@ -91,6 +106,10 @@ class SerialDeviceConnection():
             self.send_message(":MEAS:ALL")
             QTimer.singleShot(100, lambda: self.send_message(":SYST:PRNT"))
             QTimer.singleShot(200, lambda: self.send_message(":SYST:PALL"))
+        
+        elif device_type == TSI_CPC: # TSI CPC
+            self.send_message("RD") # read concentration
+            QTimer.singleShot(100, lambda: self.send_message("RIE")) # read instrument errors
     
     # --- CPC & PSM set/command functions ---
 
@@ -132,7 +151,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         #opts['type'] = 'action'
         opts['addText'] = "Add new device"
         # opts for choosing device type when adding new device
-        opts["addList"] = ["CPC", "PSM", "Electrometer", "CO2 sensor", "RHTP", "Example device"] #  "eDiluter",
+        opts["addList"] = ["CPC", "PSM", "Electrometer", "CO2 sensor", "RHTP", "TSI CPC", "Example device"] #  "eDiluter",
         parameterTypes.GroupParameter.__init__(self, **opts)
         self.n_devices = 0
         self.cpc_dict = {'None': 'None'}
@@ -141,7 +160,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
 
     def addNew(self, device_name): # device_name is the name of the added device type
         # device_value is used to set the default value for the Device type parameter below
-        device_value = {"CPC": 1, "PSM": 2, "Electrometer": 3, "CO2 sensor": 4, "RHTP": 5, "eDiluter": 6, "Example device": -1}[device_name]
+        device_value = {"CPC": 1, "PSM": 2, "Electrometer": 3, "CO2 sensor": 4, "RHTP": 5, "eDiluter": 6, "TSI CPC": 8, "Example device": -1}[device_name]
         # if OSX mode is on, set COM port type as string to allow complex port addresses
         if osx_mode:
             port_type = 'str'
@@ -154,7 +173,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 dict(name="Serial number", type='str', value="", readonly=True),
                 #dict(name="Baud rate", type='int', value=115200, visible=False),
                 dict(name = "Connection", value = SerialDeviceConnection(), visible=False),
-                {'name': 'Device type', 'type': 'list', 'values': {"CPC": 1, "PSM": 2, "Electrometer": 3, "CO2 sensor": 4, "RHTP": 5, "eDiluter": 6, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
+                {'name': 'Device type', 'type': 'list', 'values': {"CPC": 1, "PSM": 2, "Electrometer": 3, "CO2 sensor": 4, "RHTP": 5, "eDiluter": 6, "TSI CPC": 8, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
                 dict(name = "Connected", type='bool', value=False, readonly = True),
                 dict(name = "DevID", type='int', value=self.n_devices,readonly = True, visible = False),
                 dict(name = "Plot to main", type='bool', value=True),
@@ -163,7 +182,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         self.n_devices += 1 # increase device counter
 
         # if added device is CPC, update cpc_dict
-        if device_value == 1:
+        if device_value in [CPC, TSI_CPC]:
             self.update_cpc_dict()
 
         # if added device is PSM, add option for 'Connected CPC'
@@ -191,7 +210,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         self.cpc_dict = {'None': 'None'} # reset cpc_dict
         # add device name to cpc_dict if device is CPC
         for device in self.children():
-            if device.child('Device type').value() == 1:
+            if device.child('Device type').value() in [CPC, TSI_CPC]:
                 self.cpc_dict[device.name()] = device.child('DevID').value()
         # update Connected CPC parameter for all PSM devices
         for device in self.children():
@@ -484,7 +503,7 @@ class MainWindow(QMainWindow):
 
                 try: # try to send message(s) to device
 
-                    if device_type == 1: # CPC
+                    if device_type in [CPC, TSI_CPC]: # CPC
                         # send multiple messages to device according to type
                         dev.child('Connection').value().send_multiple_messages(device_type)
 
@@ -908,6 +927,26 @@ class MainWindow(QMainWindow):
                     
                     # update eDiluter status tab values
                     self.device_widgets[dev.child('DevID').value()].update_values(self.latest_data[dev.child('DevID').value()])
+                
+                if dev.child('Device type').value() == TSI_CPC:
+                    try: # try to read data, decode and split
+                        readings = dev.child('Connection').value().connection.read_all()
+                        readings = readings.decode().split("\r")[:-1]
+                        readings[0] = float(readings[0]) # convert concentration to float
+
+                        # store to latest data dictionary
+                        self.latest_data[dev.child('DevID').value()] = readings
+
+                        # set error_status flag if instrument errors is not equal to 0
+                        if int(readings[1], 16) != 0:
+                            self.error_status = 1
+                            # set device error flag
+                            self.set_device_error(dev.child('DevID').value(), True)
+                    
+                    except Exception as e: # if reading fails, store nan values to latest_data
+                        print(traceback.format_exc())
+                        logging.exception(e)
+                        self.latest_data[dev.child('DevID').value()] = full(2, nan)
 
             else: # if not connected, store nan values to latest_data
                 # TODO is this needed?
@@ -930,51 +969,64 @@ class MainWindow(QMainWindow):
                     # get connected CPC ID
                     cpc_id = dev.child('Connected CPC').value()
 
-                    # if connected CPC is not 'None' and the CPC itself is connected, calculate missing values and compile connected CPC data
-                    if cpc_id != 'None' and self.params.child('Device settings').child('CPC (ID ' + str(cpc_id) + ')').child('Connected').value():
-                        cpc_data = self.latest_data[cpc_id]
-
-                        # calculate inlet flow
-                        # Inlet flow = (CPC flow + CO flow) - Saturator flow - Excess flow
-                        cpc_flow = self.latest_settings[cpc_id][2] # get CPC measured flow rate
-                        co_flow = self.device_widgets[psm_id].set_tab.set_co_flow.value_spinbox.value() # get co flow rate from PSM widget
-                        if co_flow == 0: # if co flow is 0, not set by user
-                            self.device_widgets[psm_id].set_tab.set_co_flow.set_red_color() # set CO flow rate widget to red
-                            #self.set_device_error(dev.child('DevID').value(), True) # set device error flag
-                            self.error_status = 1 # set error_status flag to 1
-                        else:
-                            self.device_widgets[psm_id].set_tab.set_co_flow.set_default_color()
-                        inlet_flow = cpc_flow + co_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
-                        # store inlet flow into PSM latest_settings, rounded to 3 decimals
-                        self.latest_settings[psm_id][6] = round(inlet_flow, 3)
-                        # show inlet flow in PSM widget
-                        self.device_widgets[psm_id].status_tab.flow_inlet.change_value(str(round(inlet_flow, 3)))
-
-                        # calculate polynomial correction factor
-                        pcor = array([-0.0272052 ,  0.11394213, -0.08959011, -0.20675596,  0.24343024, 1.10531145])
-                        poly_correction  = polyval(pcor, float(self.latest_data[psm_id][2]))
+                    # if connected CPC is not 'None'
+                    if cpc_id != 'None':
                         
-                        # calculate dilution correction factor
-                        # Dilution ratio = (inlet flow + Excess flow + Saturator flow) / Inlet flow
-                        dilution_correction_factor = (inlet_flow + float(self.latest_data[psm_id][3]) + float(self.latest_data[psm_id][2])) / inlet_flow
-                        
-                        # calculate concentration from PSM
-                        # Concentration from PSM = CPC concentration * Dilution ratio / Polynomial correction
-                        concentration_from_psm = self.latest_data[cpc_id][0] * dilution_correction_factor / poly_correction
-                        # add to PSM latest_data
-                        self.latest_data[psm_id][0] = round(concentration_from_psm, 2)
+                        # get connected CPC device parameter
+                        for cpc in self.params.child('Device settings').children():
+                            if cpc.child('DevID').value() == cpc_id:
+                                cpc_device = cpc
+                                break
 
-                        # compile connected CPC data
-                        connected_cpc_data = [
-                            cpc_data[0], round(dilution_correction_factor, 3), # concentration,  dilution correction factor
-                            cpc_data[3], cpc_data[4], cpc_data[5], cpc_data[6],# T: saturator, condenser, optics, cabin
-                            cpc_data[8], cpc_data[9], cpc_data[7],# P: critical orifice, nozzle, absolute (inlet)
-                            cpc_data[10], cpc_data[3], cpc_data[2],# liquid level, pulses, pulse duration
-                            cpc_data[12], cpc_data[13] # number of errors, system status (hex)
-                        ]
+                        # if CPC is connected, calculate missing values
+                        if cpc_device.child('Connected').value() == True:
+                            cpc_data = self.latest_data[cpc_id]
 
-                        # replace PSM's latest_data CPC indices 15-28 with connected CPC data
-                        self.latest_data[psm_id][15:29] = connected_cpc_data
+                            # calculate inlet flow
+                            # Inlet flow = (CPC flow + CO flow) - Saturator flow - Excess flow
+                            if cpc_device.child('Device type').value() == CPC:
+                                cpc_flow = self.latest_settings[cpc_id][2] # get CPC flow rate from CPC latest_settings
+                            elif cpc_device.child('Device type').value() == TSI_CPC:
+                                cpc_flow = float(self.latest_settings[psm_id][5]) # get cpc flow rate from PSM latest_settings
+                            co_flow = self.device_widgets[psm_id].set_tab.set_co_flow.value_spinbox.value() # get co flow rate from PSM widget
+                            if co_flow == 0: # if co flow is 0, not set by user
+                                self.device_widgets[psm_id].set_tab.set_co_flow.set_red_color() # set CO flow rate widget to red
+                                #self.set_device_error(dev.child('DevID').value(), True) # set device error flag
+                                self.error_status = 1 # set error_status flag to 1
+                            else:
+                                self.device_widgets[psm_id].set_tab.set_co_flow.set_default_color()
+                            inlet_flow = cpc_flow + co_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
+                            # store inlet flow into PSM latest_settings, rounded to 3 decimals
+                            self.latest_settings[psm_id][6] = round(inlet_flow, 3)
+                            # show inlet flow in PSM widget
+                            self.device_widgets[psm_id].status_tab.flow_inlet.change_value(str(round(inlet_flow, 3)))
+
+                            # calculate polynomial correction factor
+                            pcor = array([-0.0272052 ,  0.11394213, -0.08959011, -0.20675596,  0.24343024, 1.10531145])
+                            poly_correction  = polyval(pcor, float(self.latest_data[psm_id][2]))
+                            
+                            # calculate dilution correction factor
+                            # Dilution ratio = (inlet flow + Excess flow + Saturator flow) / Inlet flow
+                            dilution_correction_factor = (inlet_flow + float(self.latest_data[psm_id][3]) + float(self.latest_data[psm_id][2])) / inlet_flow
+                            
+                            # calculate concentration from PSM
+                            # Concentration from PSM = CPC concentration * Dilution ratio / Polynomial correction
+                            concentration_from_psm = float(self.latest_data[cpc_id][0]) * dilution_correction_factor / poly_correction
+                            # add to PSM latest_data
+                            self.latest_data[psm_id][0] = round(concentration_from_psm, 2)
+
+                            # if Connected CPC is Airmodus CPC, add CPC data to PSM latest_data
+                            if cpc_device.child('Device type').value() == CPC:
+                                # compile connected CPC data
+                                connected_cpc_data = [
+                                    cpc_data[0], round(dilution_correction_factor, 3), # concentration,  dilution correction factor
+                                    cpc_data[3], cpc_data[4], cpc_data[5], cpc_data[6],# T: saturator, condenser, optics, cabin
+                                    cpc_data[8], cpc_data[9], cpc_data[7],# P: critical orifice, nozzle, absolute (inlet)
+                                    cpc_data[10], cpc_data[3], cpc_data[2],# liquid level, pulses, pulse duration
+                                    cpc_data[12], cpc_data[13] # number of errors, system status (hex)
+                                ]
+                                # replace PSM's latest_data CPC indices 15-28 with connected CPC data
+                                self.latest_data[psm_id][15:29] = connected_cpc_data
             
             except Exception as e:
                 print(traceback.format_exc())
@@ -1006,7 +1058,7 @@ class MainWindow(QMainWindow):
             try: # if one device fails, continue with the next one
 
                 # CPC - create lists for concentration and raw concentration (no correction)
-                if dev.child('Device type').value() == 1: # CPC
+                if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
                     # if device is not yet in plot_data dict, add it
                     if dev_id not in self.plot_data:
                         # make the new lists the same size as x_time_list
@@ -1094,7 +1146,7 @@ class MainWindow(QMainWindow):
                 
                 # if device is connected, add latest_values data to plot_data according to device
                 if dev.child('Connected').value():
-                    if dev.child('Device type').value() == 1: # CPC
+                    if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
                         psm_connection = False
                         # check if this CPC is connected to any PSM
                         for psm in self.params.child('Device settings').children():
@@ -1157,7 +1209,9 @@ class MainWindow(QMainWindow):
                     # add curve to viewbox according to device type
                     if dev.child('Device type').value() == -1: # if Example device
                         self.main_plot.viewboxes[-1].addItem(self.curve_dict[dev_id])
-                    else: # if not Example device
+                    elif dev.child('Device type').value() == TSI_CPC: # if TSI CPC
+                        self.main_plot.viewboxes[0].addItem(self.curve_dict[dev_id])
+                    else: # other devices
                         self.main_plot.viewboxes[dev.child('Device type').value() - 1].addItem(self.curve_dict[dev_id])
                 
                 # if device type is RHTP, update main plot according to selected value
@@ -1213,7 +1267,7 @@ class MainWindow(QMainWindow):
                         # update plot in device widget
                         # TODO start times removed from curve setData, problems with array shift index - add back later if compatible
                         #self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[start_time:self.time_counter+1], y=self.plot_data[dev_id][start_time:self.time_counter+1])
-                        if dev.child('Device type').value() == 1: # CPC
+                        if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
                             # update plot with raw CPC concentration
                             self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':raw'][:self.time_counter+1])
                         elif dev.child('Device type').value() == 3: # Electrometer
@@ -1262,23 +1316,37 @@ class MainWindow(QMainWindow):
                     else:
                         # get connected CPC id
                         cpc_id = dev.child('Connected CPC').value()
-                        # get connected CPC flow
-                        connected_cpc_flow = float(self.latest_settings[cpc_id][2])
-                        # get PSM stored CPC flow
-                        stored_cpc_flow = float(self.latest_settings[dev_id][5])
-                        # if PSM stored CPC flow is different from connected CPC flow
-                        if stored_cpc_flow != connected_cpc_flow:
-                            # send connected CPC flow value to PSM
-                            dev.child('Connection').value().send_set_val(connected_cpc_flow, ":SET:FLOW:CPC ", decimals=3)
-                            # set PSM update flag
-                            self.psm_settings_updates[dev_id] = True
-                            # GUI is updated when PSM settings are fetched
+                        # get connected CPC device parameter
+                        for cpc in self.params.child('Device settings').children():
+                            if cpc.child('DevID').value() == cpc_id:
+                                cpc_device = cpc
+                                break
+                        # if connected CPC is Airmodus CPC
+                        if cpc_device.child('Device type').value() == CPC:
+                            # get connected CPC flow
+                            connected_cpc_flow = float(self.latest_settings[cpc_id][2])
+                            # get PSM stored CPC flow
+                            stored_cpc_flow = float(self.latest_settings[dev_id][5])
+                            # if PSM stored CPC flow is different from connected CPC flow
+                            if stored_cpc_flow != connected_cpc_flow:
+                                # send connected CPC flow value to PSM
+                                dev.child('Connection').value().send_set_val(connected_cpc_flow, ":SET:FLOW:CPC ", decimals=3)
+                                # set PSM update flag
+                                self.psm_settings_updates[dev_id] = True
+                                # GUI is updated when PSM settings are fetched
+                        # if connected CPC is TSI CPC
+                        elif cpc_device.child('Device type').value() == TSI_CPC:
+                            # check if displayed CPC flow is different from connected CPC flow
+                            if self.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != str(self.latest_settings[dev_id][5]) + " lpm":
+                                # set status_tab flow_cpc color to normal and change text
+                                self.device_widgets[dev_id].status_tab.flow_cpc.change_color(0)
+                                self.device_widgets[dev_id].status_tab.flow_cpc.change_value(str(self.latest_settings[dev_id][5]) + " lpm")
 
             except Exception as e:
                 print(traceback.format_exc())
                 logging.exception(e)
 
-        # update axes # TODO add flag for updating axes, activate flag where function was previously called
+        # update axes # TODO add flag for updating axes, activate flag when any 'Plot to main' option is changed
         self.axis_check()
         # update legend with current values
         self.legend_check()
@@ -1295,8 +1363,12 @@ class MainWindow(QMainWindow):
             # go through each device
             for dev in self.params.child('Device settings').children():
 
+                # if device is TSI CPC, do nothing
+                if dev.child('Device type').value() == TSI_CPC:
+                    pass
+
                 # if device is connected OR example device
-                if dev.child('Connected').value() or dev.child('Device type').value() == -1:
+                elif dev.child('Connected').value() or dev.child('Device type').value() == -1:
 
                     try:
                         # store device id to variable for clarity
@@ -1442,22 +1514,31 @@ class MainWindow(QMainWindow):
                                         # get connected CPC ID
                                         cpc_id = dev.child('Connected CPC').value()
 
-                                        # if connected CPC is not 'None' and the CPC itself is connected, write connected CPC settings
-                                        if cpc_id != 'None' and self.params.child('Device settings').child('CPC (ID ' + str(cpc_id) + ')').child('Connected').value():
-                                            cpc_settings = self.latest_settings[cpc_id]
-                                            file.write(',') # separate PSM and CPC settings with comma
-                                            # compile connected CPC settings
-                                            connected_cpc_settings = [
-                                                cpc_settings[6], cpc_settings[11], cpc_settings[9], # autofill, drain, water removal
-                                                cpc_settings[3], cpc_settings[4], cpc_settings[5], # T set: saturator, condenser, optics
-                                                cpc_settings[2], cpc_settings[0] # inlet flow rate (measured), aveaging time
-                                            ]
-                                            # write connected CPC settings
-                                            write_data = ','.join(str(vals) for vals in connected_cpc_settings)
-                                            file.write(write_data)
+                                        # if connected CPC is not 'None'
+                                        if cpc_id != 'None':
+                                            # get connected CPC device parameter
+                                            for cpc in self.params.child('Device settings').children():
+                                                if cpc.child('DevID').value() == cpc_id:
+                                                    cpc_device = cpc
+                                                    break
+                                            # if CPC is connected Airmodus CPC, write connected CPC settings
+                                            if cpc_device.child('Connected').value() and cpc_device.child('Device type').value() == CPC:
+                                                cpc_settings = self.latest_settings[cpc_id]
+                                                file.write(',') # separate PSM and CPC settings with comma
+                                                # compile connected CPC settings
+                                                connected_cpc_settings = [
+                                                    cpc_settings[6], cpc_settings[11], cpc_settings[9], # autofill, drain, water removal
+                                                    cpc_settings[3], cpc_settings[4], cpc_settings[5], # T set: saturator, condenser, optics
+                                                    cpc_settings[2], cpc_settings[0] # inlet flow rate (measured), aveaging time
+                                                ]
+                                                # write connected CPC settings
+                                                write_data = ','.join(str(vals) for vals in connected_cpc_settings)
+                                                file.write(write_data)
+                                            
+                                            else: # if CPC is not connected or not Airmodus CPC, write nan values
+                                                file.write(',nan,nan,nan,nan,nan,nan,nan,nan')
                                         
-                                        # else write nan values
-                                        else:
+                                        else: # if no connected CPC selected, write nan values
                                             file.write(',nan,nan,nan,nan,nan,nan,nan,nan')
 
                     # if saving fails, set saving status to 0
@@ -1594,12 +1675,15 @@ class MainWindow(QMainWindow):
         device.child("Connection").value().send_set_val(value, ":SET:FLOW:CPC ", decimals=3)
         # get connected CPC ID
         cpc_id = device.child("Connected CPC").value()
-        # if PSM is connected to CPC, send value to CPC as well
+        # if PSM is connected to CPC
         if cpc_id != 'None':
             # get connected CPC device parameter
-            cpc_device = self.params.child('Device settings').child('CPC (ID ' + str(cpc_id) + ')')
-            # if CPC is connected
-            if cpc_device.child('Connected').value():
+            for cpc in self.params.child('Device settings').children():
+                if cpc.child('DevID').value() == cpc_id:
+                    cpc_device = cpc
+                    break
+            # if device is connected Airmodus CPC
+            if cpc_device.child('Connected').value() == True and cpc_device.child('Device type').value() == CPC:
                 # send flow rate set value to CPC
                 cpc_device.child("Connection").value().send_set_val(value, ":SET:FLOW ", decimals=3)
     
@@ -1992,6 +2076,16 @@ class MainWindow(QMainWindow):
                 # connect set_tab's command_widget's command_input to send_command function
                 widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: connection.send_command(widget.set_tab.command_widget))
             
+            if device_type == TSI_CPC: # if TSI CPC
+                # create TSI widget instance
+                widget = TSIWidget(device_param)
+                # store connection for readability
+                connection = device_param.child('Connection').value()
+                # add baud rate parameter
+                device_param.addChild({'name': 'Baud rate', 'type': 'int', 'value': 115200})
+                # connect baud rate parameter to connection's set_baud_rate function
+                device_param.child('Baud rate').sigValueChanged.connect(lambda: connection.set_baud_rate(device_param.child('Baud rate').value()))
+            
             if device_type == -1: # if Example device
                 widget = ExampleDeviceWidget(device_param) # create Example device widget instance
 
@@ -2170,6 +2264,8 @@ class MainPlot(GraphicsLayoutWidget):
     def show_hide_axis(self, device_type, show):
         if device_type == -1: # if Example device
             axis = self.axes[-1]
+        elif device_type == TSI_CPC:
+            axis = self.axes[0]
         else:
             axis = self.axes[device_type - 1]
         if show:
@@ -2859,6 +2955,16 @@ class eDiluterWidget(QTabWidget):
                 # change color of active mode button
                 self.mode_dict[current_list[0]].change_color(1)
                 self.current_mode = current_list[0] # update current mode
+
+# TSI CPC widget
+class TSIWidget(QTabWidget):
+    def __init__(self, device_parameter, *args, **kwargs):
+        super().__init__()
+        self.device_parameter = device_parameter # store device parameter tree reference
+        self.name = device_parameter.name() # store device name
+        # create plot widget for TSI CPC
+        self.plot_tab = SinglePlot(device_type=1)
+        self.addTab(self.plot_tab, "TSI CPC plot")
 
 # Example device widget
 class ExampleDeviceWidget(QTabWidget):
