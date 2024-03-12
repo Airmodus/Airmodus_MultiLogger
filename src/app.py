@@ -151,7 +151,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         #opts['type'] = 'action'
         opts['addText'] = "Add new device"
         # opts for choosing device type when adding new device
-        opts["addList"] = ["CPC", "PSM", "Electrometer", "CO2 sensor", "RHTP", "TSI CPC", "Example device"] #  "eDiluter",
+        opts["addList"] = ["CPC", "PSM", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "TSI CPC", "Example device"] #  "eDiluter",
         parameterTypes.GroupParameter.__init__(self, **opts)
         self.n_devices = 0
         self.cpc_dict = {'None': 'None'}
@@ -160,7 +160,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
 
     def addNew(self, device_name): # device_name is the name of the added device type
         # device_value is used to set the default value for the Device type parameter below
-        device_value = {"CPC": 1, "PSM": 2, "Electrometer": 3, "CO2 sensor": 4, "RHTP": 5, "eDiluter": 6, "TSI CPC": 8, "Example device": -1}[device_name]
+        device_value = {"CPC": CPC, "PSM": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_name]
         # if OSX mode is on, set COM port type as string to allow complex port addresses
         if osx_mode:
             port_type = 'str'
@@ -173,7 +173,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 dict(name="Serial number", type='str', value="", readonly=True),
                 #dict(name="Baud rate", type='int', value=115200, visible=False),
                 dict(name = "Connection", value = SerialDeviceConnection(), visible=False),
-                {'name': 'Device type', 'type': 'list', 'values': {"CPC": 1, "PSM": 2, "Electrometer": 3, "CO2 sensor": 4, "RHTP": 5, "eDiluter": 6, "TSI CPC": 8, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
+                {'name': 'Device type', 'type': 'list', 'values': {"CPC": CPC, "PSM": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
                 dict(name = "Connected", type='bool', value=False, readonly = True),
                 dict(name = "DevID", type='int', value=self.n_devices,readonly = True, visible = False),
                 dict(name = "Plot to main", type='bool', value=True),
@@ -186,7 +186,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
             self.update_cpc_dict()
 
         # if added device is PSM, add option for 'Connected CPC'
-        if device_value == 2:
+        if device_value in [PSM, PSM2]:
             # add options for connected CPC
             self.children()[-1].addChild({'name': 'Connected CPC', 'type': 'list', 'values': self.cpc_dict, 'value': 'None'})
             # add cpc_changed flag to device
@@ -196,7 +196,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
             #self.children()[-1].child('Connected CPC').sigValueChanged.connect(lambda: self.update_cpc_changed(self.children()[-1]))
         
         # if added device is RHTP, add options for plotted value
-        if device_value == 5:
+        if device_value == RHTP:
             # remove default Plot to main parameter
             self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
             # create new Plot to main parameter with options for plotted value
@@ -214,7 +214,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 self.cpc_dict[device.name()] = device.child('DevID').value()
         # update Connected CPC parameter for all PSM devices
         for device in self.children():
-            if device.child('Device type').value() == 2:
+            if device.child('Device type').value() in [PSM, PSM2]:
                 # store current value (ID) of Connected CPC parameter
                 current_cpc = device.child('Connected CPC').value()
                 # remove Connected CPC parameter
@@ -507,19 +507,19 @@ class MainWindow(QMainWindow):
                         # send multiple messages to device according to type
                         dev.child('Connection').value().send_multiple_messages(device_type)
 
-                    elif device_type == 2: # PSM
+                    elif device_type in [PSM, PSM2]: # PSM
                         # if settings update flag is True, fetch set points from PSM and update GUI
                         if self.psm_settings_updates[dev.child('DevID').value()] == True:
                             # send message to device to get settings
                             dev.child('Connection').value().send_message(":SYST:PRNT")
 
-                    elif device_type == 3: # Electrometer
+                    elif device_type == Electrometer: # Electrometer
                         dev.child('Connection').value().connection.reset_input_buffer()
                         dev.child('Connection').value().connection.reset_output_buffer()
                         dev.child('Connection').value().connection.read_all()
                         dev.child('Connection').value().send_message(":MEAS:V")
 
-                    elif device_type == 4: # CO2 sensor
+                    elif device_type == CO2_sensor: # CO2 sensor
                         dev.child('Connection').value().connection.reset_input_buffer()
                         dev.child('Connection').value().connection.reset_output_buffer()
                         dev.child('Connection').value().connection.read_all()
@@ -530,7 +530,7 @@ class MainWindow(QMainWindow):
 
                     # eDiluter pushes data automatically
 
-                    if device_type in [1, 2, 4, 5]: # CPC, PSM, CO2, RHTP
+                    if device_type in [CPC, PSM, PSM2, CO2_sensor, RHTP]: # CPC, PSM, CO2, RHTP
                         # if Serial number is empty, send IDN inquiry with delay
                         if dev.child('Serial number').value() == "":
                             QTimer.singleShot(300, lambda: dev.child('Connection').value().connection.write(b'*IDN?\n'))
@@ -545,7 +545,7 @@ class MainWindow(QMainWindow):
             # if device is connected
             if dev.child('Connected').value():
 
-                if dev.child('Device type').value() == 1: # CPC
+                if dev.child('Device type').value() == CPC: # CPC
 
                     # start with nan lists to avoid false values in case lists cannot be updated
                     # TODO create nan lists in init function and assign here from there
@@ -652,7 +652,7 @@ class MainWindow(QMainWindow):
                     else: # if settings are not valid, clear .par update flag
                         self.par_updates[dev.child('DevID').value()] = 0
                 
-                if dev.child('Device type').value() == 2: # PSM
+                if dev.child('Device type').value() in [PSM, PSM2]: # PSM
                     
                     # if device doesn't yet exist in latest_data dictionary, add as nan list
                     if dev.child('DevID').value() not in self.latest_data:
@@ -742,8 +742,12 @@ class MainWindow(QMainWindow):
                     # compile settings list if update flag is True and settings_fetched is True
                     if self.psm_settings_updates[dev.child('DevID').value()] == True and settings_fetched == True:
                         try:
-                            # get CO flow rate from PSM widget
-                            co_flow = round(self.device_widgets[dev.child('DevID').value()].set_tab.set_co_flow.value_spinbox.value(), 2)
+                            if dev.child('Device type').value() == PSM:
+                                # get CO flow rate from PSM widget
+                                co_flow = round(self.device_widgets[dev.child('DevID').value()].set_tab.set_co_flow.value_spinbox.value(), 2)
+                            elif dev.child('Device type').value() == PSM2:
+                                # set nan as placeholder
+                                co_flow = "nan"
                             # compile settings with latest PSM prnt settings and CO flow rate
                             settings = self.compile_psm_settings(self.latest_psm_prnt[dev.child('DevID').value()], co_flow)
                             # store settings to latest settings dictionary with device id as key
@@ -756,7 +760,7 @@ class MainWindow(QMainWindow):
                             print(traceback.format_exc())
                             logging.exception(e)
                 
-                if dev.child('Device type').value() == 3: # Electrometer
+                if dev.child('Device type').value() == Electrometer: # Electrometer
                     try: # try to read data, decode, split and convert to float
                         readings = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
                         readings = list(map(float,readings.split(";")))
@@ -767,7 +771,7 @@ class MainWindow(QMainWindow):
                         self.latest_data[dev.child('DevID').value()] = full(3, nan)
                         logging.exception(e)
 
-                if dev.child('Device type').value() == 4: # CO2 sensor TODO make CO2 process similar to RHTP?
+                if dev.child('Device type').value() == CO2_sensor: # CO2 sensor TODO make CO2 process similar to RHTP?
                     try:
                         # if Serial number is empty, look for *IDN
                         if dev.child('Serial number').value() == "":
@@ -802,7 +806,7 @@ class MainWindow(QMainWindow):
                         self.latest_data[dev.child('DevID').value()] = full(3, nan)
                         logging.exception(e)
                 
-                if dev.child('Device type').value() == 5: # RHTP
+                if dev.child('Device type').value() == RHTP: # RHTP
                     try:
                         # if Serial number is empty, look for *IDN
                         if dev.child('Serial number').value() == "":
@@ -859,7 +863,7 @@ class MainWindow(QMainWindow):
                         self.latest_data[dev.child('DevID').value()] = full(3, nan)
                         logging.exception(e)
                 
-                if dev.child('Device type').value() == 6: # eDiluter
+                if dev.child('Device type').value() == eDiluter: # eDiluter
                     try:
                         # store nan values to latest_data in case reading fails
                         self.latest_data[dev.child('DevID').value()] = full(12, nan)
@@ -950,7 +954,7 @@ class MainWindow(QMainWindow):
 
             else: # if not connected, store nan values to latest_data
                 # TODO is this needed?
-                if dev.child('Device type').value() == 4: # CO2 sensor
+                if dev.child('Device type').value() == CO2_sensor: # CO2 sensor
                     self.latest_data[dev.child('DevID').value()] = full(3, nan)
     
     # update plot data lists
@@ -963,7 +967,7 @@ class MainWindow(QMainWindow):
 
             try:
                 # if device is PSM and it is connected, calculate and compile connected CPC values
-                if dev.child('Device type').value() == 2 and dev.child('Connected').value(): # PSM
+                if dev.child('Device type').value() in [PSM, PSM2] and dev.child('Connected').value(): # PSM
                     # get PSM ID
                     psm_id = dev.child('DevID').value()
                     # get connected CPC ID
@@ -983,19 +987,34 @@ class MainWindow(QMainWindow):
                             cpc_data = self.latest_data[cpc_id]
 
                             # calculate inlet flow
-                            # Inlet flow = (CPC flow + CO flow) - Saturator flow - Excess flow
-                            if cpc_device.child('Device type').value() == CPC:
-                                cpc_flow = self.latest_settings[cpc_id][2] # get CPC flow rate from CPC latest_settings
-                            elif cpc_device.child('Device type').value() == TSI_CPC:
-                                cpc_flow = float(self.latest_settings[psm_id][5]) # get cpc flow rate from PSM latest_settings
-                            co_flow = self.device_widgets[psm_id].set_tab.set_co_flow.value_spinbox.value() # get co flow rate from PSM widget
-                            if co_flow == 0: # if co flow is 0, not set by user
-                                self.device_widgets[psm_id].set_tab.set_co_flow.set_red_color() # set CO flow rate widget to red
-                                #self.set_device_error(dev.child('DevID').value(), True) # set device error flag
-                                self.error_status = 1 # set error_status flag to 1
-                            else:
-                                self.device_widgets[psm_id].set_tab.set_co_flow.set_default_color()
-                            inlet_flow = cpc_flow + co_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
+                            if dev.child('Device type').value() == PSM:
+                                # Inlet flow = (CPC flow + CO flow) - Saturator flow - Excess flow
+                                if cpc_device.child('Device type').value() == CPC:
+                                    cpc_flow = self.latest_settings[cpc_id][2] # get CPC flow rate from CPC latest_settings
+                                elif cpc_device.child('Device type').value() == TSI_CPC:
+                                    cpc_flow = float(self.latest_settings[psm_id][5]) # get cpc flow rate from PSM latest_settings
+                                # get co flow rate from PSM widget
+                                co_flow = self.device_widgets[psm_id].set_tab.set_co_flow.value_spinbox.value()
+                                if co_flow == 0: # if co flow is 0, not set by user
+                                    self.device_widgets[psm_id].set_tab.set_co_flow.set_red_color() # set CO flow rate widget to red
+                                    #self.set_device_error(dev.child('DevID').value(), True) # set device error flag
+                                    self.error_status = 1 # set error_status flag to 1
+                                else:
+                                    self.device_widgets[psm_id].set_tab.set_co_flow.set_default_color()
+                                inlet_flow = cpc_flow + co_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
+                            
+                            elif dev.child('Device type').value() == PSM2:
+                                if cpc_device.child('Device type').value() == CPC:
+                                    cpc_flow = self.latest_settings[cpc_id][2] # get CPC flow rate from CPC latest_settings
+                                elif cpc_device.child('Device type').value() == TSI_CPC:
+                                    cpc_flow = float(self.latest_settings[psm_id][5]) # get cpc flow rate from PSM latest_settings
+                                # get vacuum mfc flow rate from PSM
+                                vacuum_flow = float(self.latest_settings[psm_id][15])
+                                # TODO vacuum flow error code is in error hex, integrate to update_errors
+                                # TODO should flow_vacuum widget be updated elsewhere?
+                                inlet_flow = cpc_flow + vacuum_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
+                                self.device_widgets[psm_id].status_tab.flow_vacuum.change_value(str(round(vacuum_flow, 3)))
+
                             # store inlet flow into PSM latest_settings, rounded to 3 decimals
                             self.latest_settings[psm_id][6] = round(inlet_flow, 3)
                             # show inlet flow in PSM widget
@@ -1004,7 +1023,7 @@ class MainWindow(QMainWindow):
                             # calculate polynomial correction factor
                             pcor = array([-0.0272052 ,  0.11394213, -0.08959011, -0.20675596,  0.24343024, 1.10531145])
                             poly_correction  = polyval(pcor, float(self.latest_data[psm_id][2]))
-                            
+
                             # calculate dilution correction factor
                             # Dilution ratio = (inlet flow + Excess flow + Saturator flow) / Inlet flow
                             dilution_correction_factor = (inlet_flow + float(self.latest_data[psm_id][3]) + float(self.latest_data[psm_id][2])) / inlet_flow
@@ -1083,7 +1102,7 @@ class MainWindow(QMainWindow):
                         self.plot_data[str(dev_id)+':raw'][:tmp_data.shape[0]] = tmp_data
 
                 # Electrometer - create lists for each value
-                elif dev.child('Device type').value() == 3: # Electrometer
+                elif dev.child('Device type').value() == Electrometer: # Electrometer
                     types = [':1', ':2', ':3']
                     # if device is not yet in plot_data dict, add it
                     if str(dev_id)+':1' not in self.plot_data:
@@ -1105,7 +1124,7 @@ class MainWindow(QMainWindow):
                             self.plot_data[str(dev_id)+i][:tmp_data.shape[0]] = tmp_data
 
                 # RHTP - create lists for each value
-                elif dev.child('Device type').value() == 5: # RHTP
+                elif dev.child('Device type').value() == RHTP: # RHTP
                     types = [':rh', ':t', ':p']
                     # if device is not yet in plot_data dict, add it
                     if str(dev_id)+':rh' not in self.plot_data:
@@ -1150,7 +1169,7 @@ class MainWindow(QMainWindow):
                         psm_connection = False
                         # check if this CPC is connected to any PSM
                         for psm in self.params.child('Device settings').children():
-                            if psm.child('Device type').value() == 2 and psm.child('Connected').value():
+                            if psm.child('Device type').value() in [PSM, PSM2] and psm.child('Connected').value():
                                 if psm.child('Connected CPC').value() == dev_id:
                                     # if PSM connection exists, add latest PSM concentration value to plot_data
                                     self.plot_data[dev_id][self.time_counter] = self.latest_data[psm.child('DevID').value()][0]
@@ -1161,23 +1180,23 @@ class MainWindow(QMainWindow):
                             self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][0]
                         # add raw concentration value to plot_data
                         self.plot_data[str(dev_id)+':raw'][self.time_counter] = self.latest_data[dev_id][0]
-                    elif dev.child('Device type').value() == 2: # PSM
+                    elif dev.child('Device type').value() in [PSM, PSM2]: # PSM
                         # add latest saturator flow rate value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][2]
-                    elif dev.child('Device type').value() == 3: # Electrometer
+                    elif dev.child('Device type').value() == Electrometer: # Electrometer
                         # add latest voltage values to time_counter index of plot_data
                         self.plot_data[str(dev_id)+':1'][self.time_counter] = self.latest_data[dev_id][0]
                         self.plot_data[str(dev_id)+':2'][self.time_counter] = self.latest_data[dev_id][1]
                         self.plot_data[str(dev_id)+':3'][self.time_counter] = self.latest_data[dev_id][2]
-                    elif dev.child('Device type').value() == 4: # CO2 sensor
+                    elif dev.child('Device type').value() == CO2_sensor: # CO2 sensor
                         # add latest CO2 value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][0]
-                    elif dev.child('Device type').value() == 5: # RHTP
+                    elif dev.child('Device type').value() == RHTP: # RHTP
                         # add latest values (RH, T, P) to time_counter index of plot_data
                         self.plot_data[str(dev_id)+':rh'][self.time_counter] = self.latest_data[dev_id][0]
                         self.plot_data[str(dev_id)+':t'][self.time_counter] = self.latest_data[dev_id][1]
                         self.plot_data[str(dev_id)+':p'][self.time_counter] = self.latest_data[dev_id][2]
-                    elif dev.child('Device type').value() == 6: # eDiluter
+                    elif dev.child('Device type').value() == eDiluter: # eDiluter
                         # add latest T1 value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][3]
                 if dev.child('Device type').value() == -1: # Example device
@@ -1209,13 +1228,15 @@ class MainWindow(QMainWindow):
                     # add curve to viewbox according to device type
                     if dev.child('Device type').value() == -1: # if Example device
                         self.main_plot.viewboxes[-1].addItem(self.curve_dict[dev_id])
+                    elif dev.child('Device type').value() == PSM2: # if PSM2
+                        self.main_plot.viewboxes[1].addItem(self.curve_dict[dev_id])
                     elif dev.child('Device type').value() == TSI_CPC: # if TSI CPC
                         self.main_plot.viewboxes[0].addItem(self.curve_dict[dev_id])
                     else: # other devices
                         self.main_plot.viewboxes[dev.child('Device type').value() - 1].addItem(self.curve_dict[dev_id])
                 
                 # if device type is RHTP, update main plot according to selected value
-                if dev.child('Device type').value() == 5: # RHTP
+                if dev.child('Device type').value() == RHTP: # RHTP
                     if dev.child("Plot to main").value() == None:
                         self.curve_dict[dev_id].setData(x=[], y=[])
                     elif dev.child("Plot to main").value() == 'RH':
@@ -1228,11 +1249,11 @@ class MainWindow(QMainWindow):
                 # other devices: update main plot if 'Plot to main' is enabled
                 elif dev.child("Plot to main").value():
                     # if device is Electrometer, plot Voltage 2
-                    if dev.child('Device type').value() == 3: # Electrometer
+                    if dev.child('Device type').value() == Electrometer: # Electrometer
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':2'][:self.time_counter+1])
                     else: # other devices
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[dev_id][:self.time_counter+1])
-                else: # if 'Plot to main' is off, remove curve from main plot (set empty data)
+                else: # if 'Plot to main' is off, hide curve from main plot (set empty data)
                     self.curve_dict[dev_id].setData(x=[], y=[])
                 
                 # scale x-axis range if Follow is on
@@ -1249,11 +1270,11 @@ class MainWindow(QMainWindow):
                     # start time is used to crop plot data to only show non-nan values
                     if dev_id not in self.start_times:
                         # Electrometer
-                        if dev.child('Device type').value() == 3:
+                        if dev.child('Device type').value() == Electrometer:
                             if str(self.plot_data[str(dev_id)+':1'][self.time_counter]) != "nan":
                                 self.start_times[dev_id] = self.time_counter
                         # RHTP
-                        elif dev.child('Device type').value() == 5:
+                        elif dev.child('Device type').value() == RHTP:
                             if str(self.plot_data[str(dev_id)+':rh'][self.time_counter]) != "nan":
                                 self.start_times[dev_id] = self.time_counter
                         # other devices
@@ -1270,7 +1291,7 @@ class MainWindow(QMainWindow):
                         if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
                             # update plot with raw CPC concentration
                             self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':raw'][:self.time_counter+1])
-                        elif dev.child('Device type').value() == 3: # Electrometer
+                        elif dev.child('Device type').value() == Electrometer: # Electrometer
                             # update Electrometer plot with all 3 values
                             self.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':1'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':2'][:self.time_counter+1])
@@ -1281,7 +1302,7 @@ class MainWindow(QMainWindow):
                                     plot.setXRange(self.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.current_time, padding=0)
                                     plot.getViewBox().enableAutoRange(axis='y') # set y axis autorange on
                                     plot.getViewBox().setAutoVisible(y=True) # scale according to visible data
-                        elif dev.child('Device type').value() == 5: # RHTP
+                        elif dev.child('Device type').value() == RHTP: # RHTP
                             # update RHTP plot with all 3 values
                             self.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':rh'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':t'][:self.time_counter+1])
@@ -1293,7 +1314,7 @@ class MainWindow(QMainWindow):
 
                 # if device type is PSM and it is connected
                 # update connected CPC's flow rate or warn if no CPC is connected
-                if dev.child('Device type').value() == 2 and dev.child('Connected').value():
+                if dev.child('Device type').value() in [PSM ,PSM2] and dev.child('Connected').value():
                     # if no CPC is connected
                     if dev.child('Connected CPC').value() == 'None':
                         # if stored CPC flow is not 1, set it to 1
@@ -1431,19 +1452,22 @@ class MainWindow(QMainWindow):
                             # write headers if they don't exist
                             if write_headers == 1:
                             #if len(file.readline()) == 0:
-                                if dev.child('Device type').value() == 1: # CPC
+                                if dev.child('Device type').value() == CPC: # CPC
                                     # TODO complete CPC headers, check if ok
                                     file.write('YYYY.MM.DD hh:mm:ss,Concentration (#/cc),Dead time (µs),Number of pulses,Saturator T (C),Condenser T (C),Optics T (C),Cabin T (C),Inlet P (kPa),Critical orifice P (kPa),Nozzle P (kPa),Liquid level,Pulse ratio,Total CPC errors,System status error')
-                                elif dev.child('Device type').value() == 2: # PSM
+                                elif dev.child('Device type').value() == PSM: # PSM
                                     # TODO check if PSM headers are ok
                                     file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM notes (hex),PSM system status errors (hex)')
-                                elif dev.child('Device type').value() == 3: # Electrometer
+                                elif dev.child('Device type').value() == PSM2: # PSM 2.0
+                                    # TODO this is wrong, fix!!
+                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM notes (hex),PSM system status errors (hex)')
+                                elif dev.child('Device type').value() == Electrometer: # Electrometer
                                     file.write('YYYY.MM.DD hh:mm:ss,Voltage 1 (V),Voltage 2 (V),Voltage 3 (V)')
-                                elif dev.child('Device type').value() == 4: # CO2
+                                elif dev.child('Device type').value() == CO2_sensor: # CO2
                                     file.write('YYYY.MM.DD hh:mm:ss,CO2 (ppm),T (C),RH (%)')
-                                elif dev.child('Device type').value() == 5: # RHTP
+                                elif dev.child('Device type').value() == RHTP: # RHTP
                                     file.write('YYYY.MM.DD hh:mm:ss,RH (%),T (C),P (Pa)')
-                                elif dev.child('Device type').value() == 6: # eDiluter
+                                elif dev.child('Device type').value() == eDiluter: # eDiluter
                                     file.write('YYYY.MM.DD hh:mm:ss,Status,P1,P2,T1,T2,T3,T4,T5,T6,DF1,DF2,DFTot')
                                 else:
                                     file.write('YYYY.MM.DD hh:mm:ss,value1,value2,value3')
@@ -1457,7 +1481,7 @@ class MainWindow(QMainWindow):
                             file.write(write_data)
                         
                         # if CPC or PSM, append .par file with new settings
-                        if dev.child('Device type').value() == 1 or dev.child('Device type').value() == 2:
+                        if dev.child('Device type').value() in [CPC, PSM, PSM2]:
                             # get filename from dictionary and add path to front
                             filename = self.filePath + self.par_filenames[dev_id]
 
@@ -1476,9 +1500,12 @@ class MainWindow(QMainWindow):
                             with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
                                 # write headers if they don't exist
                                 if write_headers == 1:
-                                    if dev.child('Device type').value() == 1: # CPC
+                                    if dev.child('Device type').value() == CPC: # CPC
                                         file.write('YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor')
-                                    elif dev.child('Device type').value() == 2: # PSM
+                                    elif dev.child('Device type').value() == PSM: # PSM
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s)')
+                                    elif dev.child('Device type').value() == PSM2: # PSM2
+                                        # TODO: This also sure to be wrong, fix
                                         file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s)')
                                 
                                 # reset local update_par flag
@@ -1489,7 +1516,7 @@ class MainWindow(QMainWindow):
                                     update_par = 1
                                 
                                 # if not set, check if device is PSM
-                                elif dev.child('Device type').value() == 2:
+                                elif dev.child('Device type').value() in [PSM, PSM2]:
                                     # check if Connected CPC parameter has been changed
                                     if dev.cpc_changed == True: # check device's cpc_changed flag
                                         update_par = 1
@@ -1510,7 +1537,7 @@ class MainWindow(QMainWindow):
                                     file.write(write_data)
 
                                     # if device type is PSM
-                                    if dev.child('Device type').value() == 2: # if PSM
+                                    if dev.child('Device type').value() in [PSM, PSM2]: # if PSM
                                         # get connected CPC ID
                                         cpc_id = dev.child('Connected CPC').value()
 
@@ -1656,7 +1683,7 @@ class MainWindow(QMainWindow):
     # compile settings list for PSM .par file
     def compile_psm_settings(self, prnt, co_flow):
         
-        # inlet flow is calculated and stored later in write_data
+        # inlet flow is calculated and stored in update_plot_data
         psm_settings = [
             prnt[1], prnt[2], prnt[3], prnt[4], prnt[5], # T setpoints: growth tube, PSM saturator, inlet, heater, drainage
             prnt[6], "nan", co_flow, # PSM stored CPC flow rate, inlet flow rate, CO flow rate,
@@ -1825,7 +1852,7 @@ class MainWindow(QMainWindow):
     
     # updates main_plot axes according to Plot to main settings
     def axis_check(self):
-        # hide all axes and remove x links
+        # hide all axes
         for i in range(0, len(self.main_plot.axes)):
             self.main_plot.show_hide_axis(i+1, False)
         # show axes for devices that are set to plot to main
@@ -1920,7 +1947,7 @@ class MainWindow(QMainWindow):
                         device_widget.setTabIcon(status_tab_index, QIcon())
                 
                 # if device is PSM, check co flow status
-                if device_type == 2:
+                if device_type == PSM:
                     # if co flow is red (error)
                     if device_widget.set_tab.set_co_flow.error == True:
                         # change tab icon to error icon
@@ -1959,7 +1986,7 @@ class MainWindow(QMainWindow):
             device_param.child("Device name").sigValueChanged.connect(lambda: self.update_tab_name(device_id, device_param.child("Device name").value()))
 
             # create new widget according to device type
-            if device_type == 1: # if CPC
+            if device_type == CPC: # if CPC
                 # create CPC widget instance
                 widget = CPCWidget(device_param)
                 # store connection for readability
@@ -1981,9 +2008,9 @@ class MainWindow(QMainWindow):
                 widget.set_tab.set_averaging_time.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TAVG "))
                 widget.set_tab.set_averaging_time.value_input.returnPressed.connect(lambda: connection.send_set_val(int(widget.set_tab.set_averaging_time.value_input.text()), ":SET:TAVG "))
 
-            if device_type == 2: # if PSM TODO optimize structure, remove repetition
+            if device_type in [PSM, PSM2]: # if PSM TODO optimize structure, remove repetition
                 # create PSM widget instance
-                widget = PSMWidget(device_param)
+                widget = PSMWidget(device_param, device_type)
                 # add to psm_settings_updates dictionary, set to True
                 self.psm_settings_updates[device_id] = True
                 # store connection for readability
@@ -2025,9 +2052,10 @@ class MainWindow(QMainWindow):
                 #widget.set_tab.set_cpc_flow.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_cpc_flow.value_input.text()), ":SET:FLOW:CPC "))
                 widget.set_tab.set_cpc_flow.value_input.returnPressed.connect(lambda: self.psm_cpc_flow_send(device_param, float(widget.set_tab.set_cpc_flow.value_input.text())))
                 widget.set_tab.set_cpc_flow.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
-                # co flow set
-                widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
-                widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                # if device type is PSM, connect co flow set
+                if device_type == PSM:
+                    widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                    widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
                 # connect set_tab's command_widget's command_input to send_command function
                 widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: connection.send_command(widget.set_tab.command_widget))
                 widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.psm_update(device_id))
@@ -2039,13 +2067,13 @@ class MainWindow(QMainWindow):
                 widget.set_tab.drying.clicked.connect(lambda: connection.send_set(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
                 #widget.set_tab.drying.clicked.connect(lambda: self.psm_update(device_id))
 
-            if device_type == 3: # if Electrometer
+            if device_type == Electrometer: # if Electrometer
                 widget = ElectrometerWidget(device_param) # create Electrometer widget instance
 
-            if device_type == 4: # if CO2
+            if device_type == CO2_sensor: # if CO2
                 widget = CO2Widget(device_param) # create CO2 widget instance
             
-            if device_type == 5: # if RHTP
+            if device_type == RHTP: # if RHTP
                 widget = RHTPWidget(device_param) # create RHTP widget instance
                 # check if there are other RHTP devices and if so, set 'Plot to main' according to them
                 for dev in self.params.child('Device settings').children():
@@ -2058,7 +2086,7 @@ class MainWindow(QMainWindow):
                 # delay ensures connection is made from updated "Plot to main" RHTP menu
                 QTimer.singleShot(60, lambda: device_param.child("Plot to main").sigValueChanged.connect(lambda parameter: self.rhtp_axis_changed(parameter.value())))
             
-            if device_type == 6: # if eDiluter
+            if device_type == eDiluter: # if eDiluter
                 widget = eDiluterWidget(device_param) # create eDiluter widget instance
                 # store connection for readability
                 connection = device_param.child('Connection').value()
@@ -2264,6 +2292,8 @@ class MainPlot(GraphicsLayoutWidget):
     def show_hide_axis(self, device_type, show):
         if device_type == -1: # if Example device
             axis = self.axes[-1]
+        elif device_type == PSM2:
+            axis = self.axes[1]
         elif device_type == TSI_CPC:
             axis = self.axes[0]
         else:
@@ -2549,15 +2579,16 @@ class CPCWidget(QTabWidget):
 
 # PSM widget
 class PSMWidget(QTabWidget):
-    def __init__(self, device_parameter, *args, **kwargs):
+    def __init__(self, device_parameter, device_type, *args, **kwargs):
         super().__init__()
         self.device_parameter = device_parameter # store device parameter tree reference
         self.name = device_parameter.name() # store device name
+        self.device_type = device_type # store device type (PSM or PSM 2.0)
         # create set tab for PSM
-        self.set_tab = PSMSetTab()
+        self.set_tab = PSMSetTab(device_type)
         self.addTab(self.set_tab, "Set")
         # create status tab for PSM
-        self.status_tab = PSMStatusTab()
+        self.status_tab = PSMStatusTab(device_type)
         self.addTab(self.status_tab, "Status")
         # create mode tab for PSM
         self.measure_tab = PSMMeasureTab()
@@ -2566,6 +2597,7 @@ class PSMWidget(QTabWidget):
         self.plot_tab = SinglePlot(device_type=2)
         self.addTab(self.plot_tab, "PSM plot")
 
+        # TODO check PSM 2.0 compatibility
         # create list of PSM status widgets, used in update_errors
         # TODO reverse to correct order, change update_errors
         self.psm_status_widgets = [ # reverse order for binary
@@ -2578,6 +2610,7 @@ class PSMWidget(QTabWidget):
 
     # convert PSM status hex to binary and update error label colors
     def update_errors(self, status_hex):
+        # TODO check PSM 2.0 compatibility
         status_bin = bin(int(status_hex, 16)) # convert hex to int and int to binary
         status_bin = status_bin[2:].zfill(14) # remove 0b from string and fill with 0s
         total_errors = status_bin.count("1") # count number of 1s in status_bin
@@ -2589,6 +2622,7 @@ class PSMWidget(QTabWidget):
     
     # if hex changes, make sure zero fill and indices match new hex
     def update_notes(self, note_hex):
+        # TODO check PSM 2.0 compatibility
         note_bin = bin(int(note_hex, 16)) # convert hex to int and int to binary
         note_bin = note_bin[2:].zfill(7) # remove 0b from string and fill with 0s
         total_notes = note_bin.count("1") # count number of 1s in note_bin
@@ -2615,6 +2649,7 @@ class PSMWidget(QTabWidget):
         return liquid_sets # return liquid settings string
 
     def update_settings(self, settings):
+        # TODO check PSM 2.0 compatibility
         self.set_tab.set_growth_tube_temp.value_spinbox.setValue(float(settings[1]))
         self.set_tab.set_saturator_temp.value_spinbox.setValue(float(settings[2]))
         self.set_tab.set_inlet_temp.value_spinbox.setValue(float(settings[3]))
@@ -2628,6 +2663,7 @@ class PSMWidget(QTabWidget):
     
     # update all data values in status tab
     def update_values(self, current_list):
+        # TODO check PSM 2.0 compatibility
         # update temperature values
         self.status_tab.temp_growth_tube.change_value(str(current_list[2]) + " °C")
         self.status_tab.temp_saturator.change_value(str(current_list[3]) + " °C")
@@ -2646,10 +2682,12 @@ class PSMWidget(QTabWidget):
         # liquid level values are updated in PSMWidget's update_notes()
 
 class PSMSetTab(QSplitter):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, device_type, *args, **kwargs):
         super().__init__()
         # split tab vertically
         self.setOrientation(Qt.Vertical)
+
+        # TODO check device type and create widgets accordingly
 
         # horizontal splitter containing upper half of tab - set widgets
         upper_splitter = QSplitter(Qt.Horizontal)
@@ -2667,8 +2705,9 @@ class PSMSetTab(QSplitter):
         middle_splitter = QSplitter(Qt.Horizontal)
         self.set_cpc_flow = SetWidget("CPC flow rate (stored in PSM)", " lpm")
         middle_splitter.addWidget(self.set_cpc_flow)
-        self.set_co_flow = SetWidget("CO flow rate", " lpm")
-        middle_splitter.addWidget(self.set_co_flow)
+        if device_type == PSM: # if PSM, add CO flow rate set widget
+            self.set_co_flow = SetWidget("CO flow rate", " lpm")
+            middle_splitter.addWidget(self.set_co_flow)
         # horizontal splitter containing lower half of tab - mode widgets
         lower_splitter = QSplitter(Qt.Horizontal)
         self.autofill = ToggleButton("Autofill")
@@ -2685,16 +2724,21 @@ class PSMSetTab(QSplitter):
         lower_splitter.setSizes([1000, 1000, 1000, 1000])
         self.addWidget(lower_splitter)
         # add line edit for command input
-        self.command_widget = CommandWidget("PSM")
+        if device_type == PSM: # if PSM
+            self.command_widget = CommandWidget("PSM")
+        elif device_type == PSM2: # if PSM 2.0
+            self.command_widget = CommandWidget("PSM 2.0")
         self.addWidget(self.command_widget)
         # set relative sizes in tab splitter
         self.setSizes([1000, 1000, 1000, 1000])
     
 class PSMStatusTab(QWidget):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, device_type, *args, **kwargs):
         super().__init__()
 
         layout = QGridLayout() # create layout
+
+        # TODO check device type and create widgets accordingly
 
         # temperature indicators
         self.temp_growth_tube = IndicatorWidget("Growth tube temperature")
@@ -2719,12 +2763,20 @@ class PSMStatusTab(QWidget):
         layout.addWidget(self.flow_excess, 3, 1)
         self.flow_inlet = IndicatorWidget("Inlet flow")
         layout.addWidget(self.flow_inlet, 4, 1)
+        if device_type == PSM2: # if PSM 2.0, add vacuum flow indicator
+            self.flow_vacuum = IndicatorWidget("Vacuum flow")
+            layout.addWidget(self.flow_vacuum, 4, 2)
 
         # pressure indicators
         self.pressure_inlet = IndicatorWidget("Inlet pressure")
         layout.addWidget(self.pressure_inlet, 0, 2)
-        self.pressure_critical_orifice = IndicatorWidget("Critical orifice pressure")
-        layout.addWidget(self.pressure_critical_orifice, 1, 2)
+        if device_type == PSM: # if PSM, add critical orifice pressure indicator
+            self.pressure_critical_orifice = IndicatorWidget("Critical orifice pressure")
+            layout.addWidget(self.pressure_critical_orifice, 1, 2)
+        elif device_type == PSM2: # if PSM 2.0, add vacuum line pressure indicator
+            # TODO name variable accordingly?
+            self.pressure_critical_orifice = IndicatorWidget("Vacuum line pressure")
+            layout.addWidget(self.pressure_critical_orifice, 1, 2)
 
         # liquid level indicators
         self.liquid_saturator = IndicatorWidget("Saturator liquid level")
