@@ -372,7 +372,7 @@ class MainWindow(QMainWindow):
         # add widgets to main_splitter (MainWindow's central widget)
         self.main_splitter.addWidget(left_splitter) # contains parameter tree and status lights
         self.main_splitter.addWidget(self.device_tabs) # contains devices as tabs
-        self.main_splitter.setSizes([300, 700]) # set relative sizes of widgets
+        self.main_splitter.setSizes([2000, 8000]) # set relative sizes of widgets
         # resize window (int x, int y)
         self.resize(1400, 800)
 
@@ -1311,9 +1311,10 @@ class MainWindow(QMainWindow):
                             self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[dev_id][:self.time_counter+1])
 
                 # PSM CPC FLOW CHECK
+                # warn if no CPC is connected or update Set tab's CPC sample flow value
+                # TODO current CPC flow in PSM Status tab is based on PSM value, check if correct
 
                 # if device type is PSM and it is connected
-                # update connected CPC's flow rate or warn if no CPC is connected
                 if dev.child('Device type').value() in [PSM ,PSM2] and dev.child('Connected').value():
                     # if no CPC is connected
                     if dev.child('Connected CPC').value() == 'None':
@@ -1342,26 +1343,33 @@ class MainWindow(QMainWindow):
                             if cpc.child('DevID').value() == cpc_id:
                                 cpc_device = cpc
                                 break
-                        # if connected CPC is Airmodus CPC
+                        # if connected CPC is Airmodus CPC, check if connected CPC sample flow has changed
                         if cpc_device.child('Device type').value() == CPC:
-                            # get connected CPC flow
-                            connected_cpc_flow = float(self.latest_settings[cpc_id][2])
-                            # get PSM stored CPC flow
-                            stored_cpc_flow = float(self.latest_settings[dev_id][5])
-                            # if PSM stored CPC flow is different from connected CPC flow
-                            if stored_cpc_flow != connected_cpc_flow:
-                                # send connected CPC flow value to PSM
-                                dev.child('Connection').value().send_set_val(connected_cpc_flow, ":SET:FLOW:CPC ", decimals=3)
-                                # set PSM update flag
-                                self.psm_settings_updates[dev_id] = True
-                                # GUI is updated when PSM settings are fetched
-                        # if connected CPC is TSI CPC
-                        elif cpc_device.child('Device type').value() == TSI_CPC:
-                            # check if displayed CPC flow is different from connected CPC flow
-                            if self.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != str(self.latest_settings[dev_id][5]) + " lpm":
-                                # set status_tab flow_cpc color to normal and change text
-                                self.device_widgets[dev_id].status_tab.flow_cpc.change_color(0)
-                                self.device_widgets[dev_id].status_tab.flow_cpc.change_value(str(self.latest_settings[dev_id][5]) + " lpm")
+                            cpc_sample_flow = float(self.latest_settings[cpc_id][2])
+                            # if CPC sample flow is different from value displayed in Set tab, update displayed value
+                            if self.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.value() != cpc_sample_flow:
+                                self.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.setValue(cpc_sample_flow)
+
+                        # # if connected CPC is Airmodus CPC
+                        # if cpc_device.child('Device type').value() == CPC:
+                        #     # get connected CPC flow
+                        #     connected_cpc_flow = float(self.latest_settings[cpc_id][2])
+                        #     # get PSM stored CPC flow
+                        #     stored_cpc_flow = float(self.latest_settings[dev_id][5])
+                        #     # if PSM stored CPC flow is different from connected CPC flow
+                        #     if stored_cpc_flow != connected_cpc_flow:
+                        #         # send connected CPC flow value to PSM
+                        #         dev.child('Connection').value().send_set_val(connected_cpc_flow, ":SET:FLOW:CPC ", decimals=3)
+                        #         # set PSM update flag
+                        #         self.psm_settings_updates[dev_id] = True
+                        #         # GUI is updated when PSM settings are fetched
+                        # # if connected CPC is TSI CPC
+                        # elif cpc_device.child('Device type').value() == TSI_CPC:
+                        #     # check if displayed CPC flow is different from connected CPC flow
+                        #     if self.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != str(self.latest_settings[dev_id][5]) + " lpm":
+                        #         # set status_tab flow_cpc color to normal and change text
+                        #         self.device_widgets[dev_id].status_tab.flow_cpc.change_color(0)
+                        #         self.device_widgets[dev_id].status_tab.flow_cpc.change_value(str(self.latest_settings[dev_id][5]) + " lpm")
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -1667,6 +1675,8 @@ class MainWindow(QMainWindow):
         else:
             psm_note = 0
 
+        # TODO add critical orifice pressure, index [12]
+        # TODO add vacuum flow if PSM 2.0, index [13]
         # concentration form PSM is calculated and stored later in write_data
         # cut-off diameter is left with a "nan" placeholder for now
         psm_data = [
@@ -1686,7 +1696,7 @@ class MainWindow(QMainWindow):
         # inlet flow is calculated and stored in update_plot_data
         psm_settings = [
             prnt[1], prnt[2], prnt[3], prnt[4], prnt[5], # T setpoints: growth tube, PSM saturator, inlet, heater, drainage
-            prnt[6], "nan", co_flow, # PSM stored CPC flow rate, inlet flow rate, CO flow rate,
+            prnt[6], "nan", co_flow, # PSM stored CPC flow rate, inlet flow rate (added when calculated), CO flow rate,
         ]
         # add CPC values later in write_data if CPC connected
         return psm_settings
@@ -1697,20 +1707,28 @@ class MainWindow(QMainWindow):
         self.psm_settings_updates[device_id] = True
     
     # sends set CPC flow rate to PSM and CPC if connected
+    # TODO unused, remove?
     def psm_cpc_flow_send(self, device, value):
-        # send value to PSM
+        self.psm_flow_send(device, value) # send flow rate to PSM
+        self.cpc_flow_send(device, value) # send flow rate to connected CPC if it exists  
+    
+    # sends set flow rate to PSM
+    def psm_flow_send(self, device, value):
         device.child("Connection").value().send_set_val(value, ":SET:FLOW:CPC ", decimals=3)
+    
+    # sends set flow rate to CPC
+    def cpc_flow_send(self, device, value):
         # get connected CPC ID
         cpc_id = device.child("Connected CPC").value()
-        # if PSM is connected to CPC
+        # if PSM is connected to CPC, send value to CPC
         if cpc_id != 'None':
             # get connected CPC device parameter
             for cpc in self.params.child('Device settings').children():
                 if cpc.child('DevID').value() == cpc_id:
                     cpc_device = cpc
                     break
-            # if device is connected Airmodus CPC
-            if cpc_device.child('Connected').value() == True and cpc_device.child('Device type').value() == CPC:
+            # if device is Airmodus CPC
+            if cpc_device.child('Device type').value() == CPC:
                 # send flow rate set value to CPC
                 cpc_device.child("Connection").value().send_set_val(value, ":SET:FLOW ", decimals=3)
     
@@ -2045,13 +2063,17 @@ class MainWindow(QMainWindow):
                 widget.set_tab.set_drainage_temp.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
                 widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_drainage_temp.value_input.text()), ":SET:TEMP:DRN "))
                 widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
-                # cpc flow set # TODO functions changed, test if they work
-                #widget.set_tab.set_cpc_flow.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:FLOW:CPC "))
-                widget.set_tab.set_cpc_flow.value_spinbox.stepChanged.connect(lambda value: self.psm_cpc_flow_send(device_param, value))
-                widget.set_tab.set_cpc_flow.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
-                #widget.set_tab.set_cpc_flow.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_cpc_flow.value_input.text()), ":SET:FLOW:CPC "))
-                widget.set_tab.set_cpc_flow.value_input.returnPressed.connect(lambda: self.psm_cpc_flow_send(device_param, float(widget.set_tab.set_cpc_flow.value_input.text())))
-                widget.set_tab.set_cpc_flow.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                # cpc inlet flow set (send value to PSM)
+                #widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:FLOW:CPC "))
+                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda value: self.psm_flow_send(device_param, value))
+                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                #widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_cpc_inlet_flow.value_input.text()), ":SET:FLOW:CPC "))
+                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: self.psm_flow_send(device_param, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
+                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                # cpc sample flow set (send value to connected CPC if it exists)
+                # TODO is psm_update required when setting cpc sample flow?
+                widget.set_tab.set_cpc_sample_flow.value_spinbox.stepChanged.connect(lambda value: self.cpc_flow_send(device_param, value))
+                widget.set_tab.set_cpc_sample_flow.value_input.returnPressed.connect(lambda: self.cpc_flow_send(device_param, float(widget.set_tab.set_cpc_sample_flow.value_input.text())))
                 # if device type is PSM, connect co flow set
                 if device_type == PSM:
                     widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
@@ -2649,13 +2671,12 @@ class PSMWidget(QTabWidget):
         return liquid_sets # return liquid settings string
 
     def update_settings(self, settings):
-        # TODO check PSM 2.0 compatibility
         self.set_tab.set_growth_tube_temp.value_spinbox.setValue(float(settings[1]))
         self.set_tab.set_saturator_temp.value_spinbox.setValue(float(settings[2]))
         self.set_tab.set_inlet_temp.value_spinbox.setValue(float(settings[3]))
         self.set_tab.set_heater_temp.value_spinbox.setValue(float(settings[4]))
         self.set_tab.set_drainage_temp.value_spinbox.setValue(float(settings[5]))
-        self.set_tab.set_cpc_flow.value_spinbox.setValue(float(settings[6]))
+        self.set_tab.set_cpc_inlet_flow.value_spinbox.setValue(float(settings[6]))
         # if Connected CPC is not 'None'
         if self.device_parameter.child("Connected CPC").value() != 'None':
             self.status_tab.flow_cpc.change_color(0) # change color to normal
@@ -2663,7 +2684,6 @@ class PSMWidget(QTabWidget):
     
     # update all data values in status tab
     def update_values(self, current_list):
-        # TODO check PSM 2.0 compatibility
         # update temperature values
         self.status_tab.temp_growth_tube.change_value(str(current_list[2]) + " °C")
         self.status_tab.temp_saturator.change_value(str(current_list[3]) + " °C")
@@ -2679,6 +2699,9 @@ class PSMWidget(QTabWidget):
         # update pressure values
         self.status_tab.pressure_inlet.change_value(str(current_list[9]) + " kPa")
         self.status_tab.pressure_critical_orifice.change_value(str(current_list[12]) + " kPa")
+        # update vacuum flow if PSM 2.0
+        if self.device_type == PSM2:
+            self.status_tab.flow_vacuum.change_value(str(current_list[13]) + " lpm")
         # liquid level values are updated in PSMWidget's update_notes()
 
 class PSMSetTab(QSplitter):
@@ -2703,8 +2726,10 @@ class PSMSetTab(QSplitter):
         upper_splitter.addWidget(self.set_drainage_temp)
         # horizontal splitter containing middle half of tab - set widgets
         middle_splitter = QSplitter(Qt.Horizontal)
-        self.set_cpc_flow = SetWidget("CPC flow rate (stored in PSM)", " lpm")
-        middle_splitter.addWidget(self.set_cpc_flow)
+        self.set_cpc_inlet_flow = SetWidget("CPC inlet flow rate\n(used in dilution correction)", " lpm")
+        middle_splitter.addWidget(self.set_cpc_inlet_flow)
+        self.set_cpc_sample_flow = SetWidget("CPC sample flow rate\n(used in concentration calculation)", " lpm")
+        middle_splitter.addWidget(self.set_cpc_sample_flow)
         if device_type == PSM: # if PSM, add CO flow rate set widget
             self.set_co_flow = SetWidget("CO flow rate", " lpm")
             middle_splitter.addWidget(self.set_co_flow)
@@ -2719,9 +2744,9 @@ class PSMSetTab(QSplitter):
         # set splitter's relative widget sizes and add to tab
         upper_splitter.setSizes([1000, 1000, 1000, 1000, 1000])
         self.addWidget(upper_splitter)
-        middle_splitter.setSizes([1000, 1000])
+        middle_splitter.setSizes([1000, 1000, 1000])
         self.addWidget(middle_splitter)
-        lower_splitter.setSizes([1000, 1000, 1000, 1000])
+        lower_splitter.setSizes([1000, 1000, 1000])
         self.addWidget(lower_splitter)
         # add line edit for command input
         if device_type == PSM: # if PSM
@@ -2759,7 +2784,7 @@ class PSMStatusTab(QWidget):
         layout.addWidget(self.flow_cpc, 1, 1)
         self.flow_saturator = IndicatorWidget("Saturator flow")
         layout.addWidget(self.flow_saturator, 2, 1)
-        self.flow_excess = IndicatorWidget("Excess flow")
+        self.flow_excess = IndicatorWidget("Excess flow") # TODO change name to heater flow?
         layout.addWidget(self.flow_excess, 3, 1)
         self.flow_inlet = IndicatorWidget("Inlet flow")
         layout.addWidget(self.flow_inlet, 4, 1)
