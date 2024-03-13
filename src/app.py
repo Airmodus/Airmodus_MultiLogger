@@ -991,13 +991,12 @@ class MainWindow(QMainWindow):
                         if cpc_device.child('Connected').value() == True:
                             cpc_data = self.latest_data[cpc_id]
 
-                            # calculate inlet flow
+                            # Inlet flow = (CPC flow + CO flow) - Saturator flow - Excess flow
+
+                            # get cpc flow rate from PSM latest_settings
+                            cpc_flow = float(self.latest_settings[psm_id][5])
+
                             if dev.child('Device type').value() == PSM:
-                                # Inlet flow = (CPC flow + CO flow) - Saturator flow - Excess flow
-                                if cpc_device.child('Device type').value() == CPC:
-                                    cpc_flow = self.latest_settings[cpc_id][2] # get CPC flow rate from CPC latest_settings
-                                elif cpc_device.child('Device type').value() == TSI_CPC:
-                                    cpc_flow = float(self.latest_settings[psm_id][5]) # get cpc flow rate from PSM latest_settings
                                 # get co flow rate from PSM widget
                                 co_flow = self.device_widgets[psm_id].set_tab.set_co_flow.value_spinbox.value()
                                 if co_flow == 0: # if co flow is 0, not set by user
@@ -1009,16 +1008,12 @@ class MainWindow(QMainWindow):
                                 inlet_flow = cpc_flow + co_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
                             
                             elif dev.child('Device type').value() == PSM2:
-                                if cpc_device.child('Device type').value() == CPC:
-                                    cpc_flow = self.latest_settings[cpc_id][2] # get CPC flow rate from CPC latest_settings
-                                elif cpc_device.child('Device type').value() == TSI_CPC:
-                                    cpc_flow = float(self.latest_settings[psm_id][5]) # get cpc flow rate from PSM latest_settings
                                 # get vacuum mfc flow rate from latest data
                                 vacuum_flow = float(self.latest_data[psm_id][14])
-                                # TODO vacuum flow error code is in error hex, integrate to update_errors
-                                # TODO should flow_vacuum widget be updated elsewhere?
-                                inlet_flow = cpc_flow + vacuum_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
                                 self.device_widgets[psm_id].status_tab.flow_vacuum.change_value(str(round(vacuum_flow, 3)))
+                                # TODO should flow_vacuum widget be updated elsewhere?
+                                # TODO vacuum flow error code is in error hex, integrate to update_errors
+                                inlet_flow = cpc_flow + vacuum_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
 
                             # store inlet flow into PSM latest_settings, rounded to 3 decimals
                             self.latest_settings[psm_id][6] = round(inlet_flow, 3)
@@ -1051,10 +1046,10 @@ class MainWindow(QMainWindow):
                                 ]
                                 # replace PSM's latest_data CPC placeholders with connected CPC data
                                 if dev.child('Device type').value() == PSM:
-                                    # PSM: index 16-29
+                                    # PSM: index 16-29 (no vacuum flow)
                                     self.latest_data[psm_id][16:30] = connected_cpc_data
                                 elif dev.child('Device type').value() == PSM2:
-                                    # PSM: index 17-30
+                                    # PSM: index 17-30 (with vacuum flow)
                                     self.latest_data[psm_id][17:31] = connected_cpc_data
             
             except Exception as e:
@@ -1322,7 +1317,6 @@ class MainWindow(QMainWindow):
 
                 # PSM CPC FLOW CHECK
                 # warn if no CPC is connected or update Set tab's CPC sample flow value
-                # TODO current CPC flow in PSM Status tab is based on PSM value, check if correct
 
                 # if device type is PSM and it is connected
                 if dev.child('Device type').value() in [PSM ,PSM2] and dev.child('Connected').value():
@@ -2803,7 +2797,7 @@ class PSMStatusTab(QWidget):
         layout.addWidget(self.temp_cabin, 0, 1)
 
         # flow indicators
-        self.flow_cpc = IndicatorWidget("CPC flow")
+        self.flow_cpc = IndicatorWidget("CPC inlet flow")
         layout.addWidget(self.flow_cpc, 1, 1)
         self.flow_saturator = IndicatorWidget("Saturator flow")
         layout.addWidget(self.flow_saturator, 2, 1)
