@@ -1418,7 +1418,7 @@ class MainWindow(QMainWindow):
                                 pass
                             
                             # if CPC or PSM, create .par file and add filename to par_filenames
-                            if dev.child('Device type').value() == 1 or dev.child('Device type').value() == 2:
+                            if dev.child('Device type').value() in [CPC, PSM, PSM2]:
                                 if osx_mode:
                                     filename = '/' + timestamp_file + serial_number + '_' + device_name + file_tag + '.par'
                                 else:
@@ -1670,18 +1670,14 @@ class MainWindow(QMainWindow):
             "nan", "nan", meas[0], meas[1], # concentration from PSM, cut-off diameter, saturator flow rate, excess flow rate
             meas[3], meas[2], meas[4], meas[6], meas[5], meas[7], # psm saturator t, growth tube t, inlet t, drainage t, heater t, psm cabin t
             meas[9], meas[10], meas[11], meas[12], # inlet p, inlet-sat p, sat-excess p, critical orifice p,
-        ]
-
-        # if PSM 2.0, add vacuum flow rate
-        if psm_version == 2:
-            psm_data.append(meas[13]) # vacuum flow rate
-
-        psm_data.append([
             psm_status, psm_note, # PSM status (1 ok / 0 nok), PSM notes (1 ok / 0 notes)
             # CPC nan placeholders, replaced later if CPC is connected
             "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan",
             status_hex, note_hex # PSM status (hex), PSM notes (hex)
-        ])
+        ]
+        # if PSM 2.0, insert vacuum flow rate
+        if psm_version == 2:
+            psm_data.insert(14, meas[13]) # vacuum flow rate
 
         return psm_data
     
