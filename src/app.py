@@ -151,7 +151,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         #opts['type'] = 'action'
         opts['addText'] = "Add new device"
         # opts for choosing device type when adding new device
-        opts["addList"] = ["CPC", "PSM", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "TSI CPC", "Example device"] #  "eDiluter",
+        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "TSI CPC", "Example device"] #  "eDiluter",
         parameterTypes.GroupParameter.__init__(self, **opts)
         self.n_devices = 0
         self.cpc_dict = {'None': 'None'}
@@ -160,7 +160,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
 
     def addNew(self, device_name): # device_name is the name of the added device type
         # device_value is used to set the default value for the Device type parameter below
-        device_value = {"CPC": CPC, "PSM": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_name]
+        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_name]
         # if OSX mode is on, set COM port type as string to allow complex port addresses
         if osx_mode:
             port_type = 'str'
@@ -173,7 +173,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 dict(name="Serial number", type='str', value="", readonly=True),
                 #dict(name="Baud rate", type='int', value=115200, visible=False),
                 dict(name = "Connection", value = SerialDeviceConnection(), visible=False),
-                {'name': 'Device type', 'type': 'list', 'values': {"CPC": CPC, "PSM": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
+                {'name': 'Device type', 'type': 'list', 'values': {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
                 dict(name = "Connected", type='bool', value=False, readonly = True),
                 dict(name = "DevID", type='int', value=self.n_devices,readonly = True, visible = False),
                 dict(name = "Plot to main", type='bool', value=True),
@@ -1001,7 +1001,6 @@ class MainWindow(QMainWindow):
                                 co_flow = self.device_widgets[psm_id].set_tab.set_co_flow.value_spinbox.value()
                                 if co_flow == 0: # if co flow is 0, not set by user
                                     self.device_widgets[psm_id].set_tab.set_co_flow.set_red_color() # set CO flow rate widget to red
-                                    #self.set_device_error(dev.child('DevID').value(), True) # set device error flag
                                     self.error_status = 1 # set error_status flag to 1
                                 else:
                                     self.device_widgets[psm_id].set_tab.set_co_flow.set_default_color()
@@ -1353,27 +1352,12 @@ class MainWindow(QMainWindow):
                             # if CPC sample flow is different from value displayed in Set tab, update displayed value
                             if self.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.value() != cpc_sample_flow:
                                 self.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.setValue(cpc_sample_flow)
-
-                        # # if connected CPC is Airmodus CPC
-                        # if cpc_device.child('Device type').value() == CPC:
-                        #     # get connected CPC flow
-                        #     connected_cpc_flow = float(self.latest_settings[cpc_id][2])
-                        #     # get PSM stored CPC flow
-                        #     stored_cpc_flow = float(self.latest_settings[dev_id][5])
-                        #     # if PSM stored CPC flow is different from connected CPC flow
-                        #     if stored_cpc_flow != connected_cpc_flow:
-                        #         # send connected CPC flow value to PSM
-                        #         dev.child('Connection').value().send_set_val(connected_cpc_flow, ":SET:FLOW:CPC ", decimals=3)
-                        #         # set PSM update flag
-                        #         self.psm_settings_updates[dev_id] = True
-                        #         # GUI is updated when PSM settings are fetched
-                        # # if connected CPC is TSI CPC
-                        # elif cpc_device.child('Device type').value() == TSI_CPC:
-                        #     # check if displayed CPC flow is different from connected CPC flow
-                        #     if self.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != str(self.latest_settings[dev_id][5]) + " lpm":
-                        #         # set status_tab flow_cpc color to normal and change text
-                        #         self.device_widgets[dev_id].status_tab.flow_cpc.change_color(0)
-                        #         self.device_widgets[dev_id].status_tab.flow_cpc.change_value(str(self.latest_settings[dev_id][5]) + " lpm")
+                        
+                        # if CPC inlet flow is different from value displayed in Status tab, update displayed value
+                        if self.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != str(self.latest_settings[dev_id][5]) + " lpm":
+                            # set status_tab flow_cpc color to normal and change text
+                            self.device_widgets[dev_id].status_tab.flow_cpc.change_color(0)
+                            self.device_widgets[dev_id].status_tab.flow_cpc.change_value(str(self.latest_settings[dev_id][5]) + " lpm")
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -1968,7 +1952,7 @@ class MainWindow(QMainWindow):
                     # change tab icon to error icon
                     self.device_tabs.setTabIcon(tab_index, self.error_icon)
                     # change status tab icon to error icon if device is CPC or PSM
-                    if device_type in [1, 2]:
+                    if device_type in [CPC, PSM, PSM2]:
                         status_tab_index = device_widget.indexOf(device_widget.status_tab)
                         device_widget.setTabIcon(status_tab_index, self.error_icon)
 
@@ -1977,7 +1961,7 @@ class MainWindow(QMainWindow):
                     # remove error icon with empty QIcon object
                     self.device_tabs.setTabIcon(tab_index, QIcon())
                     # remove status tab error icon if device is CPC or PSM
-                    if device_type in [1, 2]:
+                    if device_type in [CPC, PSM, PSM2]:
                         status_tab_index = device_widget.indexOf(device_widget.status_tab)
                         device_widget.setTabIcon(status_tab_index, QIcon())
                 
@@ -2646,14 +2630,17 @@ class PSMWidget(QTabWidget):
             self.status_tab.temp_inlet, self.status_tab.temp_heater, self.status_tab.flow_saturator,
             self.status_tab.temp_saturator, self.status_tab.temp_growth_tube
         ]
+        # if PSM 2.0, add vacuum flow widget to list
+        if device_type == PSM2:
+            self.psm_status_widgets.insert(0, self.status_tab.flow_vacuum)
 
     # convert PSM status hex to binary and update error label colors
     def update_errors(self, status_hex):
-        # TODO check PSM 2.0 compatibility
+        widget_amount = len(self.psm_status_widgets) # get amount of widgets in list
         status_bin = bin(int(status_hex, 16)) # convert hex to int and int to binary
-        status_bin = status_bin[2:].zfill(14) # remove 0b from string and fill with 0s
+        status_bin = status_bin[2:].zfill(widget_amount) # remove 0b from string and fill with 0s to length of widget_amount
         total_errors = status_bin.count("1") # count number of 1s in status_bin
-        for i in range(14): # iterate through all 14 digits, index 0-13
+        for i in range(widget_amount): # iterate through all digits
             if type(self.psm_status_widgets[i]) != str: # filter placeholder strings
                 self.psm_status_widgets[i].change_color(status_bin[i]) # change color of error label according to status_bin digit
         
@@ -2661,7 +2648,7 @@ class PSMWidget(QTabWidget):
     
     # if hex changes, make sure zero fill and indices match new hex
     def update_notes(self, note_hex):
-        # TODO check PSM 2.0 compatibility
+        # TODO PSM 2.0 should have same note_hex as PSM after its firmware is updated
         note_bin = bin(int(note_hex, 16)) # convert hex to int and int to binary
         note_bin = note_bin[2:].zfill(7) # remove 0b from string and fill with 0s
         total_notes = note_bin.count("1") # count number of 1s in note_bin
@@ -2694,10 +2681,6 @@ class PSMWidget(QTabWidget):
         self.set_tab.set_heater_temp.value_spinbox.setValue(float(settings[4]))
         self.set_tab.set_drainage_temp.value_spinbox.setValue(float(settings[5]))
         self.set_tab.set_cpc_inlet_flow.value_spinbox.setValue(float(settings[6]))
-        # if Connected CPC is not 'None'
-        if self.device_parameter.child("Connected CPC").value() != 'None':
-            self.status_tab.flow_cpc.change_color(0) # change color to normal
-            self.status_tab.flow_cpc.change_value(str(settings[6]) + " lpm") # update value on status_tab as well
     
     # update all data values in status tab
     def update_values(self, current_list):
@@ -2767,7 +2750,7 @@ class PSMSetTab(QSplitter):
         self.addWidget(lower_splitter)
         # add line edit for command input
         if device_type == PSM: # if PSM
-            self.command_widget = CommandWidget("PSM")
+            self.command_widget = CommandWidget("PSM Retrofit")
         elif device_type == PSM2: # if PSM 2.0
             self.command_widget = CommandWidget("PSM 2.0")
         self.addWidget(self.command_widget)
