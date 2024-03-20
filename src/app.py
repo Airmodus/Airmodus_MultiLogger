@@ -1009,9 +1009,8 @@ class MainWindow(QMainWindow):
                             elif dev.child('Device type').value() == PSM2:
                                 # get vacuum mfc flow rate from latest data
                                 vacuum_flow = float(self.latest_data[psm_id][14])
-                                self.device_widgets[psm_id].status_tab.flow_vacuum.change_value(str(round(vacuum_flow, 3)))
-                                # TODO should flow_vacuum widget be updated elsewhere?
-                                # TODO vacuum flow error code is in error hex, integrate to update_errors
+                                # TODO vacuum flow GUI value is updated in PSMWidget's update_values, check if it works and remove line below
+                                #self.device_widgets[psm_id].status_tab.flow_vacuum.change_value(str(round(vacuum_flow, 3)))
                                 inlet_flow = cpc_flow + vacuum_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
 
                             # store inlet flow into PSM latest_settings, rounded to 3 decimals
@@ -1020,7 +1019,10 @@ class MainWindow(QMainWindow):
                             self.device_widgets[psm_id].status_tab.flow_inlet.change_value(str(round(inlet_flow, 3)))
 
                             # calculate polynomial correction factor
-                            pcor = array([-0.0272052 ,  0.11394213, -0.08959011, -0.20675596,  0.24343024, 1.10531145])
+                            if dev.child('Device type').value() == PSM:
+                                pcor = array([-0.0272052, 0.11394213, -0.08959011, -0.20675596, 0.24343024, 1.10531145])
+                            elif dev.child('Device type').value() == PSM2:
+                                pcor = array([0.12949491, -0.50587616, 0.57214191, 0.76108161])
                             poly_correction  = polyval(pcor, float(self.latest_data[psm_id][2]))
 
                             # calculate dilution correction factor
