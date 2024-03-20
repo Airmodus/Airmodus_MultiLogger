@@ -18,7 +18,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.4.0"
+version_number = "0.4.1"
 
 # Define instrument types
 CPC = 1
@@ -747,7 +747,7 @@ class MainWindow(QMainWindow):
                         try:
                             if dev.child('Device type').value() == PSM:
                                 # get CO flow rate from PSM widget
-                                co_flow = round(self.device_widgets[dev.child('DevID').value()].set_tab.set_co_flow.value_spinbox.value(), 2)
+                                co_flow = round(self.device_widgets[dev.child('DevID').value()].set_tab.set_co_flow.value_spinbox.value(), 3)
                                 psm_version = 1
                             elif dev.child('Device type').value() == PSM2:
                                 # set nan as placeholder
@@ -998,7 +998,7 @@ class MainWindow(QMainWindow):
 
                             if dev.child('Device type').value() == PSM:
                                 # get co flow rate from PSM widget
-                                co_flow = self.device_widgets[psm_id].set_tab.set_co_flow.value_spinbox.value()
+                                co_flow = round(self.device_widgets[psm_id].set_tab.set_co_flow.value_spinbox.value(), 3)
                                 if co_flow == 0: # if co flow is 0, not set by user
                                     self.device_widgets[psm_id].set_tab.set_co_flow.set_red_color() # set CO flow rate widget to red
                                     self.error_status = 1 # set error_status flag to 1
@@ -2722,12 +2722,12 @@ class PSMSetTab(QSplitter):
         upper_splitter.addWidget(self.set_drainage_temp)
         # horizontal splitter containing middle half of tab - set widgets
         middle_splitter = QSplitter(Qt.Horizontal)
-        self.set_cpc_inlet_flow = SetWidget("CPC inlet flow rate\n(used in dilution correction)", " lpm")
+        self.set_cpc_inlet_flow = SetWidget("CPC inlet flow rate\n(used in dilution correction)", " lpm", decimals=3)
         middle_splitter.addWidget(self.set_cpc_inlet_flow)
-        self.set_cpc_sample_flow = SetWidget("CPC sample flow rate\n(used in concentration calculation)", " lpm")
+        self.set_cpc_sample_flow = SetWidget("CPC sample flow rate\n(used in concentration calculation)", " lpm", decimals=3)
         middle_splitter.addWidget(self.set_cpc_sample_flow)
         if device_type == PSM: # if PSM, add CO flow rate set widget
-            self.set_co_flow = SetWidget("CO flow rate", " lpm")
+            self.set_co_flow = SetWidget("CO flow rate", " lpm", decimals=3)
             middle_splitter.addWidget(self.set_co_flow)
         # horizontal splitter containing lower half of tab - mode widgets
         lower_splitter = QSplitter(Qt.Horizontal)
@@ -3204,8 +3204,8 @@ class SetWidget(QWidget):
             self.value_spinbox = SpinBox(objectName="spin_box", maximum=9999)
             validator = QIntValidator() # create int validator
         else: # if suffix is not seconds, use double spin box (float)
-            if self.name == "CPC flow rate (stored in PSM)": # if this is CPC flow rate, show 3 decimals
-                self.value_spinbox = DoubleSpinBox(objectName="double_spin_box", singleStep=0.1, maximum=9999, decimals=3)
+            if "decimals" in kwargs: # if decimals are specified in kwargs
+                self.value_spinbox = DoubleSpinBox(objectName="double_spin_box", singleStep=0.1, maximum=9999, decimals=kwargs["decimals"])
             else:
                 self.value_spinbox = DoubleSpinBox(objectName="double_spin_box", singleStep=0.1, maximum=9999)
             locale = QLocale(QLocale.C) # create locale to use dot as decimal separator
