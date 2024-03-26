@@ -6,6 +6,7 @@ import platform
 import logging
 import random
 import traceback
+import json
 
 from numpy import full, nan, array, polyval, array_equal
 from serial import Serial
@@ -144,6 +145,22 @@ class SerialDeviceConnection():
         except Exception as e:
             command_widget.update_text_box(str(e))
             #print(e)
+    
+    # --- parameter saving ---
+
+    def to_dict(self):
+        return {
+            'serial_port': self.serial_port,
+            'timeout': self.timeout,
+            'port_in_use': self.port_in_use,
+            #'port_list': self.port_list
+        }
+    
+    def from_dict(self, data):
+        self.serial_port = data.get('serial_port', "NaN")
+        self.timeout = data.get('timeout', 1)
+        self.port_in_use = data.get('port_in_use', "NaN")
+        #self.port_list = data.get('port_list', [])
 
 # ScalableGroup for creating a menu where to set up new COM devices
 class ScalableGroup(parameterTypes.GroupParameter):
@@ -403,6 +420,11 @@ class MainWindow(QMainWindow):
 
         # start timer
         self.startTimer()
+
+        # connect save data parameter to save_configuration_automatics function
+        self.params.child('Measurement status').child('Data settings').child('Save data').sigValueChanged.connect(self.save_configuration_automatics)
+        # load settings from file if available
+        self.load_configuration()
 
         # end of __init__ function
 
@@ -1837,6 +1859,109 @@ class MainWindow(QMainWindow):
         # update GUI 'Available ports' text box if com port list has changed
         if com_ports_text != self.params.child('Measurement status').child('COM settings').child('Available ports').value():
             self.params.child('Measurement status').child('COM settings').child('Available ports').setValue(com_ports_text)
+    
+    def save_configuration_automatics(self):
+        # Get the parameter tree values
+        parameter_values = self.save_parameters_recursive(self.params)
+    
+        # Handle non-serializable objects (e.g., SerialDeviceConnection)
+        parameter_values = self.handle_non_serializable(parameter_values)
+    
+        # Ask the user for the file path to save the configuration
+        tim = dt.now()
+        # timeStampStr = str(tim.strftime("%Y%m%d%H%M%S"))
+        timeStampStr = ""
+
+        # Generate a name
+        configName = 'meas_parameters'
+        outfile = os.path.join(file_path, f"{timeStampStr}{configName}.json")
+        with open(outfile, 'w') as file:
+            json.dump(parameter_values, file)
+    
+    def save_parameters_recursive(self, parameters):
+        result = {}
+        for param in parameters:
+            if param.hasChildren():
+                result[param.name()] = self.save_parameters_recursive(param.children())
+            else:
+                # Check if the parameter value is an instance of SerialDeviceConnection
+                if isinstance(param.value(), SerialDeviceConnection):
+                    # Use the to_dict method for serialization
+                    result[param.name()] = param.value().to_dict()
+                else:
+                    result[param.name()] = param.value()
+        return result
+        
+    def handle_non_serializable(self, obj):
+        if isinstance(obj, SerialDeviceConnection):
+            # Handle the non-serializable object (e.g., replace it with a default value)
+            return "DefaultReplacementValue"
+        elif isinstance(obj, dict):
+            # Recursively handle non-serializable objects in nested dictionaries
+            return {key: self.handle_non_serializable(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            # Recursively handle non-serializable objects in nested lists
+            return [self.handle_non_serializable(item) for item in obj]
+        else:
+            # Return the object as is (already serializable)
+            return obj
+
+    def load_configuration(self):
+        # # Ask the user for the file path to load the configuration
+        # file_dialog = QFileDialog(self)
+        # settings_json, _ = file_dialog.getOpenFileName(self, 'Load Configuration', '', 'JSON Files (*.json)')
+
+        # get file path of parameter file
+        try:
+            settings_json = os.path.join(file_path, 'meas_parameters.json')
+        except:
+            print(traceback.format_exc())
+            settings_json = None
+
+        if settings_json:
+            # Load the configuration from the JSON file
+            with open(settings_json, 'r') as file:
+                parameter_values = json.load(file)
+
+            # Set the loaded parameter values to the parameter tree
+            self.load_parameters_recursive(self.params, parameter_values)
+            
+    def load_parameters_recursive(self, parameters, values):
+        for param in parameters:
+            if param.hasChildren():
+                self.load_parameters_recursive(param.children(), values.get(param.name(), {}))
+            else:
+                # Check if the parameter value is a dictionary (indicating a complex object)
+                if isinstance(values.get(param.name()), dict):
+                    # Recreate the dmps_device_serial_connection object from the dictionary
+                    # dmps_connection = dmps_device_serial_connection()
+                    # dmps_connection.from_dict(values.get(param.name()))
+                    try:
+                        connection_values = values.get(param.name())
+    
+                        connection_name = connection_values[list(connection_values.keys())[0]]
+                        param.children()[0].setValue(connection_name)
+    
+                        connection_port = connection_values[list(connection_values.keys())[1]]
+                        param.children()[3].value().set_port(connection_port)
+                        param.children()[1].setValue(connection_port)
+                        param.children()[3].value().port_in_use = connection_port
+                        
+                        devtype = connection_values[list(connection_values.keys())[2]]
+                        param.children()[2].setValue(devtype)
+    
+                        devtype = connection_values[list(connection_values.keys())[4]]
+                        param.children()[4].setValue(devtype)
+    
+                        devid = connection_values[list(connection_values.keys())[6]]
+                        param.children()[6].setValue(devid)
+    
+                        param.children()[3].value().connect
+                    except:
+                        print(traceback.format_exc())
+                else:
+                    # Set the parameter value as usual
+                    param.setValue(values.get(param.name(), param.value()))
         
     def x_range_changed(self, viewbox):
         # if autoscale y is on
