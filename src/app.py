@@ -18,7 +18,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.4.1"
+version_number = "0.4.2"
 
 # Define instrument types
 CPC = 1
@@ -1731,6 +1731,19 @@ class MainWindow(QMainWindow):
                 # send flow rate set value to CPC
                 cpc_device.child("Connection").value().send_set_val(value, ":SET:FLOW ", decimals=3)
     
+    # sends set autofill message to PSM - if autofill was toggled on, sends set run message as well
+    def psm_autofill_send(self, psm_widget, connection):
+        print(psm_widget)
+        print(connection)
+        # get autofill checkbox state
+        checked_state = int(psm_widget.set_tab.autofill.isChecked())
+        # send set autofill command to PSM
+        connection.send_set(":SET:AFLL " + str(checked_state))
+        # if autofill was toggled on
+        if checked_state == 1:
+            # send set run command to PSM (drying off)
+            connection.send_set(":SET:RUN")
+    
     # compare current day to file start day (self.start_day defined in save_changed)
     def compare_day(self):
         # check if saving is on
@@ -2081,7 +2094,8 @@ class MainWindow(QMainWindow):
                 widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: connection.send_command(widget.set_tab.command_widget))
                 widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.psm_update(device_id))
                 # connect liquid operations
-                widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
+                #widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
+                widget.set_tab.autofill.clicked.connect(lambda: self.psm_autofill_send(widget, connection))
                 #widget.set_tab.autofill.clicked.connect(lambda: self.psm_update(device_id))
                 widget.set_tab.drain.clicked.connect(lambda: connection.send_set(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
                 #widget.set_tab.drain.clicked.connect(lambda: self.psm_update(device_id))
