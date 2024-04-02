@@ -261,9 +261,10 @@ params = [
     {'name': 'Measurement status', 'type': 'group', 'children': [
         {'name': 'Data settings', 'type': 'group', 'children': [
             {'name': 'File path', 'type': 'str', 'value': main_path},
-            {'name': 'File tag', 'type': 'str', 'value': "", 'tip': "Datafile format: YYYYMMDD_HHMM_(Device name)_(File tag).dat"},
+            {'name': 'File tag', 'type': 'str', 'value': "", 'tip': "Datafile format: YYYYMMDD_HHMMSS_(Serial number)_(Device name)_(File tag).dat"},
             {'name': 'Save data', 'type': 'bool', 'value': False},
             {'name': 'Generate daily files', 'type': 'bool', 'value': True, 'tip': "If on, new files are started at midnight."},
+            {'name': 'Resume on startup', 'type': 'bool', 'value': False, 'tip': "Option to resume the last settings on startup."},
         ]},
         {'name': 'COM settings', 'type': 'group', 'children': [
             {'name': 'Available ports', 'type': 'text', 'value': '', 'readonly': True},
@@ -322,6 +323,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Airmodus MultiLogger v. " + version_number) # set window title
         self.timer = QTimer(timerType=Qt.PreciseTimer) # create timer object
         self.params = params # predefined parameter tree
+        self.config_file_path = "" # path to the configuration file
         # create parameter tree
         t = ParameterTree()
         t.setParameters(p, showTop=False)
@@ -421,10 +423,11 @@ class MainWindow(QMainWindow):
         # start timer
         self.startTimer()
 
-        # connect save data parameter to save_configuration_automatics function
-        self.params.child('Measurement status').child('Data settings').child('Save data').sigValueChanged.connect(self.save_configuration_automatics)
-        # load settings from file if available
-        self.load_configuration()
+        # connect 'Save data' and 'Resume on startup' parameters to save_ini function
+        self.params.child('Measurement status').child('Data settings').child('Save data').sigValueChanged.connect(self.save_ini)
+        self.params.child('Measurement status').child('Data settings').child('Resume on startup').sigValueChanged.connect(self.save_ini)
+        # load ini file if available
+        self.load_ini()
 
         # end of __init__ function
 
@@ -1860,22 +1863,44 @@ class MainWindow(QMainWindow):
         if com_ports_text != self.params.child('Measurement status').child('COM settings').child('Available ports').value():
             self.params.child('Measurement status').child('COM settings').child('Available ports').setValue(com_ports_text)
     
-    def save_configuration_automatics(self):
+    def save_ini(self):
+        # check if resume on startup is on
+        resume_measurements = 0
+        if self.params.child('Measurement status').child('Data settings').child('Resume on startup').value():
+            resume_measurements = 1
+        # store resume config path
+        self.config_file_path = os.path.join(file_path, 'resume_config.json')
+        with open(os.path.join(file_path, 'config.ini'),'w') as f:
+            f.write(self.config_file_path)
+            f.write(';')
+            f.write(str(resume_measurements))
+        # save the configuration to the JSON file
+        self.collect_and_dump_resume_config()
+    
+    def load_ini(self):
+        try:
+            # load the configuration file "config.ini" from the file_path
+            with open(os.path.join(file_path, 'config.ini'),'r') as f:
+                config = f.read()
+                json_path = config.split(';')[0]
+                resume_measurements = config.split(';')[1]
+                # If json path is empty
+                if not json_path:
+                    json_path = os.path.join(file_path, 'resume_config.json')
+                self.config_file_path = json_path
+                resume_measurements = int(resume_measurements)
+                # if resume on startup is on, load the stored configuration
+                if resume_measurements:
+                    self.load_configuration(json_path)
+        except:
+            # If the file does not exist, raise an exception saying that the file does not exist
+            print("No ini file found")
+        
+    def collect_and_dump_resume_config(self):
         # Get the parameter tree values
         parameter_values = self.save_parameters_recursive(self.params)
-    
-        # Handle non-serializable objects (e.g., SerialDeviceConnection)
-        parameter_values = self.handle_non_serializable(parameter_values)
-    
-        # Ask the user for the file path to save the configuration
-        tim = dt.now()
-        # timeStampStr = str(tim.strftime("%Y%m%d%H%M%S"))
-        timeStampStr = ""
-
-        # Generate a name
-        configName = 'meas_parameters'
-        outfile = os.path.join(file_path, f"{timeStampStr}{configName}.json")
-        with open(outfile, 'w') as file:
+        # Save the configuration to the JSON file
+        with open(os.path.join(file_path, 'resume_config.json'), 'w') as file:
             json.dump(parameter_values, file)
     
     def save_parameters_recursive(self, parameters):
@@ -1891,40 +1916,29 @@ class MainWindow(QMainWindow):
                 else:
                     result[param.name()] = param.value()
         return result
-        
-    def handle_non_serializable(self, obj):
-        if isinstance(obj, SerialDeviceConnection):
-            # Handle the non-serializable object (e.g., replace it with a default value)
-            return "DefaultReplacementValue"
-        elif isinstance(obj, dict):
-            # Recursively handle non-serializable objects in nested dictionaries
-            return {key: self.handle_non_serializable(value) for key, value in obj.items()}
-        elif isinstance(obj, list):
-            # Recursively handle non-serializable objects in nested lists
-            return [self.handle_non_serializable(item) for item in obj]
-        else:
-            # Return the object as is (already serializable)
-            return obj
 
-    def load_configuration(self):
-        # # Ask the user for the file path to load the configuration
-        # file_dialog = QFileDialog(self)
-        # settings_json, _ = file_dialog.getOpenFileName(self, 'Load Configuration', '', 'JSON Files (*.json)')
-
-        # get file path of parameter file
-        try:
-            settings_json = os.path.join(file_path, 'meas_parameters.json')
-        except:
-            print(traceback.format_exc())
-            settings_json = None
-
-        if settings_json:
+    def load_configuration(self, json_path=None):
+        if json_path:
             # Load the configuration from the JSON file
-            with open(settings_json, 'r') as file:
+            with open(json_path, 'r') as file:
                 parameter_values = json.load(file)
-
+            # Add devices in configuration file to the parameter tree
+            self.load_devices(parameter_values.get('Device settings', {}))
             # Set the loaded parameter values to the parameter tree
             self.load_parameters_recursive(self.params, parameter_values)
+    
+    def load_devices(self, device_settings):
+        # dictionary of device names matching device type
+        device_names = {1: 'CPC', 2: 'PSM Retrofit', 3: 'Electrometer', 4: 'CO2 sensor', 5: 'RHTP', 6: 'eDiluter', 7: 'PSM 2.0', 8: 'TSI CPC', -1: 'Example device'}
+        # go through each device in the device settings
+        for dev_name, dev_values in device_settings.items():
+            # get 'DevID' and 'Device type' values
+            dev_id = dev_values.get('DevID', None)
+            dev_type = dev_values.get('Device type', None)
+            # set n_devices to current dev_id
+            self.params.child('Device settings').n_devices = dev_id
+            # add device to the parameter tree
+            self.params.child('Device settings').addNew(device_names[dev_type])
             
     def load_parameters_recursive(self, parameters, values):
         for param in parameters:
@@ -1933,32 +1947,9 @@ class MainWindow(QMainWindow):
             else:
                 # Check if the parameter value is a dictionary (indicating a complex object)
                 if isinstance(values.get(param.name()), dict):
-                    # Recreate the dmps_device_serial_connection object from the dictionary
-                    # dmps_connection = dmps_device_serial_connection()
-                    # dmps_connection.from_dict(values.get(param.name()))
-                    try:
-                        connection_values = values.get(param.name())
-    
-                        connection_name = connection_values[list(connection_values.keys())[0]]
-                        param.children()[0].setValue(connection_name)
-    
-                        connection_port = connection_values[list(connection_values.keys())[1]]
-                        param.children()[3].value().set_port(connection_port)
-                        param.children()[1].setValue(connection_port)
-                        param.children()[3].value().port_in_use = connection_port
-                        
-                        devtype = connection_values[list(connection_values.keys())[2]]
-                        param.children()[2].setValue(devtype)
-    
-                        devtype = connection_values[list(connection_values.keys())[4]]
-                        param.children()[4].setValue(devtype)
-    
-                        devid = connection_values[list(connection_values.keys())[6]]
-                        param.children()[6].setValue(devid)
-    
-                        param.children()[3].value().connect
-                    except:
-                        print(traceback.format_exc())
+                    # skip the parameter
+                    # 'Connection' parameter (SerialDeviceConnection) was created when the device was added
+                    pass
                 else:
                     # Set the parameter value as usual
                     param.setValue(values.get(param.name(), param.value()))
