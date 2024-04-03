@@ -14,7 +14,8 @@ from serial.tools import list_ports
 from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QGridLayout, QLabel, QWidget,
-    QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QSizePolicy)
+    QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QSizePolicy,
+    QFileDialog)
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
@@ -265,6 +266,8 @@ params = [
             {'name': 'Save data', 'type': 'bool', 'value': False},
             {'name': 'Generate daily files', 'type': 'bool', 'value': True, 'tip': "If on, new files are started at midnight."},
             {'name': 'Resume on startup', 'type': 'bool', 'value': False, 'tip': "Option to resume the last settings on startup."},
+            {'name': 'Save settings', 'type': 'action'},
+            {'name': 'Load settings', 'type': 'action'},
         ]},
         {'name': 'COM settings', 'type': 'group', 'children': [
             {'name': 'Available ports', 'type': 'text', 'value': '', 'readonly': True},
@@ -424,8 +427,12 @@ class MainWindow(QMainWindow):
         self.startTimer()
 
         # connect 'Save data' and 'Resume on startup' parameters to save_ini function
+        # TODO change to sigTreeStateChanged
         self.params.child('Measurement status').child('Data settings').child('Save data').sigValueChanged.connect(self.save_ini)
         self.params.child('Measurement status').child('Data settings').child('Resume on startup').sigValueChanged.connect(self.save_ini)
+        # connect 'Save settings' and 'Load settings' buttons
+        self.params.child('Measurement status').child('Data settings').child('Save settings').sigActivated.connect(self.manual_save_configuration)
+        self.params.child('Measurement status').child('Data settings').child('Load settings').sigActivated.connect(self.manual_load_configuration)
         # load ini file if available
         self.load_ini()
 
@@ -1875,7 +1882,7 @@ class MainWindow(QMainWindow):
             f.write(';')
             f.write(str(resume_measurements))
         # save the configuration to the JSON file
-        self.collect_and_dump_resume_config()
+        self.save_configuration(self.config_file_path)
     
     def load_ini(self):
         try:
@@ -1896,11 +1903,11 @@ class MainWindow(QMainWindow):
             # If the file does not exist, raise an exception saying that the file does not exist
             print("No ini file found")
         
-    def collect_and_dump_resume_config(self):
+    def save_configuration(self, json_path):
         # Get the parameter tree values
         parameter_values = self.save_parameters_recursive(self.params)
         # Save the configuration to the JSON file
-        with open(os.path.join(file_path, 'resume_config.json'), 'w') as file:
+        with open(json_path, 'w') as file:
             json.dump(parameter_values, file)
     
     def save_parameters_recursive(self, parameters):
@@ -1928,17 +1935,22 @@ class MainWindow(QMainWindow):
             self.load_parameters_recursive(self.params, parameter_values)
     
     def load_devices(self, device_settings):
+        # remove all devices from the parameter tree
+        self.params.child('Device settings').clearChildren()
         # dictionary of device names matching device type
         device_names = {1: 'CPC', 2: 'PSM Retrofit', 3: 'Electrometer', 4: 'CO2 sensor', 5: 'RHTP', 6: 'eDiluter', 7: 'PSM 2.0', 8: 'TSI CPC', -1: 'Example device'}
-        # go through each device in the device settings
-        for dev_name, dev_values in device_settings.items():
-            # get 'DevID' and 'Device type' values
-            dev_id = dev_values.get('DevID', None)
-            dev_type = dev_values.get('Device type', None)
-            # set n_devices to current dev_id
-            self.params.child('Device settings').n_devices = dev_id
-            # add device to the parameter tree
-            self.params.child('Device settings').addNew(device_names[dev_type])
+        try:
+            # go through each device in the device settings
+            for dev_name, dev_values in device_settings.items():
+                # get 'DevID' and 'Device type' values
+                dev_id = dev_values.get('DevID', None)
+                dev_type = dev_values.get('Device type', None)
+                # set n_devices to current dev_id
+                self.params.child('Device settings').n_devices = dev_id
+                # add device to the parameter tree
+                self.params.child('Device settings').addNew(device_names[dev_type])
+        except AttributeError:
+            pass
             
     def load_parameters_recursive(self, parameters, values):
         for param in parameters:
@@ -1953,6 +1965,18 @@ class MainWindow(QMainWindow):
                 else:
                     # Set the parameter value as usual
                     param.setValue(values.get(param.name(), param.value()))
+    
+    def manual_save_configuration(self):
+        # Ask the user for the file path to save the configuration
+        file_dialog = QFileDialog(self)
+        json_path, _ = file_dialog.getSaveFileName(self, 'Save Configuration', '', 'JSON Files (*.json)')
+        self.save_configuration(json_path)
+    
+    def manual_load_configuration(self):
+        # Ask the user for the file path to load the configuration
+        file_dialog = QFileDialog(self)
+        json_path, _ = file_dialog.getOpenFileName(self, 'Load Configuration', '', 'JSON Files (*.json)')
+        self.load_configuration(json_path)
         
     def x_range_changed(self, viewbox):
         # if autoscale y is on
@@ -2273,10 +2297,12 @@ class MainWindow(QMainWindow):
                 child.child('Connection').value().close()
             except AttributeError:
                 pass
-            # remove curve from curve dictionary if exists
+            # remove plot data, curve and start time dictionary entries
             try:
+                del self.plot_data[device_id]
                 self.curve_dict[device_id].setData(x=[], y=[])
                 del self.curve_dict[device_id]
+                del self.start_times[device_id]
             except KeyError:
                 pass
             # remove device widget from device_widgets dictionary
