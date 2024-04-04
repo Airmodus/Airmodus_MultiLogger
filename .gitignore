@@ -162,3 +162,7 @@ cython_debug/
 # macOS metadata
 *.DS_store
 **.DS_Store
+
+# user specific config files
+*.ini
+*.json
