@@ -426,10 +426,8 @@ class MainWindow(QMainWindow):
         # start timer
         self.startTimer()
 
-        # connect 'Save data' and 'Resume on startup' parameters to save_ini function
-        # TODO change to sigTreeStateChanged
-        self.params.child('Measurement status').child('Data settings').child('Save data').sigValueChanged.connect(self.save_ini)
-        self.params.child('Measurement status').child('Data settings').child('Resume on startup').sigValueChanged.connect(self.save_ini)
+        # connect parameter tree's sigTreeStateChanged signal to save_ini function
+        self.params.sigTreeStateChanged.connect(self.save_ini)
         # connect 'Save settings' and 'Load settings' buttons
         self.params.child('Measurement status').child('Data settings').child('Save settings').sigActivated.connect(self.manual_save_configuration)
         self.params.child('Measurement status').child('Data settings').child('Load settings').sigActivated.connect(self.manual_load_configuration)
