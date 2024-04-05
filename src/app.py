@@ -2295,17 +2295,17 @@ class MainWindow(QMainWindow):
                 child.child('Connection').value().close()
             except AttributeError:
                 pass
-            # remove plot data, curve and start time dictionary entries
-            try:
-                del self.plot_data[device_id]
-                self.curve_dict[device_id].setData(x=[], y=[])
-                del self.curve_dict[device_id]
-                del self.start_times[device_id]
-            except KeyError:
-                pass
-            # remove device widget from device_widgets dictionary
-            del self.device_widgets[device_id]
-            # TODO make sure all connections, dictionary entries etc. are removed
+            # set empty data to curve_dict (remove curve from Main plot)
+            self.curve_dict[device_id].setData(x=[], y=[])
+            # remove device from all device related dictionaries
+            for dictionary in [self.latest_data, self.latest_settings, self.latest_psm_prnt, self.extra_data, # data
+                self.plot_data, self.curve_dict, self.start_times, self.device_widgets, # plots and widgets
+                self.dat_filenames, self.par_filenames, # filenames
+                self.par_updates, self.psm_settings_updates, self.device_errors]: # flags
+                try:
+                    del dictionary[device_id]
+                except KeyError:
+                    pass
 
     def startTimer(self):
         # check start time and sync with next second
