@@ -211,7 +211,9 @@ class ScalableGroup(parameterTypes.GroupParameter):
             self.children()[-1].cpc_changed = False
             # connect value change signal of Connected CPC to update_cpc_changed slot
             self.children()[-1].child('Connected CPC').sigValueChanged.connect(self.update_cpc_changed)
-            #self.children()[-1].child('Connected CPC').sigValueChanged.connect(lambda: self.update_cpc_changed(self.children()[-1]))
+            # if device is PSM Retrofit, add hidden CO flow parameter
+            if device_value == PSM:
+                self.children()[-1].addChild({'name': 'CO flow', 'type': 'str', 'visible': False})
         
         # if added device is RHTP, add options for plotted value
         if device_value == RHTP:
@@ -1960,6 +1962,12 @@ class MainWindow(QMainWindow):
                     # skip the parameter
                     # 'Connection' parameter (SerialDeviceConnection) was created when the device was added
                     pass
+                # Check if parameter name is CO flow
+                elif param.name() == 'CO flow':
+                    # Set the parameter value as usual
+                    param.setValue(values.get(param.name(), param.value()))
+                    # Set CO flow value to related PSM widget
+                    self.device_widgets[param.parent().child("DevID").value()].set_tab.set_co_flow.value_spinbox.setValue(round(float(param.value()), 3))
                 else:
                     # Set the parameter value as usual
                     param.setValue(values.get(param.name(), param.value()))
@@ -2215,6 +2223,9 @@ class MainWindow(QMainWindow):
                 if device_type == PSM:
                     widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
                     widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                    # set value to hidden 'CO flow' parameter in parameter tree
+                    widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda value: device_param.child('CO flow').setValue(str(round(value, 3))))
+                    widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: device_param.child('CO flow').setValue(widget.set_tab.set_co_flow.value_input.text()))
                 # connect set_tab's command_widget's command_input to send_command function
                 widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: connection.send_command(widget.set_tab.command_widget))
                 widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.psm_update(device_id))
