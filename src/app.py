@@ -354,6 +354,7 @@ class MainWindow(QMainWindow):
         self.latest_data = {} # contains latest values
         self.latest_settings = {} # contains latest CPC and PSM settings
         self.latest_psm_prnt = {} # contains latest PSM prnt values
+        self.latest_poly_correction = {} # contains latest polynomial correction values from PSM
         self.extra_data = {} # contains extra data, used when multiple data prints are received at once
         # plot related
         self.plot_data = {} # contains plotted values
@@ -734,9 +735,10 @@ class MainWindow(QMainWindow):
                                     logging.exception(e)
                                 # note hex handling
                                 note_hex = data[-1]
-
                                 # update widget liquid states with note hex, get liquid sets in return
                                 liquid_sets = self.device_widgets[dev.child('DevID').value()].update_notes(note_hex)
+                                # store polynomial correction value to dictionary
+                                self.latest_poly_correction[dev.child('DevID').value()] = data[14]
                                 
                                 # compile and store psm data to latest data dictionary with device id as key
                                 if dev.child('Device type').value() == PSM: # PSM
