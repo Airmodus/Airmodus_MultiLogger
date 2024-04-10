@@ -6,6 +6,7 @@ import platform
 import logging
 import random
 import traceback
+import json
 
 from numpy import full, nan, array, polyval, array_equal
 from serial import Serial
@@ -13,12 +14,13 @@ from serial.tools import list_ports
 from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QGridLayout, QLabel, QWidget,
-    QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QSizePolicy)
+    QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QSizePolicy,
+    QFileDialog)
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.4.1"
+version_number = "0.5.0"
 
 # Define instrument types
 CPC = 1
@@ -144,6 +146,22 @@ class SerialDeviceConnection():
         except Exception as e:
             command_widget.update_text_box(str(e))
             #print(e)
+    
+    # --- parameter saving ---
+
+    def to_dict(self):
+        return {
+            'serial_port': self.serial_port,
+            'timeout': self.timeout,
+            'port_in_use': self.port_in_use,
+            #'port_list': self.port_list
+        }
+    
+    def from_dict(self, data):
+        self.serial_port = data.get('serial_port', "NaN")
+        self.timeout = data.get('timeout', 1)
+        self.port_in_use = data.get('port_in_use', "NaN")
+        #self.port_list = data.get('port_list', [])
 
 # ScalableGroup for creating a menu where to set up new COM devices
 class ScalableGroup(parameterTypes.GroupParameter):
@@ -193,7 +211,9 @@ class ScalableGroup(parameterTypes.GroupParameter):
             self.children()[-1].cpc_changed = False
             # connect value change signal of Connected CPC to update_cpc_changed slot
             self.children()[-1].child('Connected CPC').sigValueChanged.connect(self.update_cpc_changed)
-            #self.children()[-1].child('Connected CPC').sigValueChanged.connect(lambda: self.update_cpc_changed(self.children()[-1]))
+            # if device is PSM Retrofit, add hidden CO flow parameter
+            if device_value == PSM:
+                self.children()[-1].addChild({'name': 'CO flow', 'type': 'str', 'visible': False})
         
         # if added device is RHTP, add options for plotted value
         if device_value == RHTP:
@@ -244,9 +264,12 @@ params = [
     {'name': 'Measurement status', 'type': 'group', 'children': [
         {'name': 'Data settings', 'type': 'group', 'children': [
             {'name': 'File path', 'type': 'str', 'value': main_path},
-            {'name': 'File tag', 'type': 'str', 'value': "", 'tip': "Datafile format: YYYYMMDD_HHMM_(Device name)_(File tag).dat"},
+            {'name': 'File tag', 'type': 'str', 'value': "", 'tip': "Datafile format: YYYYMMDD_HHMMSS_(Serial number)_(Device name)_(File tag).dat"},
             {'name': 'Save data', 'type': 'bool', 'value': False},
             {'name': 'Generate daily files', 'type': 'bool', 'value': True, 'tip': "If on, new files are started at midnight."},
+            {'name': 'Resume on startup', 'type': 'bool', 'value': False, 'tip': "Option to resume the last settings on startup."},
+            {'name': 'Save settings', 'type': 'action'},
+            {'name': 'Load settings', 'type': 'action'},
         ]},
         {'name': 'COM settings', 'type': 'group', 'children': [
             {'name': 'Available ports', 'type': 'text', 'value': '', 'readonly': True},
@@ -305,6 +328,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Airmodus MultiLogger v. " + version_number) # set window title
         self.timer = QTimer(timerType=Qt.PreciseTimer) # create timer object
         self.params = params # predefined parameter tree
+        self.config_file_path = "" # path to the configuration file
         # create parameter tree
         t = ParameterTree()
         t.setParameters(p, showTop=False)
@@ -403,6 +427,14 @@ class MainWindow(QMainWindow):
 
         # start timer
         self.startTimer()
+
+        # connect parameter tree's sigTreeStateChanged signal to save_ini function
+        self.params.sigTreeStateChanged.connect(self.save_ini)
+        # connect 'Save settings' and 'Load settings' buttons
+        self.params.child('Measurement status').child('Data settings').child('Save settings').sigActivated.connect(self.manual_save_configuration)
+        self.params.child('Measurement status').child('Data settings').child('Load settings').sigActivated.connect(self.manual_load_configuration)
+        # load ini file if available
+        self.load_ini()
 
         # end of __init__ function
 
@@ -1837,6 +1869,120 @@ class MainWindow(QMainWindow):
         # update GUI 'Available ports' text box if com port list has changed
         if com_ports_text != self.params.child('Measurement status').child('COM settings').child('Available ports').value():
             self.params.child('Measurement status').child('COM settings').child('Available ports').setValue(com_ports_text)
+    
+    def save_ini(self):
+        # check if resume on startup is on
+        resume_measurements = 0
+        if self.params.child('Measurement status').child('Data settings').child('Resume on startup').value():
+            resume_measurements = 1
+        # store resume config path
+        self.config_file_path = os.path.join(file_path, 'resume_config.json')
+        with open(os.path.join(file_path, 'config.ini'),'w') as f:
+            f.write(self.config_file_path)
+            f.write(';')
+            f.write(str(resume_measurements))
+        # save the configuration to the JSON file
+        self.save_configuration(self.config_file_path)
+    
+    def load_ini(self):
+        try:
+            # load the configuration file "config.ini" from the file_path
+            with open(os.path.join(file_path, 'config.ini'),'r') as f:
+                config = f.read()
+                json_path = config.split(';')[0]
+                resume_measurements = config.split(';')[1]
+                # If json path is empty
+                if not json_path:
+                    json_path = os.path.join(file_path, 'resume_config.json')
+                self.config_file_path = json_path
+                resume_measurements = int(resume_measurements)
+                # if resume on startup is on, load the stored configuration
+                if resume_measurements:
+                    self.load_configuration(json_path)
+        except:
+            # If the file does not exist, raise an exception saying that the file does not exist
+            print("No ini file found")
+        
+    def save_configuration(self, json_path):
+        # Get the parameter tree values
+        parameter_values = self.save_parameters_recursive(self.params)
+        # Save the configuration to the JSON file
+        with open(json_path, 'w') as file:
+            json.dump(parameter_values, file)
+    
+    def save_parameters_recursive(self, parameters):
+        result = {}
+        for param in parameters:
+            if param.hasChildren():
+                result[param.name()] = self.save_parameters_recursive(param.children())
+            else:
+                # Check if the parameter value is an instance of SerialDeviceConnection
+                if isinstance(param.value(), SerialDeviceConnection):
+                    # Use the to_dict method for serialization
+                    result[param.name()] = param.value().to_dict()
+                else:
+                    result[param.name()] = param.value()
+        return result
+
+    def load_configuration(self, json_path=None):
+        if json_path:
+            # Load the configuration from the JSON file
+            with open(json_path, 'r') as file:
+                parameter_values = json.load(file)
+            # Add devices in configuration file to the parameter tree
+            self.load_devices(parameter_values.get('Device settings', {}))
+            # Set the loaded parameter values to the parameter tree
+            self.load_parameters_recursive(self.params, parameter_values)
+    
+    def load_devices(self, device_settings):
+        # remove all devices from the parameter tree
+        self.params.child('Device settings').clearChildren()
+        # dictionary of device names matching device type
+        device_names = {1: 'CPC', 2: 'PSM Retrofit', 3: 'Electrometer', 4: 'CO2 sensor', 5: 'RHTP', 6: 'eDiluter', 7: 'PSM 2.0', 8: 'TSI CPC', -1: 'Example device'}
+        try:
+            # go through each device in the device settings
+            for dev_name, dev_values in device_settings.items():
+                # get 'DevID' and 'Device type' values
+                dev_id = dev_values.get('DevID', None)
+                dev_type = dev_values.get('Device type', None)
+                # set n_devices to current dev_id
+                self.params.child('Device settings').n_devices = dev_id
+                # add device to the parameter tree
+                self.params.child('Device settings').addNew(device_names[dev_type])
+        except AttributeError:
+            pass
+            
+    def load_parameters_recursive(self, parameters, values):
+        for param in parameters:
+            if param.hasChildren():
+                self.load_parameters_recursive(param.children(), values.get(param.name(), {}))
+            else:
+                # Check if the parameter value is a dictionary (indicating a complex object)
+                if isinstance(values.get(param.name()), dict):
+                    # skip the parameter
+                    # 'Connection' parameter (SerialDeviceConnection) was created when the device was added
+                    pass
+                # Check if parameter name is CO flow
+                elif param.name() == 'CO flow':
+                    # Set the parameter value as usual
+                    param.setValue(values.get(param.name(), param.value()))
+                    # Set CO flow value to related PSM widget
+                    self.device_widgets[param.parent().child("DevID").value()].set_tab.set_co_flow.value_spinbox.setValue(round(float(param.value()), 3))
+                else:
+                    # Set the parameter value as usual
+                    param.setValue(values.get(param.name(), param.value()))
+    
+    def manual_save_configuration(self):
+        # Ask the user for the file path to save the configuration
+        file_dialog = QFileDialog(self)
+        json_path, _ = file_dialog.getSaveFileName(self, 'Save Configuration', '', 'JSON Files (*.json)')
+        self.save_configuration(json_path)
+    
+    def manual_load_configuration(self):
+        # Ask the user for the file path to load the configuration
+        file_dialog = QFileDialog(self)
+        json_path, _ = file_dialog.getOpenFileName(self, 'Load Configuration', '', 'JSON Files (*.json)')
+        self.load_configuration(json_path)
         
     def x_range_changed(self, viewbox):
         # if autoscale y is on
@@ -2077,6 +2223,9 @@ class MainWindow(QMainWindow):
                 if device_type == PSM:
                     widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
                     widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                    # set value to hidden 'CO flow' parameter in parameter tree
+                    widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda value: device_param.child('CO flow').setValue(str(round(value, 3))))
+                    widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: device_param.child('CO flow').setValue(widget.set_tab.set_co_flow.value_input.text()))
                 # connect set_tab's command_widget's command_input to send_command function
                 widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: connection.send_command(widget.set_tab.command_widget))
                 widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.psm_update(device_id))
@@ -2157,15 +2306,17 @@ class MainWindow(QMainWindow):
                 child.child('Connection').value().close()
             except AttributeError:
                 pass
-            # remove curve from curve dictionary if exists
-            try:
-                self.curve_dict[device_id].setData(x=[], y=[])
-                del self.curve_dict[device_id]
-            except KeyError:
-                pass
-            # remove device widget from device_widgets dictionary
-            del self.device_widgets[device_id]
-            # TODO make sure all connections, dictionary entries etc. are removed
+            # set empty data to curve_dict (remove curve from Main plot)
+            self.curve_dict[device_id].setData(x=[], y=[])
+            # remove device from all device related dictionaries
+            for dictionary in [self.latest_data, self.latest_settings, self.latest_psm_prnt, self.extra_data, # data
+                self.plot_data, self.curve_dict, self.start_times, self.device_widgets, # plots and widgets
+                self.dat_filenames, self.par_filenames, # filenames
+                self.par_updates, self.psm_settings_updates, self.device_errors]: # flags
+                try:
+                    del dictionary[device_id]
+                except KeyError:
+                    pass
 
     def startTimer(self):
         # check start time and sync with next second
