@@ -737,8 +737,8 @@ class MainWindow(QMainWindow):
                                 note_hex = data[-1]
                                 # update widget liquid states with note hex, get liquid sets in return
                                 liquid_sets = self.device_widgets[dev.child('DevID').value()].update_notes(note_hex)
-                                # store polynomial correction value to dictionary
-                                self.latest_poly_correction[dev.child('DevID').value()] = data[14]
+                                # store polynomial correction value as float to dictionary
+                                self.latest_poly_correction[dev.child('DevID').value()] = float(data[14])
                                 
                                 # compile and store psm data to latest data dictionary with device id as key
                                 if dev.child('Device type').value() == PSM: # PSM
@@ -1052,12 +1052,16 @@ class MainWindow(QMainWindow):
                             # show inlet flow in PSM widget
                             self.device_widgets[psm_id].status_tab.flow_inlet.change_value(str(round(inlet_flow, 3)))
 
-                            # calculate polynomial correction factor
-                            if dev.child('Device type').value() == PSM:
-                                pcor = array([-0.0272052, 0.11394213, -0.08959011, -0.20675596, 0.24343024, 1.10531145])
-                            elif dev.child('Device type').value() == PSM2:
-                                pcor = array([0.12949491, -0.50587616, 0.57214191, 0.76108161])
-                            poly_correction  = polyval(pcor, float(self.latest_data[psm_id][2]))
+                            # if received polynomial correction is 0 (placeholder)
+                            if self.latest_poly_correction[psm_id] == 0:
+                                # calculate polynomial correction factor
+                                if dev.child('Device type').value() == PSM:
+                                    pcor = array([-0.0272052, 0.11394213, -0.08959011, -0.20675596, 0.24343024, 1.10531145])
+                                elif dev.child('Device type').value() == PSM2:
+                                    pcor = array([0.12949491, -0.50587616, 0.57214191, 0.76108161])
+                                poly_correction  = polyval(pcor, float(self.latest_data[psm_id][2]))
+                            else: # if received polynomial correction is other than 0, use received value
+                                poly_correction = self.latest_poly_correction[psm_id]
 
                             # calculate dilution correction factor
                             # Dilution ratio = (inlet flow + Excess flow + Saturator flow) / Inlet flow
