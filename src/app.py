@@ -2311,7 +2311,7 @@ class MainWindow(QMainWindow):
             # set empty data to curve_dict (remove curve from Main plot)
             self.curve_dict[device_id].setData(x=[], y=[])
             # remove device from all device related dictionaries
-            for dictionary in [self.latest_data, self.latest_settings, self.latest_psm_prnt, self.extra_data, # data
+            for dictionary in [self.latest_data, self.latest_settings, self.latest_psm_prnt, self.latest_poly_correction, self.extra_data, # data
                 self.plot_data, self.curve_dict, self.start_times, self.device_widgets, # plots and widgets
                 self.dat_filenames, self.par_filenames, # filenames
                 self.par_updates, self.psm_settings_updates, self.device_errors]: # flags
