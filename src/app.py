@@ -20,7 +20,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.5.0"
+version_number = "0.5.1"
 
 # Define instrument types
 CPC = 1
@@ -1531,7 +1531,7 @@ class MainWindow(QMainWindow):
                                 # write headers if they don't exist
                                 if write_headers == 1:
                                     if dev.child('Device type').value() == CPC: # CPC
-                                        file.write('YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau')
                                     elif dev.child('Device type').value() == PSM: # PSM
                                         file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s)')
                                     elif dev.child('Device type').value() == PSM2: # PSM2
@@ -1677,9 +1677,8 @@ class MainWindow(QMainWindow):
             int(prnt[5]), pall[24], prnt[10], # averaging time, nominal inlet flow rate, measured cpc flow rate
             prnt[8], prnt[6], prnt[7], # temperature set points: saturator, condenser, optics
             int(prnt[1]), pall[26], pall[27], int(prnt[4]), # autofill, OPC counter threshold voltage, OPC counter threshold voltage 2, water removal
-            prnt[12], int(prnt[2]), pall[20] # dead time correction, drain, k-factor
-            # TODO add Device ID, Firmware version
-            # TODO add hex self-test error str?
+            prnt[12], int(prnt[2]), pall[20], pall[25] # dead time correction, drain, k-factor, tau
+            # TODO add Firmware version
         ]
         return cpc_settings
 
