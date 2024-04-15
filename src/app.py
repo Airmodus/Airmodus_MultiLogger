@@ -1520,12 +1520,12 @@ class MainWindow(QMainWindow):
                                 # write headers if they don't exist
                                 if write_headers == 1:
                                     if dev.child('Device type').value() == CPC: # CPC
-                                        file.write('YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau,Command input')
                                     elif dev.child('Device type').value() == PSM: # PSM
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s)')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
                                     elif dev.child('Device type').value() == PSM2: # PSM2
                                         # TODO: check if correct
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s)')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
                                 
                                 # reset local update_par flag
                                 update_par = 0
@@ -1586,6 +1586,11 @@ class MainWindow(QMainWindow):
                                         
                                         else: # if no connected CPC selected, write nan values
                                             file.write(',nan,nan,nan,nan,nan,nan,nan,nan')
+                                        
+                                    # check if device is in latest_command dictionary
+                                    if dev_id in self.latest_command:
+                                        # write latest command to file and remove from dictionary
+                                        file.write(',' + self.latest_command.pop(dev_id))
 
                     # if saving fails, set saving status to 0
                     except Exception as e:
@@ -1764,10 +1769,12 @@ class MainWindow(QMainWindow):
             # send message to device
             dev_param.child('Connection').value().send_message(message)
 
-            # store message to latest_command dictionary
-            self.latest_command[dev_id] = message
-            # set par_updates flag
-            self.par_updates[dev_id] = 1
+            # if saving is on, set up .par update
+            if self.params.child('Measurement status').child('Data settings').child('Save data').value():
+                # store message to latest_command dictionary
+                self.latest_command[dev_id] = message
+                # set par_updates flag
+                self.par_updates[dev_id] = 1
         
         except Exception as e:
             self.device_widgets[dev_id].set_tab.command_widget.update_text_box(str(e))
