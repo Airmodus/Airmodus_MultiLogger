@@ -135,18 +135,6 @@ class SerialDeviceConnection():
         #print("send_set_val -", message) # print message for debugging
         self.send_set(message) # send message using send_message()
     
-    def send_command(self, command_widget):
-        try:
-            message = command_widget.command_input.text() # get command input's text
-            command_widget.command_input.clear() # clear command input
-            # update command_widget's text box
-            command_widget.update_text_box(message)
-            # send message
-            self.send_message(message)
-        except Exception as e:
-            command_widget.update_text_box(str(e))
-            #print(e)
-    
     # --- parameter saving ---
 
     def to_dict(self):
@@ -354,6 +342,7 @@ class MainWindow(QMainWindow):
         self.latest_data = {} # contains latest values
         self.latest_settings = {} # contains latest CPC and PSM settings
         self.latest_psm_prnt = {} # contains latest PSM prnt values
+        self.latest_command = {} # contains latest user entered command message
         self.extra_data = {} # contains extra data, used when multiple data prints are received at once
         # plot related
         self.plot_data = {} # contains plotted values
@@ -1761,6 +1750,27 @@ class MainWindow(QMainWindow):
             if cpc_device.child('Device type').value() == CPC:
                 # send flow rate set value to CPC
                 cpc_device.child("Connection").value().send_set_val(value, ":SET:FLOW ", decimals=3)
+
+    # when command is entered, send message to device and update .par file
+    def command_entered(self, dev_id, dev_param):
+        try:
+            # get message from command input and clear input
+            command_widget = self.device_widgets[dev_id].set_tab.command_widget
+            message = command_widget.command_input.text()
+            command_widget.command_input.clear()
+            # update command_widget's text box
+            command_widget.update_text_box(message)
+
+            # send message to device
+            dev_param.child('Connection').value().send_message(message)
+
+            # store message to latest_command dictionary
+            self.latest_command[dev_id] = message
+            # set par_updates flag
+            self.par_updates[dev_id] = 1
+        
+        except Exception as e:
+            self.device_widgets[dev_id].set_tab.command_widget.update_text_box(str(e))
     
     # compare current day to file start day (self.start_day defined in save_changed)
     def compare_day(self):
@@ -2157,8 +2167,8 @@ class MainWindow(QMainWindow):
                 widget.set_tab.drain.clicked.connect(lambda: connection.send_set(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
                 widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
                 widget.set_tab.water_removal.clicked.connect(lambda: connection.send_set(":SET:WREM " + str(int(widget.set_tab.water_removal.isChecked()))))
-                # connect set_tab's command_widget's command_input to send_command function
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: connection.send_command(widget.set_tab.command_widget))
+                # connect command_input to comand_entered function
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param))
                 # connect Set tab set points to send_set_val function
                 # send set value and message using lambda once value has been changed
                 # stepChanged signal is defined in SpinBox and DoubleSpinBox classes
@@ -2225,8 +2235,8 @@ class MainWindow(QMainWindow):
                     # set value to hidden 'CO flow' parameter in parameter tree
                     widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda value: device_param.child('CO flow').setValue(str(round(value, 3))))
                     widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: device_param.child('CO flow').setValue(widget.set_tab.set_co_flow.value_input.text()))
-                # connect set_tab's command_widget's command_input to send_command function
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: connection.send_command(widget.set_tab.command_widget))
+                # connect command_input to command_entered and psm_update functions
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param))
                 widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.psm_update(device_id))
                 # connect liquid operations
                 widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
@@ -2270,8 +2280,8 @@ class MainWindow(QMainWindow):
                 # connect dilution factor 2 buttons to send_set function
                 widget.set_tab.df_2.prev_button.clicked.connect(lambda: connection.send_set("do set dilution.2nd.prev true"))
                 widget.set_tab.df_2.next_button.clicked.connect(lambda: connection.send_set("do set dilution.2nd.next true"))
-                # connect set_tab's command_widget's command_input to send_command function
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: connection.send_command(widget.set_tab.command_widget))
+                # connect command_input to command_entered function
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param))
             
             if device_type == TSI_CPC: # if TSI CPC
                 # create TSI widget instance
