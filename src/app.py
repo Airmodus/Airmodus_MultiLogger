@@ -1046,7 +1046,8 @@ class MainWindow(QMainWindow):
                                 # TODO vacuum flow GUI value is updated in PSMWidget's update_values, check if it works and remove line below
                                 #self.device_widgets[psm_id].status_tab.flow_vacuum.change_value(str(round(vacuum_flow, 3)))
                                 inlet_flow = cpc_flow + vacuum_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
-
+                                inlet_flow0 = cpc_flow + vacuum_flow - 4 + float(self.latest_data[psm_id][2]) + float(self.latest_data[psm_id][3])
+                            
                             # store inlet flow into PSM latest_settings, rounded to 3 decimals
                             self.latest_settings[psm_id][6] = round(inlet_flow, 3)
                             # show inlet flow in PSM widget
@@ -1066,6 +1067,8 @@ class MainWindow(QMainWindow):
                             # calculate dilution correction factor
                             # Dilution ratio = (inlet flow + Excess flow + Saturator flow) / Inlet flow
                             dilution_correction_factor = (inlet_flow + float(self.latest_data[psm_id][3]) + float(self.latest_data[psm_id][2])) / inlet_flow
+                            if dev.child('Device type').value() == PSM2:
+                                dilution_correction_factor = (inlet_flow + 4 - float(self.latest_data[psm_id][3]) - float(self.latest_data[psm_id][2])) / inlet_flow0
                             
                             # calculate concentration from PSM
                             # Concentration from PSM = CPC concentration * Dilution ratio / Polynomial correction
