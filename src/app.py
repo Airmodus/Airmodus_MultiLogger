@@ -1531,10 +1531,14 @@ class MainWindow(QMainWindow):
                                 update_par = 0
 
                                 # if device's .par update flag is set, write data
-                                if self.par_updates[dev.child('DevID').value()] == 1:
+                                if self.par_updates[dev_id] == 1:
                                     update_par = 1
                                 
-                                # if not set, check if device is PSM
+                                # else if a command has been entered, write data
+                                elif dev_id in self.latest_command:
+                                    update_par = 1
+                                
+                                # else check if device is PSM and if there are changes in connected CPC
                                 elif dev.child('Device type').value() in [PSM, PSM2]:
                                     # check if Connected CPC parameter has been changed
                                     if dev.cpc_changed == True: # check device's cpc_changed flag
@@ -1769,12 +1773,9 @@ class MainWindow(QMainWindow):
             # send message to device
             dev_param.child('Connection').value().send_message(message)
 
-            # if saving is on, set up .par update
+            # if saving is on, store command to latest_command dictionary
             if self.params.child('Measurement status').child('Data settings').child('Save data').value():
-                # store message to latest_command dictionary
                 self.latest_command[dev_id] = message
-                # set par_updates flag
-                self.par_updates[dev_id] = 1
         
         except Exception as e:
             self.device_widgets[dev_id].set_tab.command_widget.update_text_box(str(e))
