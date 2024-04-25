@@ -20,7 +20,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.5.2"
+version_number = "0.5.3"
 
 # Define instrument types
 CPC = 1
@@ -342,6 +342,7 @@ class MainWindow(QMainWindow):
         self.latest_data = {} # contains latest values
         self.latest_settings = {} # contains latest CPC and PSM settings
         self.latest_psm_prnt = {} # contains latest PSM prnt values
+        self.latest_poly_correction = {} # contains latest polynomial correction values from PSM
         self.latest_command = {} # contains latest user entered command message
         self.extra_data = {} # contains extra data, used when multiple data prints are received at once
         # plot related
@@ -723,9 +724,10 @@ class MainWindow(QMainWindow):
                                     logging.exception(e)
                                 # note hex handling
                                 note_hex = data[-1]
-
                                 # update widget liquid states with note hex, get liquid sets in return
                                 liquid_sets = self.device_widgets[dev.child('DevID').value()].update_notes(note_hex)
+                                # store polynomial correction value as float to dictionary
+                                self.latest_poly_correction[dev.child('DevID').value()] = float(data[14])
                                 
                                 # compile and store psm data to latest data dictionary with device id as key
                                 if dev.child('Device type').value() == PSM: # PSM
@@ -1033,22 +1035,29 @@ class MainWindow(QMainWindow):
                                 # TODO vacuum flow GUI value is updated in PSMWidget's update_values, check if it works and remove line below
                                 #self.device_widgets[psm_id].status_tab.flow_vacuum.change_value(str(round(vacuum_flow, 3)))
                                 inlet_flow = cpc_flow + vacuum_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
-
+                                inlet_flow0 = cpc_flow + vacuum_flow - 4 + float(self.latest_data[psm_id][2]) + float(self.latest_data[psm_id][3])
+                            
                             # store inlet flow into PSM latest_settings, rounded to 3 decimals
                             self.latest_settings[psm_id][6] = round(inlet_flow, 3)
                             # show inlet flow in PSM widget
                             self.device_widgets[psm_id].status_tab.flow_inlet.change_value(str(round(inlet_flow, 3)))
 
-                            # calculate polynomial correction factor
-                            if dev.child('Device type').value() == PSM:
-                                pcor = array([-0.0272052, 0.11394213, -0.08959011, -0.20675596, 0.24343024, 1.10531145])
-                            elif dev.child('Device type').value() == PSM2:
-                                pcor = array([0.12949491, -0.50587616, 0.57214191, 0.76108161])
-                            poly_correction  = polyval(pcor, float(self.latest_data[psm_id][2]))
+                            # if received polynomial correction is 0 (placeholder)
+                            if self.latest_poly_correction[psm_id] == 0:
+                                # calculate polynomial correction factor
+                                if dev.child('Device type').value() == PSM:
+                                    pcor = array([-0.0272052, 0.11394213, -0.08959011, -0.20675596, 0.24343024, 1.10531145])
+                                elif dev.child('Device type').value() == PSM2:
+                                    pcor = array([0.12949491, -0.50587616, 0.57214191, 0.76108161])
+                                poly_correction  = polyval(pcor, float(self.latest_data[psm_id][2]))
+                            else: # if received polynomial correction is other than 0, use received value
+                                poly_correction = self.latest_poly_correction[psm_id]
 
                             # calculate dilution correction factor
                             # Dilution ratio = (inlet flow + Excess flow + Saturator flow) / Inlet flow
                             dilution_correction_factor = (inlet_flow + float(self.latest_data[psm_id][3]) + float(self.latest_data[psm_id][2])) / inlet_flow
+                            if dev.child('Device type').value() == PSM2:
+                                dilution_correction_factor = (inlet_flow + 4 - float(self.latest_data[psm_id][3]) - float(self.latest_data[psm_id][2])) / inlet_flow0
                             
                             # calculate concentration from PSM
                             # Concentration from PSM = CPC concentration * Dilution ratio / Polynomial correction
@@ -2326,7 +2335,7 @@ class MainWindow(QMainWindow):
             # set empty data to curve_dict (remove curve from Main plot)
             self.curve_dict[device_id].setData(x=[], y=[])
             # remove device from all device related dictionaries
-            for dictionary in [self.latest_data, self.latest_settings, self.latest_psm_prnt, self.extra_data, # data
+            for dictionary in [self.latest_data, self.latest_settings, self.latest_psm_prnt, self.latest_poly_correction, self.extra_data, # data
                 self.plot_data, self.curve_dict, self.start_times, self.device_widgets, # plots and widgets
                 self.dat_filenames, self.par_filenames, # filenames
                 self.par_updates, self.psm_settings_updates, self.device_errors]: # flags
