@@ -409,8 +409,6 @@ class MainWindow(QMainWindow):
         # connect main_plot's viewboxes' sigXRangeChanged signals to x_range_changed function # TODO test with only one viewbox since all are linked
         for viewbox in self.main_plot.viewboxes:
             viewbox.sigXRangeChanged.connect(self.x_range_changed)
-        # connect Follow checkbox to follow_changed function to disable autorange
-        self.params.child('Plot settings').child('Follow').sigValueChanged.connect(self.follow_changed)
 
         # list com ports at startup
         self.list_com_ports()
@@ -2024,13 +2022,6 @@ class MainWindow(QMainWindow):
                 # if active widget is main plot
                 if QApplication.focusWidget() == self.main_plot:
                     self.params.child('Plot settings').child('Follow').setValue(False) # turn follow parameter off
-    
-    # activated when follow parameter is changed
-    def follow_changed(self):
-        if self.params.child('Plot settings').child('Follow').value(): # if follow was turned on
-            # disable autorange to make x_range_changed work TODO check if this is necessary
-            #self.main_plot.plot.disableAutoRange()
-            pass
     
     # set the 'Plot to main' selection of all RHTP devices to the same value
     # called when 'Plot to main' selection of any RHTP device is changed
