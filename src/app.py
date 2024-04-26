@@ -20,7 +20,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.5.3"
+version_number = "0.5.4"
 
 # Define instrument types
 CPC = 1
@@ -409,8 +409,6 @@ class MainWindow(QMainWindow):
         # connect main_plot's viewboxes' sigXRangeChanged signals to x_range_changed function # TODO test with only one viewbox since all are linked
         for viewbox in self.main_plot.viewboxes:
             viewbox.sigXRangeChanged.connect(self.x_range_changed)
-        # connect Follow checkbox to follow_changed function to disable autorange
-        self.params.child('Plot settings').child('Follow').sigValueChanged.connect(self.follow_changed)
 
         # list com ports at startup
         self.list_com_ports()
@@ -2015,7 +2013,7 @@ class MainWindow(QMainWindow):
         if self.params.child("Plot settings").child('Autoscale Y').value():
             viewbox.enableAutoRange(axis='y')
             viewbox.setAutoVisible(y=True)
-        # if Follow is on 
+        """ # if Follow is on
         if self.params.child('Plot settings').child('Follow').value():
             # detect if view is dragged and turn Follow off if it is
             viewbox_range = viewbox.viewRange()
@@ -2023,14 +2021,7 @@ class MainWindow(QMainWindow):
             if viewbox_range[0][1]-viewbox_range[0][0] != self.params.child('Plot settings').child('Time window (s)').value() or viewbox_range[0][1] != self.current_time:
                 # if active widget is main plot
                 if QApplication.focusWidget() == self.main_plot:
-                    self.params.child('Plot settings').child('Follow').setValue(False) # turn follow parameter off
-    
-    # activated when follow parameter is changed
-    def follow_changed(self):
-        if self.params.child('Plot settings').child('Follow').value(): # if follow was turned on
-            # disable autorange to make x_range_changed work TODO check if this is necessary
-            #self.main_plot.plot.disableAutoRange()
-            pass
+                    self.params.child('Plot settings').child('Follow').setValue(False) # turn follow parameter off """
     
     # set the 'Plot to main' selection of all RHTP devices to the same value
     # called when 'Plot to main' selection of any RHTP device is changed
