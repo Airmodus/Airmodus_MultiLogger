@@ -158,7 +158,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         #opts['type'] = 'action'
         opts['addText'] = "Add new device"
         # opts for choosing device type when adding new device
-        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "TSI CPC", "Example device"] #  "eDiluter",
+        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "AFM", "TSI CPC", "Example device"] #  "eDiluter",
         parameterTypes.GroupParameter.__init__(self, **opts)
         self.n_devices = 0
         self.cpc_dict = {'None': 'None'}
@@ -167,7 +167,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
 
     def addNew(self, device_name): # device_name is the name of the added device type
         # device_value is used to set the default value for the Device type parameter below
-        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_name]
+        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_name]
         # if OSX mode is on, set COM port type as string to allow complex port addresses
         if osx_mode:
             port_type = 'str'
@@ -180,7 +180,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 dict(name="Serial number", type='str', value="", readonly=True),
                 #dict(name="Baud rate", type='int', value=115200, visible=False),
                 dict(name = "Connection", value = SerialDeviceConnection(), visible=False),
-                {'name': 'Device type', 'type': 'list', 'values': {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
+                {'name': 'Device type', 'type': 'list', 'values': {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
                 dict(name = "Connected", type='bool', value=False, readonly = True),
                 dict(name = "DevID", type='int', value=self.n_devices,readonly = True, visible = False),
                 dict(name = "Plot to main", type='bool', value=True),
@@ -210,10 +210,13 @@ class ScalableGroup(parameterTypes.GroupParameter):
             self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
             # create new Plot to main parameter with options for plotted value
             self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'RH', 'T', 'P'], 'value': 'RH'})
-            # add rhtp_changed flag to device, set to True to make sure plot is updated
-            self.children()[-1].rhtp_changed = True
-            # connect Plot to main value change signal to update_rhtp_changed slot
-            self.children()[-1].child('Plot to main').sigValueChanged.connect(self.update_rhtp_changed)
+        
+        # if added device is AFM, add options for plotted value
+        if device_value == AFM:
+            # remove default Plot to main parameter
+            self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
+            # create new Plot to main parameter with options for plotted value
+            self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'Flow', 'RH', 'T', 'P'], 'value': 'Flow'})
 
     def update_cpc_dict(self):
         self.cpc_dict = {'None': 'None'} # reset cpc_dict
@@ -242,11 +245,6 @@ class ScalableGroup(parameterTypes.GroupParameter):
     def update_cpc_changed(self, value):
         device = value.parent() # get device parameter
         device.cpc_changed = True # set cpc_changed flag to True
-    
-    # slot for setting rhtp_changed flag to True when RHTP's Plot to main parameter is changed
-    def update_rhtp_changed(self, value):
-        device = value.parent() # get device parameter
-        device.rhtp_changed = True # set rhtp_changed flag to True
 
 # Create a dictionary, in which the names, types and default values are set
 params = [
@@ -2043,7 +2041,12 @@ class MainWindow(QMainWindow):
     # called when 'Plot to main' selection of any RHTP device is changed
     def rhtp_axis_changed(self, value):
         for dev in self.params.child('Device settings').children():
-            if dev.child('Device type').value() == 5 and dev.child('Plot to main').value() != value:
+            if dev.child('Device type').value() == RHTP and dev.child('Plot to main').value() != value:
+                dev.child('Plot to main').setValue(value)
+    # same as above but for AFM devices
+    def afm_axis_changed(self, value):
+        for dev in self.params.child('Device settings').children():
+            if dev.child('Device type').value() == AFM and dev.child('Plot to main').value() != value:
                 dev.child('Plot to main').setValue(value)
     
     # updates main_plot axes according to Plot to main settings
@@ -2054,7 +2057,7 @@ class MainWindow(QMainWindow):
         # show axes for devices that are set to plot to main
         for dev in self.params.child('Device settings').children():
             # RHTP
-            if dev.child('Device type').value() == 5:
+            if dev.child('Device type').value() == RHTP:
                 self.main_plot.change_rhtp_axis(dev.child('Plot to main').value())
             # other devices
             elif dev.child('Plot to main').value():
@@ -2280,7 +2283,7 @@ class MainWindow(QMainWindow):
                 widget = RHTPWidget(device_param) # create RHTP widget instance
                 # check if there are other RHTP devices and if so, set 'Plot to main' according to them
                 for dev in self.params.child('Device settings').children():
-                    if dev.child('Device type').value() == 5 and dev.child('DevID').value() != device_id:
+                    if dev.child('Device type').value() == RHTP and dev.child('DevID').value() != device_id:
                         # call rhtp_axis_changed() to change 'Plot to main' selection of new device
                         # delay ensures change is made to updated "Plot to main" RHTP menu
                         QTimer.singleShot(50, lambda: self.rhtp_axis_changed(dev.child('Plot to main').value()))
@@ -2288,6 +2291,19 @@ class MainWindow(QMainWindow):
                 # connect device parameter's 'Plot to main' value change to rhtp_axis_changed()
                 # delay ensures connection is made from updated "Plot to main" RHTP menu
                 QTimer.singleShot(60, lambda: device_param.child("Plot to main").sigValueChanged.connect(lambda parameter: self.rhtp_axis_changed(parameter.value())))
+            
+            if device_type == AFM: # if AFM
+                widget = AFMWidget(device_param) # create AFM widget instance
+                # check if there are other AFM devices and if so, set 'Plot to main' according to them
+                for dev in self.params.child('Device settings').children():
+                    if dev.child('Device type').value() == AFM and dev.child('DevID').value() != device_id:
+                        # call afm_axis_changed() to change 'Plot to main' selection of new device
+                        # delay ensures change is made to updated "Plot to main" AFM menu
+                        QTimer.singleShot(50, lambda: self.afm_axis_changed(dev.child('Plot to main').value()))
+                        break
+                # connect device parameter's 'Plot to main' value change to afm_axis_changed()
+                # delay ensures connection is made from updated "Plot to main" AFM menu
+                QTimer.singleShot(60, lambda: device_param.child("Plot to main").sigValueChanged.connect(lambda parameter: self.afm_axis_changed(parameter.value())))
             
             if device_type == eDiluter: # if eDiluter
                 widget = eDiluterWidget(device_param) # create eDiluter widget instance
@@ -2689,15 +2705,17 @@ class SinglePlot(GraphicsLayoutWidget):
         self.plot.setClipToView(True)
 
         # set y-axis label and units based on device type
-        if device_type == 1:
+        if device_type == CPC:
             self.plot.setLabel('left', "Concentration", units='#/cc')
-        if device_type == 2:
+        elif device_type == PSM:
             self.plot.setLabel('left', "Saturator flow", units='lpm')
-        elif device_type == 4:
+        elif device_type == CO2_sensor:
             self.plot.setLabel('left', "CO2", units='ppm')
-        elif device_type == 6:
+        elif device_type == eDiluter:
             self.plot.setLabel('left', "eDiluter temperature", units='°C')
-        elif device_type == -1:
+        elif device_type == AFM:
+            self.plot.setLabel('left', "Flow", units='lpm')
+        elif device_type == Example_device:
             self.plot.setLabel('left', "Example device", units='units')
         
         self.viewbox = self.plot.getViewBox() # store viewbox to variable
@@ -2715,7 +2733,7 @@ class CPCWidget(QTabWidget):
         self.status_tab = CPCStatusTab()
         self.addTab(self.status_tab, "Status")
         # create plot widget for Concentration
-        self.plot_tab = SinglePlot(device_type=1)
+        self.plot_tab = SinglePlot(device_type=CPC)
         self.addTab(self.plot_tab, "Concentration")
 
         # create list of widget references for updating gui with cpc system status
@@ -2819,7 +2837,7 @@ class PSMWidget(QTabWidget):
         self.measure_tab = PSMMeasureTab()
         self.addTab(self.measure_tab, "Measure")
         # create plot widget for PSM
-        self.plot_tab = SinglePlot(device_type=2)
+        self.plot_tab = SinglePlot(device_type=PSM)
         self.addTab(self.plot_tab, "PSM plot")
 
         # TODO check PSM 2.0 compatibility
@@ -3173,7 +3191,7 @@ class CO2Widget(QTabWidget):
         self.device_parameter = device_parameter # store device parameter tree reference
         self.name = device_parameter.name() # store device name
         # create plot widget for CO2
-        self.plot_tab = SinglePlot(device_type=4)
+        self.plot_tab = SinglePlot(device_type=CO2_sensor)
         self.addTab(self.plot_tab, "CO2 plot")
 
 # RHTP widget
@@ -3183,8 +3201,18 @@ class RHTPWidget(QTabWidget):
         self.device_parameter = device_parameter # store device parameter tree reference
         self.name = device_parameter.name() # store device name
         # create plot widget for RHTP
-        self.plot_tab = TriplePlot(device_type=5)
+        self.plot_tab = TriplePlot(device_type=RHTP)
         self.addTab(self.plot_tab, "RHTP plot")
+
+# AFM widget
+class AFMWidget(QTabWidget):
+    def __init__(self, device_parameter, *args, **kwargs):
+        super().__init__()
+        self.device_parameter = device_parameter # store device parameter tree reference
+        self.name = device_parameter.name() # store device name
+        # create plot widget for AFM
+        self.plot_tab = SinglePlot(device_type=AFM) # TODO change to AFM plot with all values
+        self.addTab(self.plot_tab, "AFM plot")
 
 # eDiluter widget
 class eDiluterWidget(QTabWidget):
@@ -3200,7 +3228,7 @@ class eDiluterWidget(QTabWidget):
         self.status_tab = eDiluterStatusTab()
         self.addTab(self.status_tab, "Status")
         # create plot widget for eDiluter
-        self.plot_tab = SinglePlot(device_type=6)
+        self.plot_tab = SinglePlot(device_type=eDiluter)
         self.addTab(self.plot_tab, "eDiluter plot")
         # create dictionary with mode names and corresponding widgets
         self.mode_dict = {"INIT": self.set_tab.init, "WARMUP": self.set_tab.warmup,
@@ -3242,7 +3270,7 @@ class TSIWidget(QTabWidget):
         self.device_parameter = device_parameter # store device parameter tree reference
         self.name = device_parameter.name() # store device name
         # create plot widget for TSI CPC
-        self.plot_tab = SinglePlot(device_type=1)
+        self.plot_tab = SinglePlot(device_type=CPC)
         self.addTab(self.plot_tab, "TSI CPC plot")
 
 # Example device widget
@@ -3252,7 +3280,7 @@ class ExampleDeviceWidget(QTabWidget):
         self.device_parameter = device_parameter # store device parameter tree reference
         self.name = device_parameter.name() # store device name
         # create plot widget for CO2
-        self.plot_tab = SinglePlot(device_type=-1)
+        self.plot_tab = SinglePlot(device_type=Example_device)
         self.addTab(self.plot_tab, "Example device plot")
 
 class eDiluterSetTab(QWidget):
