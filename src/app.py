@@ -31,6 +31,7 @@ RHTP = 5
 eDiluter = 6
 PSM2 = 7
 TSI_CPC = 8
+AFM = 9
 Example_device = -1
 
 # Set the LC_ALL environment variable to US English (en_US)
@@ -546,11 +547,9 @@ class MainWindow(QMainWindow):
                         # send measure command to device
                         dev.child('Connection').value().send_message(":MEAS:CO2")
                     
-                    # RHTP pushes data automatically
+                    # RHTP, eDiluter and AFM push data automatically
 
-                    # eDiluter pushes data automatically
-
-                    if device_type in [CPC, PSM, PSM2, CO2_sensor, RHTP]: # CPC, PSM, CO2, RHTP
+                    if device_type in [CPC, PSM, PSM2, CO2_sensor, RHTP, AFM]: # CPC, PSM, CO2, RHTP, AFM
                         # if Serial number is empty, send IDN inquiry with delay
                         if dev.child('Serial number').value() == "":
                             QTimer.singleShot(300, lambda: dev.child('Connection').value().connection.write(b'*IDN?\n'))
@@ -887,6 +886,48 @@ class MainWindow(QMainWindow):
                     except Exception as e: # if reading fails, store nan values to latest_data
                         print(traceback.format_exc())
                         self.latest_data[dev.child('DevID').value()] = full(3, nan)
+                        logging.exception(e)
+                
+                if dev.child('Device type').value() == AFM: # AFM
+                    try:
+                        # if Serial number is empty, look for *IDN
+                        if dev.child('Serial number').value() == "":
+                            # read all data from buffer
+                            messages = dev.child('Connection').value().connection.read_all().decode().split("\r\n")
+                            # go through messages
+                            for message in messages:
+                                # if message length is above 5 ("*IDN " + device IDN)
+                                if len(message) > 5:
+                                    # if "*IDN " is part of message
+                                    if "*IDN " in message:
+                                        serial_number = message.split(" ", 1)[1]
+                                        serial_number = serial_number.strip("\n")
+                                        serial_number = serial_number.strip("\r")
+                                        dev.child('Serial number').setValue(serial_number)
+                            # store nan values to latest_data
+                            self.latest_data[dev.child('DevID').value()] = full(4, nan)
+                        
+                        # if Serial number has been acquired, read data normally
+                        else:
+                            # read and decode a line of data
+                            readings = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
+                            # remove '\r\n' from end
+                            readings = readings[:-2]
+                            # split data to list
+                            readings = readings.split(", ")
+
+                            # TODO check if there's an extra line's worth of data in buffer, must determine data length
+                            print("AFM buffer:", dev.child('Connection').value().connection.inWaiting())
+
+                            # check if data is valid and store to latest_data dictionary
+                            if float(readings[1]) != 0: # if RH data is valid, not 0
+                                self.latest_data[dev.child('DevID').value()] = readings
+                            else:
+                                self.latest_data[dev.child('DevID').value()] = full(4, nan)
+                    
+                    except Exception as e: # if reading fails, store nan values to latest_data
+                        print(traceback.format_exc())
+                        self.latest_data[dev.child('DevID').value()] = full(4, nan)
                         logging.exception(e)
                 
                 if dev.child('Device type').value() == eDiluter: # eDiluter
