@@ -1151,36 +1151,20 @@ class MainWindow(QMainWindow):
 
             try: # if one device fails, continue with the next one
 
-                # CPC - create lists for concentration and raw concentration (no correction)
-                if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
+                # Devices with multiple values - create lists for each value
+                if dev.child('Device type').value() in [CPC, TSI_CPC, Electrometer, RHTP, AFM]:
+                    # determine value types based on device type
+                    if dev.child('Device type').value() in [CPC, TSI_CPC]:
+                        types = ['', ':raw'] # concentration, raw concentration
+                    elif dev.child('Device type').value() == Electrometer:
+                        types = [':1', ':2', ':3'] # voltage 1, voltage 2, voltage 3
+                    elif dev.child('Device type').value() == RHTP:
+                        types = [':rh', ':t', ':p'] # RH, T, P
+                    elif dev.child('Device type').value() == AFM:
+                        types = [':f', ':rh', ':t', ':p'] # flow, RH, T, P
+                    
                     # if device is not yet in plot_data dict, add it
-                    if dev_id not in self.plot_data:
-                        # make the new lists the same size as x_time_list
-                        self.plot_data[dev_id] = full(len(self.x_time_list), nan)
-                        self.plot_data[str(dev_id)+':raw'] = full(len(self.x_time_list), nan)
-                    # if time_counter has reached max_time - 1, start shifting data
-                    if self.time_counter >= self.max_time - 1:
-                        if self.max_reached == True:
-                            self.plot_data[dev_id] = self.plot_data[dev_id][:self.max_time]
-                            self.plot_data[dev_id][:-1] = self.plot_data[dev_id][1:]
-                            self.plot_data[dev_id][-1] = nan
-                            self.plot_data[str(dev_id)+':raw'] = self.plot_data[str(dev_id)+':raw'][:self.max_time]
-                            self.plot_data[str(dev_id)+':raw'][:-1] = self.plot_data[str(dev_id)+':raw'][1:]
-                            self.plot_data[str(dev_id)+':raw'][-1] = nan
-                    # if max_time hasn't been reached, double device plot array sizes when full
-                    elif self.time_counter >= self.plot_data[dev_id].shape[0]:
-                        tmp_data = self.plot_data[dev_id]
-                        self.plot_data[dev_id] = full(self.plot_data[dev_id].shape[0] * 2, nan)
-                        self.plot_data[dev_id][:tmp_data.shape[0]] = tmp_data
-                        tmp_data = self.plot_data[str(dev_id)+':raw']
-                        self.plot_data[str(dev_id)+':raw'] = full(self.plot_data[str(dev_id)+':raw'].shape[0] * 2, nan)
-                        self.plot_data[str(dev_id)+':raw'][:tmp_data.shape[0]] = tmp_data
-
-                # Electrometer - create lists for each value
-                elif dev.child('Device type').value() == Electrometer: # Electrometer
-                    types = [':1', ':2', ':3']
-                    # if device is not yet in plot_data dict, add it
-                    if str(dev_id)+':1' not in self.plot_data:
+                    if str(dev_id)+types[0] not in self.plot_data:
                         # make the new lists the same size as x_time_list
                         for i in types:
                             self.plot_data[str(dev_id)+i] = full(len(self.x_time_list), nan)
@@ -1192,29 +1176,7 @@ class MainWindow(QMainWindow):
                                 self.plot_data[str(dev_id)+i][:-1] = self.plot_data[str(dev_id)+i][1:] # shift all items one index to left
                                 self.plot_data[str(dev_id)+i][-1] = nan # change nan to end
                     # if max_time hasn't been reached, double device plot array sizes when full
-                    elif self.time_counter >= self.plot_data[str(dev_id)+':1'].shape[0]:
-                        for i in types:
-                            tmp_data = self.plot_data[str(dev_id)+i]
-                            self.plot_data[str(dev_id)+i] = full(self.plot_data[str(dev_id)+i].shape[0] * 2, nan)
-                            self.plot_data[str(dev_id)+i][:tmp_data.shape[0]] = tmp_data
-
-                # RHTP - create lists for each value
-                elif dev.child('Device type').value() == RHTP: # RHTP
-                    types = [':rh', ':t', ':p']
-                    # if device is not yet in plot_data dict, add it
-                    if str(dev_id)+':rh' not in self.plot_data:
-                        # make the new lists the same size as x_time_list
-                        for i in types:
-                            self.plot_data[str(dev_id)+i] = full(len(self.x_time_list), nan)
-                    # if time_counter has reached max_time - 1, start shifting data
-                    if self.time_counter >= self.max_time - 1:
-                        for i in types:
-                            if self.max_reached == True:
-                                self.plot_data[str(dev_id)+i] = self.plot_data[str(dev_id)+i][:self.max_time] # shorten list to max time length
-                                self.plot_data[str(dev_id)+i][:-1] = self.plot_data[str(dev_id)+i][1:] # shift all items one index to left
-                                self.plot_data[str(dev_id)+i][-1] = nan # change nan to end
-                    # if max_time hasn't been reached, double device plot array sizes when full
-                    elif self.time_counter >= self.plot_data[str(dev_id)+':rh'].shape[0]:
+                    elif self.time_counter >= self.plot_data[str(dev_id)+types[0]].shape[0]:
                         for i in types:
                             tmp_data = self.plot_data[str(dev_id)+i]
                             self.plot_data[str(dev_id)+i] = full(self.plot_data[str(dev_id)+i].shape[0] * 2, nan)
@@ -1247,12 +1209,12 @@ class MainWindow(QMainWindow):
                             if psm.child('Device type').value() in [PSM, PSM2] and psm.child('Connected').value():
                                 if psm.child('Connected CPC').value() == dev_id:
                                     # if PSM connection exists, add latest PSM concentration value to plot_data
-                                    self.plot_data[dev_id][self.time_counter] = self.latest_data[psm.child('DevID').value()][0]
+                                    self.plot_data[str(dev_id)][self.time_counter] = self.latest_data[psm.child('DevID').value()][0]
                                     psm_connection = True
                                     break
                         # if not connected to PSM, add CPC concentration value to plot_data
                         if psm_connection == False:
-                            self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][0]
+                            self.plot_data[str(dev_id)][self.time_counter] = self.latest_data[dev_id][0]
                         # add raw concentration value to plot_data
                         self.plot_data[str(dev_id)+':raw'][self.time_counter] = self.latest_data[dev_id][0]
                     elif dev.child('Device type').value() in [PSM, PSM2]: # PSM
@@ -1271,6 +1233,12 @@ class MainWindow(QMainWindow):
                         self.plot_data[str(dev_id)+':rh'][self.time_counter] = self.latest_data[dev_id][0]
                         self.plot_data[str(dev_id)+':t'][self.time_counter] = self.latest_data[dev_id][1]
                         self.plot_data[str(dev_id)+':p'][self.time_counter] = self.latest_data[dev_id][2]
+                    elif dev.child('Device type').value() == AFM: # AFM
+                        # add latest values (flow, RH, T, P) to time_counter index of plot_data
+                        self.plot_data[str(dev_id)+':f'][self.time_counter] = self.latest_data[dev_id][0]
+                        self.plot_data[str(dev_id)+':rh'][self.time_counter] = self.latest_data[dev_id][1]
+                        self.plot_data[str(dev_id)+':t'][self.time_counter] = self.latest_data[dev_id][2]
+                        self.plot_data[str(dev_id)+':p'][self.time_counter] = self.latest_data[dev_id][3]
                     elif dev.child('Device type').value() == eDiluter: # eDiluter
                         # add latest T1 value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][3]
@@ -1323,8 +1291,11 @@ class MainWindow(QMainWindow):
 
                 # other devices: update main plot if 'Plot to main' is enabled
                 elif dev.child("Plot to main").value():
+                    # if device is CPC, get plot data with str(dev_id) key
+                    if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
+                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)][:self.time_counter+1])
                     # if device is Electrometer, plot Voltage 2
-                    if dev.child('Device type').value() == Electrometer: # Electrometer
+                    elif dev.child('Device type').value() == Electrometer: # Electrometer
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':2'][:self.time_counter+1])
                     else: # other devices
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[dev_id][:self.time_counter+1])
@@ -1344,8 +1315,12 @@ class MainWindow(QMainWindow):
                     # start time is stored when first non-nan value is received
                     # start time is used to crop plot data to only show non-nan values
                     if dev_id not in self.start_times:
+                        # CPC
+                        if dev.child('Device type').value() in [CPC, TSI_CPC]:
+                            if str(self.plot_data[str(dev_id)+':raw'][self.time_counter]) != "nan":
+                                self.start_times[dev_id] = self.time_counter
                         # Electrometer
-                        if dev.child('Device type').value() == Electrometer:
+                        elif dev.child('Device type').value() == Electrometer:
                             if str(self.plot_data[str(dev_id)+':1'][self.time_counter]) != "nan":
                                 self.start_times[dev_id] = self.time_counter
                         # RHTP
@@ -2095,7 +2070,7 @@ class MainWindow(QMainWindow):
             # if device is in curve_dict
             if dev_id in self.curve_dict:
                 # RHTP
-                if dev.child('Device type').value() == 5:
+                if dev.child('Device type').value() == RHTP:
                     # if Plot to main is enabled
                     if dev.child('Plot to main').value() != None:
                         # add curve to legend with device name and current value of chosen parameter
@@ -2114,8 +2089,8 @@ class MainWindow(QMainWindow):
                 elif dev.child('Plot to main').value():
                     # compile legend string - device name and current value
                     # if CPC, round value to 2 decimals
-                    if dev.child('Device type').value() == 1:
-                        legend_string = dev.child('Device name').value() + ": " + str(round(self.plot_data[dev_id][self.time_counter], 2))
+                    if dev.child('Device type').value() in [CPC, TSI_CPC]:
+                        legend_string = dev.child('Device name').value() + ": " + str(round(self.plot_data[str(dev_id)][self.time_counter], 2))
                     # if Electrometer, get Voltage 2 value
                     elif dev.child('Device type').value() == 3:
                         legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':2'][self.time_counter])
@@ -2357,6 +2332,7 @@ class MainWindow(QMainWindow):
     def device_removed(self, param, child):
         if param == self.params.child("Device settings"):
             device_id = child.child("DevID").value()
+            device_type = child.child("Device type").value()
             # remove device widget from main tab widget
             self.device_tabs.removeTab(self.device_tabs.indexOf(self.device_widgets[device_id]))
             # close serial connection if open
@@ -2375,6 +2351,25 @@ class MainWindow(QMainWindow):
                     del dictionary[device_id]
                 except KeyError:
                     pass
+                # plot data string keys cleaning
+                if dictionary == self.plot_data:
+                    # check if device has multiple data types
+                    if device_type in [CPC, TSI_CPC, Electrometer, RHTP, AFM]:
+                        # determine value types based on device type
+                        if device_type in [CPC, TSI_CPC]:
+                            types = ['', ':raw'] # concentration, raw concentration
+                        elif device_type == Electrometer:
+                            types = [':1', ':2', ':3'] # voltage 1, voltage 2, voltage 3
+                        elif device_type == RHTP:
+                            types = [':rh', ':t', ':p'] # RH, T, P
+                        elif device_type == AFM:
+                            types = [':f', ':rh', ':t', ':p'] # flow, RH, T, P
+                        # remove all keys with device_id and value types
+                        for t in types:
+                            try:
+                                del dictionary[str(device_id)+t]
+                            except KeyError:
+                                pass
 
     def startTimer(self):
         # check start time and sync with next second
@@ -2542,11 +2537,11 @@ class MainPlot(GraphicsLayoutWidget):
             self.axis_rhtp.hide() # hide axis
         else:
             if value == "RH":
-                self.axis_rhtp.setLabel('RH', units='%', color='w')
+                self.axis_rhtp.setLabel('RHTP RH', units='%', color='w')
             elif value == "T":
-                self.axis_rhtp.setLabel('T', units='°C', color='w')
+                self.axis_rhtp.setLabel('RHTP T', units='°C', color='w')
             elif value == "P":
-                self.axis_rhtp.setLabel('P', units='Pa', color='w')
+                self.axis_rhtp.setLabel('RHTP P', units='Pa', color='w')
             self.axis_rhtp.show() # show axis
         # set axis style
         self.set_axis_style(self.axis_rhtp, 'w')
