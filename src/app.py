@@ -216,7 +216,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
             # remove default Plot to main parameter
             self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
             # create new Plot to main parameter with options for plotted value
-            self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'Flow', 'RH', 'T', 'P'], 'value': 'Flow'})
+            self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'Flow', 'Standard flow', 'RH', 'T', 'P'], 'value': 'Flow'})
 
     def update_cpc_dict(self):
         self.cpc_dict = {'None': 'None'} # reset cpc_dict
@@ -903,7 +903,7 @@ class MainWindow(QMainWindow):
                                         serial_number = serial_number.strip("\r")
                                         dev.child('Serial number').setValue(serial_number)
                             # store nan values to latest_data
-                            self.latest_data[dev.child('DevID').value()] = full(4, nan)
+                            self.latest_data[dev.child('DevID').value()] = full(5, nan)
                         
                         # if Serial number has been acquired, read data normally
                         else:
@@ -915,17 +915,18 @@ class MainWindow(QMainWindow):
                             readings = readings.split(", ")
 
                             # TODO check if there's an extra line's worth of data in buffer, must determine data length
-                            print("AFM buffer:", dev.child('Connection').value().connection.inWaiting())
+                            # this is done in case data cumulates slowly over time in buffer
+                            #print("AFM buffer:", dev.child('Connection').value().connection.inWaiting())
 
                             # check if data is valid and store to latest_data dictionary
-                            if float(readings[1]) != 0: # if RH data is valid, not 0
+                            if float(readings[2]) != 0: # if RH data is valid, not 0
                                 self.latest_data[dev.child('DevID').value()] = readings
                             else:
-                                self.latest_data[dev.child('DevID').value()] = full(4, nan)
+                                self.latest_data[dev.child('DevID').value()] = full(5, nan)
                     
                     except Exception as e: # if reading fails, store nan values to latest_data
                         print(traceback.format_exc())
-                        self.latest_data[dev.child('DevID').value()] = full(4, nan)
+                        self.latest_data[dev.child('DevID').value()] = full(5, nan)
                         logging.exception(e)
                 
                 if dev.child('Device type').value() == eDiluter: # eDiluter
@@ -1159,7 +1160,7 @@ class MainWindow(QMainWindow):
                     elif dev.child('Device type').value() == RHTP:
                         types = [':rh', ':t', ':p'] # RH, T, P
                     elif dev.child('Device type').value() == AFM:
-                        types = [':f', ':rh', ':t', ':p'] # flow, RH, T, P
+                        types = [':f', ':sf', ':rh', ':t', ':p'] # flow, standard flow, RH, T, P
                     
                     # if device is not yet in plot_data dict, add it
                     if str(dev_id)+types[0] not in self.plot_data:
@@ -1234,9 +1235,10 @@ class MainWindow(QMainWindow):
                     elif dev.child('Device type').value() == AFM: # AFM
                         # add latest values (flow, RH, T, P) to time_counter index of plot_data
                         self.plot_data[str(dev_id)+':f'][self.time_counter] = self.latest_data[dev_id][0]
-                        self.plot_data[str(dev_id)+':rh'][self.time_counter] = self.latest_data[dev_id][1]
-                        self.plot_data[str(dev_id)+':t'][self.time_counter] = self.latest_data[dev_id][2]
-                        self.plot_data[str(dev_id)+':p'][self.time_counter] = self.latest_data[dev_id][3]
+                        self.plot_data[str(dev_id)+':sf'][self.time_counter] = self.latest_data[dev_id][1]
+                        self.plot_data[str(dev_id)+':rh'][self.time_counter] = self.latest_data[dev_id][2]
+                        self.plot_data[str(dev_id)+':t'][self.time_counter] = self.latest_data[dev_id][3]
+                        self.plot_data[str(dev_id)+':p'][self.time_counter] = self.latest_data[dev_id][4]
                     elif dev.child('Device type').value() == eDiluter: # eDiluter
                         # add latest T1 value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][3]
@@ -1287,6 +1289,8 @@ class MainWindow(QMainWindow):
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':p'][:self.time_counter+1])
                     elif dev_type == AFM and dev.child("Plot to main").value() == 'Flow':
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':f'][:self.time_counter+1])
+                    elif dev_type == AFM and dev.child("Plot to main").value() == 'Standard flow':
+                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':sf'][:self.time_counter+1])
 
                 # other devices: update main plot if 'Plot to main' is enabled
                 elif dev.child("Plot to main").value():
@@ -2092,6 +2096,8 @@ class MainWindow(QMainWindow):
                             legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':p'][self.time_counter])
                         elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Flow":
                             legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id) + ':f'][self.time_counter])
+                        elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Standard flow":
+                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id) + ':sf'][self.time_counter])
                         self.main_plot.legend.addItem(self.curve_dict[dev_id], legend_string)
                     else: # if disabled
                         # remove curve from legend
@@ -2388,7 +2394,7 @@ class MainWindow(QMainWindow):
                         elif device_type == RHTP:
                             types = [':rh', ':t', ':p'] # RH, T, P
                         elif device_type == AFM:
-                            types = [':f', ':rh', ':t', ':p'] # flow, RH, T, P
+                            types = [':f', ':sf', ':rh', ':t', ':p'] # flow, standard flow, RH, T, P
                         # remove all keys with device_id and value types
                         for t in types:
                             try:
@@ -2584,6 +2590,8 @@ class MainPlot(GraphicsLayoutWidget):
         else:
             if value == "Flow":
                 self.axes[AFM].setLabel('AFM flow', units='lpm', color='w')
+            elif value == "Standard flow":
+                self.axes[AFM].setLabel('AFM standard flow', units='slm', color='w')
             elif value == "RH":
                 self.axes[AFM].setLabel('AFM RH', units='%', color='w')
             elif value == "T":
