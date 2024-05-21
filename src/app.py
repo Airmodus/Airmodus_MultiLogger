@@ -406,7 +406,7 @@ class MainWindow(QMainWindow):
         # connect parameter tree's sigChildRemoved signal to device_removed function
         p.child("Device settings").sigChildRemoved.connect(self.device_removed)
         # connect main_plot's viewboxes' sigXRangeChanged signals to x_range_changed function # TODO test with only one viewbox since all are linked
-        for viewbox in self.main_plot.viewboxes:
+        for viewbox in self.main_plot.viewboxes.values():
             viewbox.sigXRangeChanged.connect(self.x_range_changed)
 
         # list com ports at startup
@@ -1253,8 +1253,9 @@ class MainWindow(QMainWindow):
         # go through each device
         for dev in self.params.child('Device settings').children():
             
-            # store device id to variable for readability
+            # store device id and device type to variables for readability
             dev_id = dev.child('DevID').value()
+            dev_type = dev.child('Device type').value()
 
             try: # if one device fails, continue with the next one
 
@@ -1267,17 +1268,15 @@ class MainWindow(QMainWindow):
                     self.curve_dict[dev_id] = PlotCurveItem(pen=dev_id, connect="finite")
                     #self.curve_dict[dev_id] = PlotCurveItem(pen={'color':dev_id, 'width':2}, connect="finite")
                     # add curve to viewbox according to device type
-                    if dev.child('Device type').value() == -1: # if Example device
-                        self.main_plot.viewboxes[-1].addItem(self.curve_dict[dev_id])
-                    elif dev.child('Device type').value() == PSM2: # if PSM2
-                        self.main_plot.viewboxes[1].addItem(self.curve_dict[dev_id])
-                    elif dev.child('Device type').value() == TSI_CPC: # if TSI CPC
-                        self.main_plot.viewboxes[0].addItem(self.curve_dict[dev_id])
+                    if dev_type == PSM2: # if PSM2, add to PSM viewbox
+                        self.main_plot.viewboxes[PSM].addItem(self.curve_dict[dev_id])
+                    elif dev_type == TSI_CPC: # if TSI CPC, add to CPC viewbox
+                        self.main_plot.viewboxes[CPC].addItem(self.curve_dict[dev_id])
                     else: # other devices
-                        self.main_plot.viewboxes[dev.child('Device type').value() - 1].addItem(self.curve_dict[dev_id])
+                        self.main_plot.viewboxes[dev_type].addItem(self.curve_dict[dev_id])
                 
-                # if device type is RHTP, update main plot according to selected value
-                if dev.child('Device type').value() == RHTP: # RHTP
+                # if device type is RHTP or AFM, update main plot according to selected value
+                if dev_type in [RHTP, AFM]: # RHTP or AFM
                     if dev.child("Plot to main").value() == None:
                         self.curve_dict[dev_id].setData(x=[], y=[])
                     elif dev.child("Plot to main").value() == 'RH':
@@ -1286,14 +1285,16 @@ class MainWindow(QMainWindow):
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':t'][:self.time_counter+1])
                     elif dev.child("Plot to main").value() == 'P':
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':p'][:self.time_counter+1])
+                    elif dev_type == AFM and dev.child("Plot to main").value() == 'Flow':
+                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':f'][:self.time_counter+1])
 
                 # other devices: update main plot if 'Plot to main' is enabled
                 elif dev.child("Plot to main").value():
                     # if device is CPC, get plot data with str(dev_id) key
-                    if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
+                    if dev_type in [CPC, TSI_CPC]: # CPC
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)][:self.time_counter+1])
                     # if device is Electrometer, plot Voltage 2
-                    elif dev.child('Device type').value() == Electrometer: # Electrometer
+                    elif dev_type == Electrometer: # Electrometer
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':2'][:self.time_counter+1])
                     else: # other devices
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[dev_id][:self.time_counter+1])
@@ -1307,22 +1308,22 @@ class MainWindow(QMainWindow):
                 # INDIVIDUAL PLOTS
 
                 # if device is connected OR Example device
-                if dev.child('Connected').value() or dev.child('Device type').value() == -1:
+                if dev.child('Connected').value() or dev_type == Example_device:
                     
                     # store current time counter value as start time in dictionary if not yet stored
                     # start time is stored when first non-nan value is received
                     # start time is used to crop plot data to only show non-nan values
                     if dev_id not in self.start_times:
                         # CPC
-                        if dev.child('Device type').value() in [CPC, TSI_CPC]:
+                        if dev_type in [CPC, TSI_CPC]:
                             if str(self.plot_data[str(dev_id)+':raw'][self.time_counter]) != "nan":
                                 self.start_times[dev_id] = self.time_counter
                         # Electrometer
-                        elif dev.child('Device type').value() == Electrometer:
+                        elif dev_type == Electrometer:
                             if str(self.plot_data[str(dev_id)+':1'][self.time_counter]) != "nan":
                                 self.start_times[dev_id] = self.time_counter
-                        # RHTP
-                        elif dev.child('Device type').value() == RHTP:
+                        # RHTP or AFM
+                        elif dev_type in [RHTP, AFM]:
                             if str(self.plot_data[str(dev_id)+':rh'][self.time_counter]) != "nan":
                                 self.start_times[dev_id] = self.time_counter
                         # other devices
@@ -1336,10 +1337,10 @@ class MainWindow(QMainWindow):
                         # update plot in device widget
                         # TODO start times removed from curve setData, problems with array shift index - add back later if compatible
                         #self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[start_time:self.time_counter+1], y=self.plot_data[dev_id][start_time:self.time_counter+1])
-                        if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
+                        if dev_type in [CPC, TSI_CPC]: # CPC
                             # update plot with raw CPC concentration
                             self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':raw'][:self.time_counter+1])
-                        elif dev.child('Device type').value() == Electrometer: # Electrometer
+                        elif dev_type == Electrometer: # Electrometer
                             # update Electrometer plot with all 3 values
                             self.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':1'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':2'][:self.time_counter+1])
@@ -1350,11 +1351,14 @@ class MainWindow(QMainWindow):
                                     plot.setXRange(self.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.current_time, padding=0)
                                     plot.getViewBox().enableAutoRange(axis='y') # set y axis autorange on
                                     plot.getViewBox().setAutoVisible(y=True) # scale according to visible data
-                        elif dev.child('Device type').value() == RHTP: # RHTP
+                        elif dev_type == RHTP: # RHTP
                             # update RHTP plot with all 3 values
                             self.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':rh'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':t'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve3.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':p'][:self.time_counter+1])
+                        elif dev_type == AFM: # AFM
+                            # TODO update AFM plot with all 4 values
+                            self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':f'][:self.time_counter+1])
                         else: # other devices
                             self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[dev_id][:self.time_counter+1])
 
@@ -1362,7 +1366,7 @@ class MainWindow(QMainWindow):
                 # warn if no CPC is connected or update Set tab's CPC sample flow value
 
                 # if device type is PSM and it is connected
-                if dev.child('Device type').value() in [PSM ,PSM2] and dev.child('Connected').value():
+                if dev_type in [PSM ,PSM2] and dev.child('Connected').value():
                     # if no CPC is connected
                     if dev.child('Connected CPC').value() == 'None':
                         # if stored CPC flow is not 1, set it to 1
@@ -2052,13 +2056,16 @@ class MainWindow(QMainWindow):
     # updates main_plot axes according to Plot to main settings
     def axis_check(self):
         # hide all axes
-        for i in range(0, len(self.main_plot.axes)):
-            self.main_plot.show_hide_axis(i+1, False)
+        for key in self.main_plot.axes:
+            self.main_plot.show_hide_axis(key, False)
         # show axes for devices that are set to plot to main
         for dev in self.params.child('Device settings').children():
             # RHTP
             if dev.child('Device type').value() == RHTP:
                 self.main_plot.change_rhtp_axis(dev.child('Plot to main').value())
+            # AFM
+            elif dev.child('Device type').value() == AFM:
+                self.main_plot.change_afm_axis(dev.child('Plot to main').value())
             # other devices
             elif dev.child('Plot to main').value():
                 self.main_plot.show_hide_axis(dev.child('Device type').value(), True)
@@ -2072,8 +2079,8 @@ class MainWindow(QMainWindow):
             dev_id = dev.child('DevID').value()
             # if device is in curve_dict
             if dev_id in self.curve_dict:
-                # RHTP
-                if dev.child('Device type').value() == RHTP:
+                # RHTP or AFM
+                if dev.child('Device type').value() in [RHTP, AFM]:
                     # if Plot to main is enabled
                     if dev.child('Plot to main').value() != None:
                         # add curve to legend with device name and current value of chosen parameter
@@ -2083,6 +2090,8 @@ class MainWindow(QMainWindow):
                             legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':t'][self.time_counter])
                         elif dev.child('Plot to main').value() == "P":
                             legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':p'][self.time_counter])
+                        elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Flow":
+                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id) + ':f'][self.time_counter])
                         self.main_plot.legend.addItem(self.curve_dict[dev_id], legend_string)
                     else: # if disabled
                         # remove curve from legend
@@ -2095,7 +2104,7 @@ class MainWindow(QMainWindow):
                     if dev.child('Device type').value() in [CPC, TSI_CPC]:
                         legend_string = dev.child('Device name').value() + ": " + str(round(self.plot_data[str(dev_id)][self.time_counter], 2))
                     # if Electrometer, get Voltage 2 value
-                    elif dev.child('Device type').value() == 3:
+                    elif dev.child('Device type').value() == Electrometer:
                         legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':2'][self.time_counter])
                     # other devices
                     else:
@@ -2410,6 +2419,9 @@ class MainPlot(GraphicsLayoutWidget):
         # create legend
         self.legend = LegendItem(offset=(70,20), labelTextColor='w', labelTextSize='11pt')
         self.legend.setParentItem(self.plot.graphicsItem())
+        # create dictionaries for viewboxes and axes, use device type as key
+        self.viewboxes = {}
+        self.axes = {}
 
         # time axis
         self.plot.setAxisItems({'bottom':DateAxisItem()}) # set time axis to bottom
@@ -2419,85 +2431,88 @@ class MainPlot(GraphicsLayoutWidget):
         self.axis_time.enableAutoSIPrefix(enable=False) # disable auto SI prefix
 
         # CPC viewbox
-        self.viewbox_cpc = self.plot.getViewBox() # store default viewbox to variable
+        self.viewboxes[CPC] = self.plot.getViewBox() # store default viewbox to dictionary
         # CPC axis
-        self.axis_cpc = self.plot.getAxis('left') # store left axis to variable
-        self.axis_cpc.setLabel('CPC concentration', units='#/cc', color='w') # set label
-        self.set_axis_style(self.axis_cpc, 'w') # set axis style
+        self.axes[CPC] = self.plot.getAxis('left') # store left axis to dictionary
+        self.axes[CPC].setLabel('CPC concentration', units='#/cc', color='w') # set label
+        self.set_axis_style(self.axes[CPC], 'w') # set axis style
 
-        # PSM viewbox
-        self.viewbox_psm = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox_psm) # add viewbox to scene
-        self.viewbox_psm.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        # PSM viewbox # TODO create function for viewbox and axis creation
+        self.viewboxes[PSM] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[PSM]) # add viewbox to scene
+        self.viewboxes[PSM].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # PSM axis
-        self.axis_psm = AxisItem('right') # create second axis
-        self.plot.layout.addItem(self.axis_psm, 2, 3) # add axis to plot
-        self.axis_psm.setLabel('PSM saturator flow rate', units='lpm', color='w') # set label
-        self.set_axis_style(self.axis_psm, 'w') # set axis style
-        self.axis_psm.linkToView(self.viewbox_psm) # link axis to viewbox
+        self.axes[PSM] = AxisItem('right') # create second axis
+        self.plot.layout.addItem(self.axes[PSM], 2, 3) # add axis to plot
+        self.axes[PSM].setLabel('PSM saturator flow rate', units='lpm', color='w') # set label
+        self.set_axis_style(self.axes[PSM], 'w') # set axis style
+        self.axes[PSM].linkToView(self.viewboxes[PSM]) # link axis to viewbox
 
         # Electrometer viewbox
-        self.viewbox_electrometer = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox_electrometer) # add viewbox to scene
-        self.viewbox_electrometer.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[Electrometer] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[Electrometer]) # add viewbox to scene
+        self.viewboxes[Electrometer].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # Electrometer axis
-        self.axis_electrometer = AxisItem('right') # create third axis
-        self.plot.layout.addItem(self.axis_electrometer, 2, 4) # add axis to plot
-        self.axis_electrometer.setLabel('Electrometer voltage 2', units='V', color='w') # set label
-        self.set_axis_style(self.axis_electrometer, 'w') # set axis style
-        self.axis_electrometer.linkToView(self.viewbox_electrometer) # link axis to viewbox
+        self.axes[Electrometer] = AxisItem('right') # create third axis
+        self.plot.layout.addItem(self.axes[Electrometer], 2, 4) # add axis to plot
+        self.axes[Electrometer].setLabel('Electrometer voltage 2', units='V', color='w') # set label
+        self.set_axis_style(self.axes[Electrometer], 'w') # set axis style
+        self.axes[Electrometer].linkToView(self.viewboxes[Electrometer]) # link axis to viewbox
 
         # CO2 viewbox
-        self.viewbox_co2 = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox_co2) # add viewbox to scene
-        self.viewbox_co2.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[CO2_sensor] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[CO2_sensor]) # add viewbox to scene
+        self.viewboxes[CO2_sensor].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # CO2 axis
-        self.axis_co2 = AxisItem('right') # create fourth axis
-        self.plot.layout.addItem(self.axis_co2, 2, 5) # add axis to plot
-        self.axis_co2.setLabel('CO2 concentration', units='ppm', color='w') # set label
-        self.set_axis_style(self.axis_co2, 'w') # set axis style
-        self.axis_co2.linkToView(self.viewbox_co2) # link axis to viewbox
+        self.axes[CO2_sensor] = AxisItem('right') # create fourth axis
+        self.plot.layout.addItem(self.axes[CO2_sensor], 2, 5) # add axis to plot
+        self.axes[CO2_sensor].setLabel('CO2 concentration', units='ppm', color='w') # set label
+        self.set_axis_style(self.axes[CO2_sensor], 'w') # set axis style
+        self.axes[CO2_sensor].linkToView(self.viewboxes[CO2_sensor]) # link axis to viewbox
 
         # RHTP viewbox
-        self.viewbox_rhtp = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox_rhtp) # add viewbox to scene
-        self.viewbox_rhtp.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[RHTP] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[RHTP]) # add viewbox to scene
+        self.viewboxes[RHTP].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # RHTP axis
-        self.axis_rhtp = AxisItem('right') # create fifth axis
-        self.plot.layout.addItem(self.axis_rhtp, 2, 6) # add axis to plot
-        self.axis_rhtp.setLabel('RHTP', color='w') # set label
-        self.set_axis_style(self.axis_rhtp, 'w') # set axis style
-        self.axis_rhtp.linkToView(self.viewbox_rhtp) # link axis to viewbox
+        self.axes[RHTP] = AxisItem('right') # create fifth axis
+        self.plot.layout.addItem(self.axes[RHTP], 2, 6) # add axis to plot
+        self.axes[RHTP].setLabel('RHTP', color='w') # set label
+        self.set_axis_style(self.axes[RHTP], 'w') # set axis style
+        self.axes[RHTP].linkToView(self.viewboxes[RHTP]) # link axis to viewbox
+
+        # AFM viewbox
+        self.viewboxes[AFM] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[AFM]) # add viewbox to scene
+        self.viewboxes[AFM].setXLink(self.plot)
+        # AFM axis
+        self.axes[AFM] = AxisItem('right') # create sixth axis
+        self.plot.layout.addItem(self.axes[AFM], 2, 7) # add axis to plot
+        self.axes[AFM].setLabel('AFM', color='w')
+        self.set_axis_style(self.axes[AFM], 'w')
+        self.axes[AFM].linkToView(self.viewboxes[AFM])
 
         # eDiluter viewbox
-        self.viewbox_ediluter = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox_ediluter) # add viewbox to scene
-        self.viewbox_ediluter.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[eDiluter] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[eDiluter]) # add viewbox to scene
+        self.viewboxes[eDiluter].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # eDiluter axis
-        self.axis_ediluter = AxisItem('right') # create axis
-        self.plot.layout.addItem(self.axis_ediluter, 2, 7) # add axis to plot
-        self.axis_ediluter.setLabel('eDiluter temperature', units='°C', color='w') # set label
-        self.set_axis_style(self.axis_ediluter, 'w') # set axis style
-        self.axis_ediluter.linkToView(self.viewbox_ediluter) # link axis to viewbox
+        self.axes[eDiluter] = AxisItem('right') # create axis
+        self.plot.layout.addItem(self.axes[eDiluter], 2, 8) # add axis to plot
+        self.axes[eDiluter].setLabel('eDiluter temperature', units='°C', color='w') # set label
+        self.set_axis_style(self.axes[eDiluter], 'w') # set axis style
+        self.axes[eDiluter].linkToView(self.viewboxes[eDiluter]) # link axis to viewbox
 
         # Example device viewbox
-        self.viewbox_test = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox_test) # add viewbox to scene
-        self.viewbox_test.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[Example_device] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[Example_device]) # add viewbox to scene
+        self.viewboxes[Example_device].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # Example device axis
-        self.axis_test = AxisItem('right') # create axis
-        self.plot.layout.addItem(self.axis_test, 2, 8) # add axis to plot
-        self.axis_test.setLabel('Example device', units='units', color='w') # set label
-        self.set_axis_style(self.axis_test, 'w') # set axis style
-        self.axis_test.linkToView(self.viewbox_test) # link axis to viewbox
-
-        # create list of viewboxes
-        self.viewboxes = [self.viewbox_cpc, self.viewbox_psm, self.viewbox_electrometer,
-                        self.viewbox_co2, self.viewbox_rhtp, self.viewbox_ediluter, self.viewbox_test]
-
-        # create list of axes
-        self.axes = [self.axis_cpc, self.axis_psm, self.axis_electrometer,
-                    self.axis_co2, self.axis_rhtp, self.axis_ediluter, self.axis_test]
+        self.axes[Example_device] = AxisItem('right') # create axis
+        self.plot.layout.addItem(self.axes[Example_device], 2, 9) # add axis to plot
+        self.axes[Example_device].setLabel('Example device', units='units', color='w') # set label
+        self.set_axis_style(self.axes[Example_device], 'w') # set axis style
+        self.axes[Example_device].linkToView(self.viewboxes[Example_device]) # link axis to viewbox
         
         # connect viewbox resize event to updateViews function
         self.plot.vb.sigResized.connect(self.updateViews)
@@ -2505,9 +2520,9 @@ class MainPlot(GraphicsLayoutWidget):
         self.updateViews()
 
         # hide axes and disable SI scaling by default
-        for axis in self.axes:
-            axis.hide()
-            axis.enableAutoSIPrefix(enable=False) # disable auto SI prefix
+        for key in self.axes:
+            self.axes[key].hide()
+            self.axes[key].enableAutoSIPrefix(enable=False) # disable auto SI prefix
         
         # use automatic downsampling and clipping to reduce the drawing load
         self.plot.setDownsampling(mode='peak')
@@ -2519,10 +2534,12 @@ class MainPlot(GraphicsLayoutWidget):
     # source: https://stackoverflow.com/questions/42931474/how-can-i-have-multiple-left-axisitems-with-the-same-alignment-position-using-py
     def updateViews(self):
         # set viewbox geometry to plot geometry
-        for viewbox in self.viewboxes[1:]: # exclude CPC viewbox
-            viewbox.setGeometry(self.plot.vb.sceneBoundingRect())
-            # update linked axes
-            viewbox.linkedViewChanged(self.plot.vb, viewbox.XAxis)
+        for viewbox in self.viewboxes.values():
+            # exclude CPC viewbox
+            if viewbox != self.viewboxes[CPC]:
+                viewbox.setGeometry(self.plot.vb.sceneBoundingRect())
+                # update linked axes
+                viewbox.linkedViewChanged(self.plot.vb, viewbox.XAxis)
     
     def set_axis_style(self, axis, color):
         axis.setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
@@ -2531,14 +2548,12 @@ class MainPlot(GraphicsLayoutWidget):
         axis.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
 
     def show_hide_axis(self, device_type, show):
-        if device_type == -1: # if Example device
-            axis = self.axes[-1]
-        elif device_type == PSM2:
-            axis = self.axes[1]
+        if device_type == PSM2:
+            axis = self.axes[PSM]
         elif device_type == TSI_CPC:
-            axis = self.axes[0]
+            axis = self.axes[CPC]
         else:
-            axis = self.axes[device_type - 1]
+            axis = self.axes[device_type]
         if show:
             axis.show() # show axis
         else:
@@ -2549,18 +2564,35 @@ class MainPlot(GraphicsLayoutWidget):
     def change_rhtp_axis(self, value):
         # TODO: only change axis if value differs from current axis
         if value == None:
-            self.axis_rhtp.setLabel('RHTP', units=None, color='w')
-            self.axis_rhtp.hide() # hide axis
+            self.axes[RHTP].setLabel('RHTP', units=None, color='w')
+            self.axes[RHTP].hide() # hide axis
         else:
             if value == "RH":
-                self.axis_rhtp.setLabel('RHTP RH', units='%', color='w')
+                self.axes[RHTP].setLabel('RHTP RH', units='%', color='w')
             elif value == "T":
-                self.axis_rhtp.setLabel('RHTP T', units='°C', color='w')
+                self.axes[RHTP].setLabel('RHTP T', units='°C', color='w')
             elif value == "P":
-                self.axis_rhtp.setLabel('RHTP P', units='Pa', color='w')
-            self.axis_rhtp.show() # show axis
+                self.axes[RHTP].setLabel('RHTP P', units='Pa', color='w')
+            self.axes[RHTP].show() # show axis
         # set axis style
-        self.set_axis_style(self.axis_rhtp, 'w')
+        self.set_axis_style(self.axes[RHTP], 'w')
+    
+    def change_afm_axis(self, value):
+        if value == None:
+            self.axes[AFM].setLabel('AFM', units=None, color='w')
+            self.axes[AFM].hide() # hide axis
+        else:
+            if value == "Flow":
+                self.axes[AFM].setLabel('AFM flow', units='lpm', color='w')
+            elif value == "RH":
+                self.axes[AFM].setLabel('AFM RH', units='%', color='w')
+            elif value == "T":
+                self.axes[AFM].setLabel('AFM T', units='°C', color='w')
+            elif value == "P":
+                self.axes[AFM].setLabel('AFM P', units='Pa', color='w')
+            self.axes[AFM].show() # show axis
+        # set axis style
+        self.set_axis_style(self.axes[AFM], 'w')
         
 # triple plot widget containing three plots
 class TriplePlot(GraphicsLayoutWidget):
