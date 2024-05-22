@@ -1437,7 +1437,7 @@ class MainWindow(QMainWindow):
                     pass
 
                 # if device is connected OR example device
-                elif dev.child('Connected').value() or dev.child('Device type').value() == -1:
+                elif dev.child('Connected').value() or dev.child('Device type').value() == Example_device:
 
                     try:
                         # store device id to variable for clarity
@@ -1515,6 +1515,8 @@ class MainWindow(QMainWindow):
                                     file.write('YYYY.MM.DD hh:mm:ss,CO2 (ppm),T (C),RH (%)')
                                 elif dev.child('Device type').value() == RHTP: # RHTP
                                     file.write('YYYY.MM.DD hh:mm:ss,RH (%),T (C),P (Pa)')
+                                elif dev.child('Device type').value() == AFM: # AFM
+                                    file.write('YYYY.MM.DD hh:mm:ss,Flow (lpm),Standard flow (slpm),RH (%),T (C),P (Pa)')
                                 elif dev.child('Device type').value() == eDiluter: # eDiluter
                                     file.write('YYYY.MM.DD hh:mm:ss,Status,P1,P2,T1,T2,T3,T4,T5,T6,DF1,DF2,DFTot')
                                 else:
@@ -2591,7 +2593,7 @@ class MainPlot(GraphicsLayoutWidget):
             if value == "Flow":
                 self.axes[AFM].setLabel('AFM flow', units='lpm', color='w')
             elif value == "Standard flow":
-                self.axes[AFM].setLabel('AFM standard flow', units='slm', color='w')
+                self.axes[AFM].setLabel('AFM standard flow', units='slpm', color='w')
             elif value == "RH":
                 self.axes[AFM].setLabel('AFM RH', units='%', color='w')
             elif value == "T":
