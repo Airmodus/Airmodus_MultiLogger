@@ -16,7 +16,7 @@ from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QGridLayout, QLabel, QWidget,
     QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QSizePolicy,
     QFileDialog)
-from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem
+from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
@@ -405,7 +405,7 @@ class MainWindow(QMainWindow):
         p.child("Device settings").sigChildAdded.connect(self.device_added)
         # connect parameter tree's sigChildRemoved signal to device_removed function
         p.child("Device settings").sigChildRemoved.connect(self.device_removed)
-        # connect main_plot's viewboxes' sigXRangeChanged signals to x_range_changed function # TODO test with only one viewbox since all are linked
+        # connect main_plot's viewboxes' sigXRangeChanged signals to x_range_changed function
         for viewbox in self.main_plot.viewboxes.values():
             viewbox.sigXRangeChanged.connect(self.x_range_changed)
 
@@ -1349,22 +1349,28 @@ class MainWindow(QMainWindow):
                             self.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':1'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':2'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve3.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':3'][:self.time_counter+1])
-                            # scale x-axis range if Follow is on
-                            if self.params.child('Plot settings').child('Follow').value():
-                                for plot in self.device_widgets[dev_id].plot_tab.plots:
-                                    plot.setXRange(self.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.current_time, padding=0)
-                                    plot.getViewBox().enableAutoRange(axis='y') # set y axis autorange on
-                                    plot.getViewBox().setAutoVisible(y=True) # scale according to visible data
                         elif dev_type == RHTP: # RHTP
                             # update RHTP plot with all 3 values
                             self.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':rh'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':t'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve3.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':p'][:self.time_counter+1])
                         elif dev_type == AFM: # AFM
-                            # TODO update AFM plot with all 4 values
-                            self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':f'][:self.time_counter+1])
+                            # update AFM plot with all 5 values
+                            self.device_widgets[dev_id].plot_tab.curves[0].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':f'][:self.time_counter+1])
+                            self.device_widgets[dev_id].plot_tab.curves[1].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':sf'][:self.time_counter+1])
+                            self.device_widgets[dev_id].plot_tab.curves[2].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':rh'][:self.time_counter+1])
+                            self.device_widgets[dev_id].plot_tab.curves[3].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':t'][:self.time_counter+1])
+                            self.device_widgets[dev_id].plot_tab.curves[4].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':p'][:self.time_counter+1])
                         else: # other devices
                             self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[dev_id][:self.time_counter+1])
+                        
+                        # scale x-axis range if Follow is on
+                        if self.params.child('Plot settings').child('Follow').value():
+                            if dev_type == Electrometer: # if Electrometer, update all 3 plots
+                                for plot in self.device_widgets[dev_id].plot_tab.plots:
+                                    plot.setXRange(self.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.current_time, padding=0)
+                            else: # other devices
+                                self.device_widgets[dev_id].plot_tab.plot.setXRange(self.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.current_time, padding=0)
 
                 # PSM CPC FLOW CHECK
                 # warn if no CPC is connected or update Set tab's CPC sample flow value
@@ -1986,7 +1992,7 @@ class MainWindow(QMainWindow):
         # remove all devices from the parameter tree
         self.params.child('Device settings').clearChildren()
         # dictionary of device names matching device type
-        device_names = {1: 'CPC', 2: 'PSM Retrofit', 3: 'Electrometer', 4: 'CO2 sensor', 5: 'RHTP', 6: 'eDiluter', 7: 'PSM 2.0', 8: 'TSI CPC', -1: 'Example device'}
+        device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', Electrometer: 'Electrometer', CO2_sensor: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', eDiluter: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', Example_device: 'Example device'}
         try:
             # go through each device in the device settings
             for dev_name, dev_values in device_settings.items():
@@ -2350,8 +2356,18 @@ class MainWindow(QMainWindow):
                 # connect baud rate parameter to connection's set_baud_rate function
                 device_param.child('Baud rate').sigValueChanged.connect(lambda: connection.set_baud_rate(device_param.child('Baud rate').value()))
             
-            if device_type == -1: # if Example device
+            if device_type == Example_device: # if Example device
                 widget = ExampleDeviceWidget(device_param) # create Example device widget instance
+            
+            # connect x range change of plot_tab's viewbox(es) to x_range_changed function (autoscale y)
+            if device_type == Electrometer:
+                for plot in widget.plot_tab.plots:
+                    plot.getViewBox().sigXRangeChanged.connect(self.x_range_changed)
+            elif device_type in [RHTP, AFM]:
+                for viewbox in widget.plot_tab.viewboxes:
+                    viewbox.sigXRangeChanged.connect(self.x_range_changed)
+            else:
+                widget.plot_tab.viewbox.sigXRangeChanged.connect(self.x_range_changed)
 
             # add widget instance to device_widgets dictionary with device ID as key
             self.device_widgets[device_id] = widget
@@ -2693,6 +2709,97 @@ class TriplePlot(GraphicsLayoutWidget):
         axis.setTextPen(color)
         axis.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
         axis.enableAutoSIPrefix(enable=False) # disable auto SI prefix
+
+class AFMPlot(GraphicsLayoutWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+        # define value names, units and colors
+        value_names = ["Flow", "Standard flow", "RH", "T", "P"]
+        unit_names = ["lpm", "slpm", "%", "°C", "Pa"]
+        colors = [(255,255,255), (255,100,255), (100,188,255), (255, 100, 100), (255, 255, 100)]
+
+        # create plot item and hide its default axes
+        self.plot = PlotItem()
+        self.plot.hideAxis('left')
+        self.plot.hideAxis('bottom')
+        # add plot to widget column 2, leave space for left axes
+        self.addItem(self.plot, row=0, col=2)
+
+        # create viewboxes for each axis
+        self.viewboxes = []
+        # store default viewbox
+        self.viewboxes.append(self.plot.getViewBox())
+        # create 4 additional viewboxes
+        for i in range(4):
+            viewbox = ViewBox() # create viewbox
+            self.plot.scene().addItem(viewbox) # add viewbox to scene
+            viewbox.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+            self.viewboxes.append(viewbox) # store viewbox to list
+        
+        # create axes for each viewbox
+        self.axes = []
+        for i in range(2):
+            axis = AxisItem('left') # create left axis
+            self.axes.append(axis) # store axis to list
+            self.addItem(axis, row=0, col=i) # add axis to widget
+        for i in range(3):
+            axis = AxisItem('right') # create right axis
+            self.axes.append(axis) # store axis to list
+            self.addItem(axis, row=0, col=i+3) # add axis to widget, skip left axes and plot
+        
+        # link axes to viewboxes
+        for i in range(5):
+            self.axes[i].linkToView(self.viewboxes[i])
+        
+        # set axis labels and styles
+        for i in range(5):
+            # set label
+            self.axes[i].setLabel(value_names[i], units=unit_names[i], color=colors[i])
+            # set style
+            self.axes[i].setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
+            self.axes[i].setPen(colors[i])
+            self.axes[i].setTextPen(colors[i])
+            self.axes[i].label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
+            self.axes[i].enableAutoSIPrefix(enable=False) # disable auto SI prefix
+        
+        # create bottom time axis
+        self.axis_time = DateAxisItem('bottom')
+        # link time axis to viewbox
+        self.axis_time.linkToView(self.viewboxes[0])
+        # set botton axis label and style
+        self.axis_time.setLabel("Time")
+        self.axis_time.setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
+        self.axis_time.setPen('w')
+        self.axis_time.setTextPen('w')
+        self.axis_time.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
+        self.axis_time.enableAutoSIPrefix(enable=False) # disable auto SI prefix
+
+        # add bottom time axis to widget, same column as plot but on next row
+        self.addItem(self.axis_time, row=1, col=2)
+
+        # create curves for each viewbox
+        self.curves = []
+        for i in range(5):
+            curve = PlotCurveItem(pen=colors[i], connect="finite") # create curve
+            self.curves.append(curve) # store curve to list
+            self.viewboxes[i].addItem(curve) # add curve to viewbox
+        
+        # use automatic downsampling and clipping to reduce the drawing load
+        self.plot.setDownsampling(mode='peak')
+        self.plot.setClipToView(True)
+        
+        # connect viewbox resize event to updateViews function
+        self.plot.vb.sigResized.connect(self.updateViews)
+        # call updateViews function to set viewboxes to same size
+        self.updateViews()
+    
+    def updateViews(self):
+        # set viewbox geometry to plot geometry
+        for viewbox in self.viewboxes[1:]: # exclude first viewbox
+            viewbox.setGeometry(self.plot.vb.sceneBoundingRect())
+            # update linked axes
+            viewbox.linkedViewChanged(self.plot.vb, viewbox.XAxis)
 
 class ElectrometerPlot(GraphicsLayoutWidget):
     def __init__(self, *args, **kwargs):
@@ -3253,7 +3360,7 @@ class AFMWidget(QTabWidget):
         self.device_parameter = device_parameter # store device parameter tree reference
         self.name = device_parameter.name() # store device name
         # create plot widget for AFM
-        self.plot_tab = SinglePlot(device_type=AFM) # TODO change to AFM plot with all values
+        self.plot_tab = AFMPlot()
         self.addTab(self.plot_tab, "AFM plot")
 
 # eDiluter widget
