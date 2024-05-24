@@ -914,9 +914,18 @@ class MainWindow(QMainWindow):
                             # split data to list
                             readings = readings.split(", ")
 
-                            # TODO check if there's an extra line's worth of data in buffer, must determine data length
+                            # check if there's an extra line's worth of data in buffer
                             # this is done in case data cumulates slowly over time in buffer
-                            #print("AFM buffer:", dev.child('Connection').value().connection.inWaiting())
+                            if dev.child('Connection').value().connection.inWaiting() >= 38: # 34 + 2 (\r\n) + 2 (if flow >= 10)
+                                buffer_length = dev.child('Connection').value().connection.inWaiting()
+                                try: # try to read next line
+                                    extra_line = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
+                                    # create log entry
+                                    logging.warning("readIndata - AFM buffer: %i - AFM extra line: %s", buffer_length, extra_line)
+                                    #print("readIndata - AFM buffer:", buffer_length, "- AFM extra line:", extra_line)
+                                except Exception as e:
+                                    print(traceback.format_exc())
+                                    logging.exception(e)
 
                             # check if data is valid and store to latest_data dictionary
                             if float(readings[2]) != 0: # if RH data is valid, not 0
