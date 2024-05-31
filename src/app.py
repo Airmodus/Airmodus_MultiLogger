@@ -68,7 +68,6 @@ class SerialDeviceConnection():
     # open serial connection
     def connect(self):
         try: # Try to close with the port that was last used (needed if the port has been changed)
-            self.connection = Serial(self.port_in_use, self.baud_rate, timeout=self.timeout) #, rtscts=True)
             self.connection.close()
         except: # if fails (i.e. port has not been open) continue normally
             pass
@@ -81,17 +80,10 @@ class SerialDeviceConnection():
         # if connection exist, it is closed
         try:
             # Try to close with the port that was last used (needed if the port has been changed)
-            self.connection = Serial(self.port_in_use, self.baud_rate, timeout=self.timeout) #, rtscts=True)
             self.connection.close()
             #print("Connection closed")
         except:
-            try: # Try to close
-                self.connection.close()
-                #print("Connection closed")
-            except Exception as e:
-                pass
-                #print("Error closing connection:", e)
-                #logging.error(e)
+            pass
     
     def send_message(self, message):
         # add line termination and convert to bytes
@@ -289,9 +281,9 @@ def COMchange(param, changes):
         if 'COM port' in childName:
             names = childName.split('.') # split the name into a list
             try: # Close the old connection if open
-                p.child(names[0]).child(names[1]).child('Connection').value().close()
-            except Exception as e: # print exception if closing fails
-                #print("COMchange - error:", e)
+                if p.child(names[0]).child(names[1]).child('Connection').value().connection.is_open == True:
+                    p.child(names[0]).child(names[1]).child('Connection').value().close()
+            except:
                 pass
             finally: # try to set connection settings and connect
                 try:
@@ -918,14 +910,18 @@ class MainWindow(QMainWindow):
                             # this is done in case data cumulates slowly over time in buffer
                             if dev.child('Connection').value().connection.inWaiting() >= 38: # 34 + 2 (\r\n) + 2 (if flow >= 10)
                                 buffer_length = dev.child('Connection').value().connection.inWaiting()
+                                # create log entry
+                                logging.warning("readIndata - AFM buffer: %i", buffer_length)
+                                print("readIndata - AFM extra data buffer:", buffer_length)
                                 try: # try to read next line
                                     extra_line = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
-                                    # create log entry
-                                    logging.warning("readIndata - AFM buffer: %i - AFM extra line: %s", buffer_length, extra_line)
-                                    #print("readIndata - AFM buffer:", buffer_length, "- AFM extra line:", extra_line)
+                                    # use extra line as readings
+                                    readings = extra_line[:-2].split(", ") # remove '\r\n' and split data to list
                                 except Exception as e:
                                     print(traceback.format_exc())
                                     logging.exception(e)
+                            
+                            #print("AFM readings:", readings)
 
                             # check if data is valid and store to latest_data dictionary
                             if float(readings[2]) != 0: # if RH data is valid, not 0
@@ -1847,31 +1843,25 @@ class MainWindow(QMainWindow):
         # get list of available ports as serial objects
         ports = list_ports.comports()
         # check if ports list has changed from stored ports
-        if ports != self.current_ports: # if ports have changed, set flag for a specific time
-            self.inquiry_flag = True # set inquiry flag to True
-            self.inquiry_time = time() # store inquiry start timestamp for calculating timeout
-        self.current_ports = ports # store current ports
+        # if ports != self.current_ports: # if ports have changed, set flag for a specific time
+        #     self.inquiry_flag = True # set inquiry flag to True
+        #     self.inquiry_time = time() # store inquiry start timestamp for calculating timeout
+        # self.current_ports = ports # store current ports for comparison
         com_port_list = [] # list of port addresses
         new_ports = {} # dictionary for new ports, ports are added after *IDN? send
         # go through current ports
         for port in sorted(ports):
             # add comport to list of com port addresses
             com_port_list.append(port[0])
+            # if port is not in com_descriptions
+            if port[0] not in self.com_descriptions:
+                # add port to com_descriptions with default descripion
+                self.com_descriptions[port[0]] = port[1]
             # if inquiry flag is True, inquire IDN from ports that haven't been inquired yet
             if self.inquiry_flag == True:
-                # set send_idn flag to False
-                send_idn = False
                 # inquire IDN from ports with default description
-                # if port is not in com_descriptions
-                if port[0] not in self.com_descriptions:
-                    # add port to com_descriptions with default descripion
-                    self.com_descriptions[port[0]] = port[1]
-                # if port has default description
+                # if port has default description, port *IDN? hasn't been acquired
                 if self.com_descriptions[port[0]] == port[1]:
-                    # set send_idn flag to True
-                    send_idn = True
-                # if send_idn flag is True, port *IDN? hasn't been acquired
-                if send_idn == True:
                     try:
                         # open port
                         serial_connection = Serial(str(port[0]), 115200, timeout=0.2)
@@ -1901,8 +1891,6 @@ class MainWindow(QMainWindow):
             try:
                 # read received messages
                 messages = new_ports[port].read_all().decode().split("\r")
-                # close port
-                new_ports[port].close()
                 print("update_com_ports -", port, "messages:", messages)
                 # go through messages and find *IDN
                 for message in messages:
@@ -1915,10 +1903,18 @@ class MainWindow(QMainWindow):
                             serial_number = serial_number.strip("\n")
                             serial_number = serial_number.strip("\r")
                             self.com_descriptions[port] = serial_number
+                            new_ports[port].close() # close port after *IDN response
                         # eDiluter ID
                         elif " ID " in message:
                             # read device ID between " ID " and ", Status" and store to com_descriptions
                             self.com_descriptions[port] = message[message.index(" ID ")+4:message.index(", Status")]
+                            new_ports[port].close() # close port after *IDN response
+            except Exception as e:
+                print(traceback.format_exc())
+                logging.exception(e)
+            try: # if inquiry has ended and port is still open, close port
+                if self.inquiry_flag == False and new_ports[port].is_open:
+                    new_ports[port].close()
             except Exception as e:
                 print(traceback.format_exc())
                 logging.exception(e)
