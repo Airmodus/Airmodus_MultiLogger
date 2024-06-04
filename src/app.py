@@ -8,7 +8,7 @@ import random
 import traceback
 import json
 
-from numpy import full, nan, array, polyval, array_equal
+from numpy import full, nan, array, polyval, array_equal, roll
 from serial import Serial
 from serial.tools import list_ports
 from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
@@ -345,6 +345,8 @@ class MainWindow(QMainWindow):
         self.latest_poly_correction = {} # contains latest polynomial correction values from PSM
         self.latest_command = {} # contains latest user entered command message
         self.extra_data = {} # contains extra data, used when multiple data prints are received at once
+        self.poly_correction_history = {} # contains last 3 polynomial correction values for PSM devices
+        self.dilution_correction_history = {} # contains last 3 dilution correction values for PSM devices
         # plot related
         self.plot_data = {} # contains plotted values
         self.curve_dict = {} # contains curve objects for main plot
@@ -1057,6 +1059,18 @@ class MainWindow(QMainWindow):
                             if dev.child('Device type').value() == PSM2:
                                 dilution_correction_factor = (inlet_flow + 4 - float(self.latest_data[psm_id][3]) - float(self.latest_data[psm_id][2])) / inlet_flow0
                             
+                            # add PSM to correction history dictionaries if not yet there
+                            if psm_id not in self.poly_correction_history:
+                                self.poly_correction_history[psm_id] = full(3, nan)
+                            if psm_id not in self.dilution_correction_history:
+                                self.dilution_correction_history[psm_id] = full(3, nan)
+                            
+                            # roll correction history lists and add new values
+                            self.poly_correction_history[psm_id] = roll(self.poly_correction_history[psm_id], 1)
+                            self.poly_correction_history[psm_id][0] = poly_correction
+                            self.dilution_correction_history[psm_id] = roll(self.dilution_correction_history[psm_id], 1)
+                            self.dilution_correction_history[psm_id][0] = dilution_correction_factor
+
                             # calculate concentration from PSM
                             # Concentration from PSM = CPC concentration * Dilution ratio / Polynomial correction
                             concentration_from_psm = float(self.latest_data[cpc_id][0]) * dilution_correction_factor / poly_correction
