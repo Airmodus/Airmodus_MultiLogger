@@ -8,7 +8,7 @@ import random
 import traceback
 import json
 
-from numpy import full, nan, array, polyval, array_equal, roll
+from numpy import full, nan, array, polyval, array_equal, roll, isnan
 from serial import Serial
 from serial.tools import list_ports
 from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
@@ -1071,17 +1071,19 @@ class MainWindow(QMainWindow):
                             self.dilution_correction_history[psm_id] = roll(self.dilution_correction_history[psm_id], 1)
                             self.dilution_correction_history[psm_id][0] = dilution_correction_factor
 
-                            # calculate concentration from PSM
-                            # Concentration from PSM = CPC concentration * Dilution ratio / Polynomial correction
-                            concentration_from_psm = float(self.latest_data[cpc_id][0]) * dilution_correction_factor / poly_correction
-                            # add to PSM latest_data
-                            self.latest_data[psm_id][0] = round(concentration_from_psm, 2)
+                            # check if values from 2 seconds ago are not nan
+                            if not isnan(self.poly_correction_history[psm_id][-1]) and not isnan(self.dilution_correction_history[psm_id][-1]):
+                                # calculate concentration from PSM
+                                # Concentration from PSM = CPC concentration * Dilution ratio / Polynomial correction
+                                concentration_from_psm = float(self.latest_data[cpc_id][0]) * self.dilution_correction_history[psm_id][-1] / self.poly_correction_history[psm_id][-1]
+                                # add to PSM latest_data
+                                self.latest_data[psm_id][0] = round(concentration_from_psm, 2)
 
                             # if Connected CPC is Airmodus CPC, add CPC data to PSM latest_data
                             if cpc_device.child('Device type').value() == CPC:
                                 # compile connected CPC data
                                 connected_cpc_data = [
-                                    cpc_data[0], round(dilution_correction_factor, 3), # concentration,  dilution correction factor
+                                    cpc_data[0], round(self.dilution_correction_history[psm_id][-1], 3), # concentration,  dilution correction factor
                                     cpc_data[3], cpc_data[4], cpc_data[5], cpc_data[6],# T: saturator, condenser, optics, cabin
                                     cpc_data[8], cpc_data[9], cpc_data[7],# P: critical orifice, nozzle, absolute (inlet)
                                     cpc_data[10], cpc_data[3], cpc_data[2],# liquid level, pulses, pulse duration
