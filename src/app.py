@@ -3185,55 +3185,49 @@ class PSMStatusTab(QWidget):
 
         self.setLayout(layout)
 
-class PSMMeasureTab(QSplitter):
+class PSMMeasureTab(QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__()
-        # split tab horizontally
-        self.setOrientation(Qt.Horizontal)
 
-        # scan mode splitter and widgets
-        scan_splitter = QSplitter(Qt.Vertical)
+        layout = QGridLayout() # create layout
+
+        # scan mode widgets
         self.scan = StartButton("Scan")
-        scan_splitter.addWidget(self.scan)
+        layout.addWidget(self.scan, 0, 0)
         self.set_minimum_flow = SetWidget("Minimum flow", " lpm")
         self.set_minimum_flow.value_spinbox.setValue(0.05)
-        scan_splitter.addWidget(self.set_minimum_flow)
+        layout.addWidget(self.set_minimum_flow, 1, 0)
         self.set_max_flow = SetWidget("Maximum flow", " lpm")
         self.set_max_flow.value_spinbox.setValue(1.9)
-        scan_splitter.addWidget(self.set_max_flow)
+        layout.addWidget(self.set_max_flow, 2, 0)
         self.set_scan_time = SetWidget("Scan time", " s")
         self.set_scan_time.value_spinbox.setValue(240)
-        scan_splitter.addWidget(self.set_scan_time)
+        layout.addWidget(self.set_scan_time, 3, 0)
 
-        # step mode splitter and widgets
-        step_splitter = QSplitter(Qt.Vertical)
+        # step mode widgets
         self.step = StartButton("Step")
-        step_splitter.addWidget(self.step)
+        layout.addWidget(self.step, 0, 1)
         self.step_time = SetWidget("Step time", " s")
         self.step_time.value_spinbox.setValue(30)
-        step_splitter.addWidget(self.step_time)
+        layout.addWidget(self.step_time, 1, 1)
         self.steps = StepsWidget()
         self.steps.text_box.setText("0.1\n0.7\n1.3\n1.9")
-        step_splitter.addWidget(self.steps)
+        layout.addWidget(self.steps, 2, 1, 2, 1)
 
-        # fixed mode splitter and widgets
-        fixed_splitter = QSplitter(Qt.Vertical)
+        # fixed mode widgets
         self.fixed = StartButton("Fixed")
-        fixed_splitter.addWidget(self.fixed)
+        layout.addWidget(self.fixed, 0, 2)
         self.set_flow = SetWidget("Saturator flow", " lpm")
         self.set_flow.value_spinbox.setValue(1.9)
-        fixed_splitter.addWidget(self.set_flow)
+        layout.addWidget(self.set_flow, 1, 2)
 
-        # set splitter's relative widget sizes and add to tab
-        scan_splitter.setSizes([1000, 1000, 1000, 1000])
-        self.addWidget(scan_splitter)
-        step_splitter.setSizes([1000, 1000, 2000])
-        self.addWidget(step_splitter)
-        fixed_splitter.setSizes([1000, 1000])
-        self.addWidget(fixed_splitter)
+        # 10 hz logging button
+        self.ten_hz = StartButton("10 Hz logging")
+        layout.addWidget(self.ten_hz, 4, 0, 1, 3)
+        # set button size policy to minimum
+        self.ten_hz.setSizePolicy(QSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum))
 
-        # set relative sizes in tab splitter
-        self.setSizes([1000, 1000, 1000])
+        self.setLayout(layout)
     
     def compile_scan(self): # compile scan command
         scan_time = self.set_scan_time.value_spinbox.value()
