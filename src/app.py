@@ -16,11 +16,11 @@ from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QGridLayout, QLabel, QWidget,
     QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QSizePolicy,
     QFileDialog)
-from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem
+from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.5.4"
+version_number = "0.6.0"
 
 # Define instrument types
 CPC = 1
@@ -31,6 +31,7 @@ RHTP = 5
 eDiluter = 6
 PSM2 = 7
 TSI_CPC = 8
+AFM = 9
 Example_device = -1
 
 # Set the LC_ALL environment variable to US English (en_US)
@@ -67,7 +68,6 @@ class SerialDeviceConnection():
     # open serial connection
     def connect(self):
         try: # Try to close with the port that was last used (needed if the port has been changed)
-            self.connection = Serial(self.port_in_use, self.baud_rate, timeout=self.timeout) #, rtscts=True)
             self.connection.close()
         except: # if fails (i.e. port has not been open) continue normally
             pass
@@ -80,17 +80,10 @@ class SerialDeviceConnection():
         # if connection exist, it is closed
         try:
             # Try to close with the port that was last used (needed if the port has been changed)
-            self.connection = Serial(self.port_in_use, self.baud_rate, timeout=self.timeout) #, rtscts=True)
             self.connection.close()
             #print("Connection closed")
         except:
-            try: # Try to close
-                self.connection.close()
-                #print("Connection closed")
-            except Exception as e:
-                pass
-                #print("Error closing connection:", e)
-                #logging.error(e)
+            pass
     
     def send_message(self, message):
         # add line termination and convert to bytes
@@ -157,7 +150,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         #opts['type'] = 'action'
         opts['addText'] = "Add new device"
         # opts for choosing device type when adding new device
-        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "TSI CPC", "Example device"] #  "eDiluter",
+        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "AFM", "TSI CPC", "Example device"] #  "eDiluter",
         parameterTypes.GroupParameter.__init__(self, **opts)
         self.n_devices = 0
         self.cpc_dict = {'None': 'None'}
@@ -166,7 +159,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
 
     def addNew(self, device_name): # device_name is the name of the added device type
         # device_value is used to set the default value for the Device type parameter below
-        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_name]
+        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_name]
         # if OSX mode is on, set COM port type as string to allow complex port addresses
         if osx_mode:
             port_type = 'str'
@@ -179,7 +172,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 dict(name="Serial number", type='str', value="", readonly=True),
                 #dict(name="Baud rate", type='int', value=115200, visible=False),
                 dict(name = "Connection", value = SerialDeviceConnection(), visible=False),
-                {'name': 'Device type', 'type': 'list', 'values': {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
+                {'name': 'Device type', 'type': 'list', 'values': {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
                 dict(name = "Connected", type='bool', value=False, readonly = True),
                 dict(name = "DevID", type='int', value=self.n_devices,readonly = True, visible = False),
                 dict(name = "Plot to main", type='bool', value=True),
@@ -209,10 +202,13 @@ class ScalableGroup(parameterTypes.GroupParameter):
             self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
             # create new Plot to main parameter with options for plotted value
             self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'RH', 'T', 'P'], 'value': 'RH'})
-            # add rhtp_changed flag to device, set to True to make sure plot is updated
-            self.children()[-1].rhtp_changed = True
-            # connect Plot to main value change signal to update_rhtp_changed slot
-            self.children()[-1].child('Plot to main').sigValueChanged.connect(self.update_rhtp_changed)
+        
+        # if added device is AFM, add options for plotted value
+        if device_value == AFM:
+            # remove default Plot to main parameter
+            self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
+            # create new Plot to main parameter with options for plotted value
+            self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'Flow', 'Standard flow', 'RH', 'T', 'P'], 'value': 'Flow'})
 
     def update_cpc_dict(self):
         self.cpc_dict = {'None': 'None'} # reset cpc_dict
@@ -241,11 +237,6 @@ class ScalableGroup(parameterTypes.GroupParameter):
     def update_cpc_changed(self, value):
         device = value.parent() # get device parameter
         device.cpc_changed = True # set cpc_changed flag to True
-    
-    # slot for setting rhtp_changed flag to True when RHTP's Plot to main parameter is changed
-    def update_rhtp_changed(self, value):
-        device = value.parent() # get device parameter
-        device.rhtp_changed = True # set rhtp_changed flag to True
 
 # Create a dictionary, in which the names, types and default values are set
 params = [
@@ -290,9 +281,9 @@ def COMchange(param, changes):
         if 'COM port' in childName:
             names = childName.split('.') # split the name into a list
             try: # Close the old connection if open
-                p.child(names[0]).child(names[1]).child('Connection').value().close()
-            except Exception as e: # print exception if closing fails
-                #print("COMchange - error:", e)
+                if p.child(names[0]).child(names[1]).child('Connection').value().connection.is_open == True:
+                    p.child(names[0]).child(names[1]).child('Connection').value().close()
+            except:
                 pass
             finally: # try to set connection settings and connect
                 try:
@@ -406,8 +397,8 @@ class MainWindow(QMainWindow):
         p.child("Device settings").sigChildAdded.connect(self.device_added)
         # connect parameter tree's sigChildRemoved signal to device_removed function
         p.child("Device settings").sigChildRemoved.connect(self.device_removed)
-        # connect main_plot's viewboxes' sigXRangeChanged signals to x_range_changed function # TODO test with only one viewbox since all are linked
-        for viewbox in self.main_plot.viewboxes:
+        # connect main_plot's viewboxes' sigXRangeChanged signals to x_range_changed function
+        for viewbox in self.main_plot.viewboxes.values():
             viewbox.sigXRangeChanged.connect(self.x_range_changed)
 
         # list com ports at startup
@@ -546,11 +537,9 @@ class MainWindow(QMainWindow):
                         # send measure command to device
                         dev.child('Connection').value().send_message(":MEAS:CO2")
                     
-                    # RHTP pushes data automatically
+                    # RHTP, eDiluter and AFM push data automatically
 
-                    # eDiluter pushes data automatically
-
-                    if device_type in [CPC, PSM, PSM2, CO2_sensor, RHTP]: # CPC, PSM, CO2, RHTP
+                    if device_type in [CPC, PSM, PSM2, CO2_sensor, RHTP, AFM]: # CPC, PSM, CO2, RHTP, AFM
                         # if Serial number is empty, send IDN inquiry with delay
                         if dev.child('Serial number').value() == "":
                             QTimer.singleShot(300, lambda: dev.child('Connection').value().connection.write(b'*IDN?\n'))
@@ -889,6 +878,62 @@ class MainWindow(QMainWindow):
                         self.latest_data[dev.child('DevID').value()] = full(3, nan)
                         logging.exception(e)
                 
+                if dev.child('Device type').value() == AFM: # AFM
+                    try:
+                        # if Serial number is empty, look for *IDN
+                        if dev.child('Serial number').value() == "":
+                            # read all data from buffer
+                            messages = dev.child('Connection').value().connection.read_all().decode().split("\r\n")
+                            # go through messages
+                            for message in messages:
+                                # if message length is above 5 ("*IDN " + device IDN)
+                                if len(message) > 5:
+                                    # if "*IDN " is part of message
+                                    if "*IDN " in message:
+                                        serial_number = message.split(" ", 1)[1]
+                                        serial_number = serial_number.strip("\n")
+                                        serial_number = serial_number.strip("\r")
+                                        dev.child('Serial number').setValue(serial_number)
+                            # store nan values to latest_data
+                            self.latest_data[dev.child('DevID').value()] = full(5, nan)
+                        
+                        # if Serial number has been acquired, read data normally
+                        else:
+                            # read and decode a line of data
+                            readings = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
+                            # remove '\r\n' from end
+                            readings = readings[:-2]
+                            # split data to list
+                            readings = readings.split(", ")
+
+                            # check if there's an extra line's worth of data in buffer
+                            # this is done in case data cumulates slowly over time in buffer
+                            if dev.child('Connection').value().connection.inWaiting() >= 38: # 34 + 2 (\r\n) + 2 (if flow >= 10)
+                                buffer_length = dev.child('Connection').value().connection.inWaiting()
+                                # create log entry
+                                logging.warning("readIndata - AFM buffer: %i", buffer_length)
+                                print("readIndata - AFM extra data buffer:", buffer_length)
+                                try: # try to read next line
+                                    extra_line = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
+                                    # use extra line as readings
+                                    readings = extra_line[:-2].split(", ") # remove '\r\n' and split data to list
+                                except Exception as e:
+                                    print(traceback.format_exc())
+                                    logging.exception(e)
+                            
+                            #print("AFM readings:", readings)
+
+                            # check if data is valid and store to latest_data dictionary
+                            if float(readings[2]) != 0: # if RH data is valid, not 0
+                                self.latest_data[dev.child('DevID').value()] = readings
+                            else:
+                                self.latest_data[dev.child('DevID').value()] = full(5, nan)
+                    
+                    except Exception as e: # if reading fails, store nan values to latest_data
+                        print(traceback.format_exc())
+                        self.latest_data[dev.child('DevID').value()] = full(5, nan)
+                        logging.exception(e)
+                
                 if dev.child('Device type').value() == eDiluter: # eDiluter
                     try:
                         # store nan values to latest_data in case reading fails
@@ -1110,36 +1155,20 @@ class MainWindow(QMainWindow):
 
             try: # if one device fails, continue with the next one
 
-                # CPC - create lists for concentration and raw concentration (no correction)
-                if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
+                # Devices with multiple values - create lists for each value
+                if dev.child('Device type').value() in [CPC, TSI_CPC, Electrometer, RHTP, AFM]:
+                    # determine value types based on device type
+                    if dev.child('Device type').value() in [CPC, TSI_CPC]:
+                        types = ['', ':raw'] # concentration, raw concentration
+                    elif dev.child('Device type').value() == Electrometer:
+                        types = [':1', ':2', ':3'] # voltage 1, voltage 2, voltage 3
+                    elif dev.child('Device type').value() == RHTP:
+                        types = [':rh', ':t', ':p'] # RH, T, P
+                    elif dev.child('Device type').value() == AFM:
+                        types = [':f', ':sf', ':rh', ':t', ':p'] # flow, standard flow, RH, T, P
+                    
                     # if device is not yet in plot_data dict, add it
-                    if dev_id not in self.plot_data:
-                        # make the new lists the same size as x_time_list
-                        self.plot_data[dev_id] = full(len(self.x_time_list), nan)
-                        self.plot_data[str(dev_id)+':raw'] = full(len(self.x_time_list), nan)
-                    # if time_counter has reached max_time - 1, start shifting data
-                    if self.time_counter >= self.max_time - 1:
-                        if self.max_reached == True:
-                            self.plot_data[dev_id] = self.plot_data[dev_id][:self.max_time]
-                            self.plot_data[dev_id][:-1] = self.plot_data[dev_id][1:]
-                            self.plot_data[dev_id][-1] = nan
-                            self.plot_data[str(dev_id)+':raw'] = self.plot_data[str(dev_id)+':raw'][:self.max_time]
-                            self.plot_data[str(dev_id)+':raw'][:-1] = self.plot_data[str(dev_id)+':raw'][1:]
-                            self.plot_data[str(dev_id)+':raw'][-1] = nan
-                    # if max_time hasn't been reached, double device plot array sizes when full
-                    elif self.time_counter >= self.plot_data[dev_id].shape[0]:
-                        tmp_data = self.plot_data[dev_id]
-                        self.plot_data[dev_id] = full(self.plot_data[dev_id].shape[0] * 2, nan)
-                        self.plot_data[dev_id][:tmp_data.shape[0]] = tmp_data
-                        tmp_data = self.plot_data[str(dev_id)+':raw']
-                        self.plot_data[str(dev_id)+':raw'] = full(self.plot_data[str(dev_id)+':raw'].shape[0] * 2, nan)
-                        self.plot_data[str(dev_id)+':raw'][:tmp_data.shape[0]] = tmp_data
-
-                # Electrometer - create lists for each value
-                elif dev.child('Device type').value() == Electrometer: # Electrometer
-                    types = [':1', ':2', ':3']
-                    # if device is not yet in plot_data dict, add it
-                    if str(dev_id)+':1' not in self.plot_data:
+                    if str(dev_id)+types[0] not in self.plot_data:
                         # make the new lists the same size as x_time_list
                         for i in types:
                             self.plot_data[str(dev_id)+i] = full(len(self.x_time_list), nan)
@@ -1151,29 +1180,7 @@ class MainWindow(QMainWindow):
                                 self.plot_data[str(dev_id)+i][:-1] = self.plot_data[str(dev_id)+i][1:] # shift all items one index to left
                                 self.plot_data[str(dev_id)+i][-1] = nan # change nan to end
                     # if max_time hasn't been reached, double device plot array sizes when full
-                    elif self.time_counter >= self.plot_data[str(dev_id)+':1'].shape[0]:
-                        for i in types:
-                            tmp_data = self.plot_data[str(dev_id)+i]
-                            self.plot_data[str(dev_id)+i] = full(self.plot_data[str(dev_id)+i].shape[0] * 2, nan)
-                            self.plot_data[str(dev_id)+i][:tmp_data.shape[0]] = tmp_data
-
-                # RHTP - create lists for each value
-                elif dev.child('Device type').value() == RHTP: # RHTP
-                    types = [':rh', ':t', ':p']
-                    # if device is not yet in plot_data dict, add it
-                    if str(dev_id)+':rh' not in self.plot_data:
-                        # make the new lists the same size as x_time_list
-                        for i in types:
-                            self.plot_data[str(dev_id)+i] = full(len(self.x_time_list), nan)
-                    # if time_counter has reached max_time - 1, start shifting data
-                    if self.time_counter >= self.max_time - 1:
-                        for i in types:
-                            if self.max_reached == True:
-                                self.plot_data[str(dev_id)+i] = self.plot_data[str(dev_id)+i][:self.max_time] # shorten list to max time length
-                                self.plot_data[str(dev_id)+i][:-1] = self.plot_data[str(dev_id)+i][1:] # shift all items one index to left
-                                self.plot_data[str(dev_id)+i][-1] = nan # change nan to end
-                    # if max_time hasn't been reached, double device plot array sizes when full
-                    elif self.time_counter >= self.plot_data[str(dev_id)+':rh'].shape[0]:
+                    elif self.time_counter >= self.plot_data[str(dev_id)+types[0]].shape[0]:
                         for i in types:
                             tmp_data = self.plot_data[str(dev_id)+i]
                             self.plot_data[str(dev_id)+i] = full(self.plot_data[str(dev_id)+i].shape[0] * 2, nan)
@@ -1206,12 +1213,12 @@ class MainWindow(QMainWindow):
                             if psm.child('Device type').value() in [PSM, PSM2] and psm.child('Connected').value():
                                 if psm.child('Connected CPC').value() == dev_id:
                                     # if PSM connection exists, add latest PSM concentration value to plot_data
-                                    self.plot_data[dev_id][self.time_counter] = self.latest_data[psm.child('DevID').value()][0]
+                                    self.plot_data[str(dev_id)][self.time_counter] = self.latest_data[psm.child('DevID').value()][0]
                                     psm_connection = True
                                     break
                         # if not connected to PSM, add CPC concentration value to plot_data
                         if psm_connection == False:
-                            self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][0]
+                            self.plot_data[str(dev_id)][self.time_counter] = self.latest_data[dev_id][0]
                         # add raw concentration value to plot_data
                         self.plot_data[str(dev_id)+':raw'][self.time_counter] = self.latest_data[dev_id][0]
                     elif dev.child('Device type').value() in [PSM, PSM2]: # PSM
@@ -1230,6 +1237,13 @@ class MainWindow(QMainWindow):
                         self.plot_data[str(dev_id)+':rh'][self.time_counter] = self.latest_data[dev_id][0]
                         self.plot_data[str(dev_id)+':t'][self.time_counter] = self.latest_data[dev_id][1]
                         self.plot_data[str(dev_id)+':p'][self.time_counter] = self.latest_data[dev_id][2]
+                    elif dev.child('Device type').value() == AFM: # AFM
+                        # add latest values (flow, RH, T, P) to time_counter index of plot_data
+                        self.plot_data[str(dev_id)+':f'][self.time_counter] = self.latest_data[dev_id][0]
+                        self.plot_data[str(dev_id)+':sf'][self.time_counter] = self.latest_data[dev_id][1]
+                        self.plot_data[str(dev_id)+':rh'][self.time_counter] = self.latest_data[dev_id][2]
+                        self.plot_data[str(dev_id)+':t'][self.time_counter] = self.latest_data[dev_id][3]
+                        self.plot_data[str(dev_id)+':p'][self.time_counter] = self.latest_data[dev_id][4]
                     elif dev.child('Device type').value() == eDiluter: # eDiluter
                         # add latest T1 value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][3]
@@ -1246,8 +1260,9 @@ class MainWindow(QMainWindow):
         # go through each device
         for dev in self.params.child('Device settings').children():
             
-            # store device id to variable for readability
+            # store device id and device type to variables for readability
             dev_id = dev.child('DevID').value()
+            dev_type = dev.child('Device type').value()
 
             try: # if one device fails, continue with the next one
 
@@ -1260,17 +1275,15 @@ class MainWindow(QMainWindow):
                     self.curve_dict[dev_id] = PlotCurveItem(pen=dev_id, connect="finite")
                     #self.curve_dict[dev_id] = PlotCurveItem(pen={'color':dev_id, 'width':2}, connect="finite")
                     # add curve to viewbox according to device type
-                    if dev.child('Device type').value() == -1: # if Example device
-                        self.main_plot.viewboxes[-1].addItem(self.curve_dict[dev_id])
-                    elif dev.child('Device type').value() == PSM2: # if PSM2
-                        self.main_plot.viewboxes[1].addItem(self.curve_dict[dev_id])
-                    elif dev.child('Device type').value() == TSI_CPC: # if TSI CPC
-                        self.main_plot.viewboxes[0].addItem(self.curve_dict[dev_id])
+                    if dev_type == PSM2: # if PSM2, add to PSM viewbox
+                        self.main_plot.viewboxes[PSM].addItem(self.curve_dict[dev_id])
+                    elif dev_type == TSI_CPC: # if TSI CPC, add to CPC viewbox
+                        self.main_plot.viewboxes[CPC].addItem(self.curve_dict[dev_id])
                     else: # other devices
-                        self.main_plot.viewboxes[dev.child('Device type').value() - 1].addItem(self.curve_dict[dev_id])
+                        self.main_plot.viewboxes[dev_type].addItem(self.curve_dict[dev_id])
                 
-                # if device type is RHTP, update main plot according to selected value
-                if dev.child('Device type').value() == RHTP: # RHTP
+                # if device type is RHTP or AFM, update main plot according to selected value
+                if dev_type in [RHTP, AFM]: # RHTP or AFM
                     if dev.child("Plot to main").value() == None:
                         self.curve_dict[dev_id].setData(x=[], y=[])
                     elif dev.child("Plot to main").value() == 'RH':
@@ -1279,11 +1292,18 @@ class MainWindow(QMainWindow):
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':t'][:self.time_counter+1])
                     elif dev.child("Plot to main").value() == 'P':
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':p'][:self.time_counter+1])
+                    elif dev_type == AFM and dev.child("Plot to main").value() == 'Flow':
+                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':f'][:self.time_counter+1])
+                    elif dev_type == AFM and dev.child("Plot to main").value() == 'Standard flow':
+                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':sf'][:self.time_counter+1])
 
                 # other devices: update main plot if 'Plot to main' is enabled
                 elif dev.child("Plot to main").value():
+                    # if device is CPC, get plot data with str(dev_id) key
+                    if dev_type in [CPC, TSI_CPC]: # CPC
+                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)][:self.time_counter+1])
                     # if device is Electrometer, plot Voltage 2
-                    if dev.child('Device type').value() == Electrometer: # Electrometer
+                    elif dev_type == Electrometer: # Electrometer
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':2'][:self.time_counter+1])
                     else: # other devices
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[dev_id][:self.time_counter+1])
@@ -1297,18 +1317,22 @@ class MainWindow(QMainWindow):
                 # INDIVIDUAL PLOTS
 
                 # if device is connected OR Example device
-                if dev.child('Connected').value() or dev.child('Device type').value() == -1:
+                if dev.child('Connected').value() or dev_type == Example_device:
                     
                     # store current time counter value as start time in dictionary if not yet stored
                     # start time is stored when first non-nan value is received
                     # start time is used to crop plot data to only show non-nan values
                     if dev_id not in self.start_times:
+                        # CPC
+                        if dev_type in [CPC, TSI_CPC]:
+                            if str(self.plot_data[str(dev_id)+':raw'][self.time_counter]) != "nan":
+                                self.start_times[dev_id] = self.time_counter
                         # Electrometer
-                        if dev.child('Device type').value() == Electrometer:
+                        elif dev_type == Electrometer:
                             if str(self.plot_data[str(dev_id)+':1'][self.time_counter]) != "nan":
                                 self.start_times[dev_id] = self.time_counter
-                        # RHTP
-                        elif dev.child('Device type').value() == RHTP:
+                        # RHTP or AFM
+                        elif dev_type in [RHTP, AFM]:
                             if str(self.plot_data[str(dev_id)+':rh'][self.time_counter]) != "nan":
                                 self.start_times[dev_id] = self.time_counter
                         # other devices
@@ -1322,33 +1346,42 @@ class MainWindow(QMainWindow):
                         # update plot in device widget
                         # TODO start times removed from curve setData, problems with array shift index - add back later if compatible
                         #self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[start_time:self.time_counter+1], y=self.plot_data[dev_id][start_time:self.time_counter+1])
-                        if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
+                        if dev_type in [CPC, TSI_CPC]: # CPC
                             # update plot with raw CPC concentration
                             self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':raw'][:self.time_counter+1])
-                        elif dev.child('Device type').value() == Electrometer: # Electrometer
+                        elif dev_type == Electrometer: # Electrometer
                             # update Electrometer plot with all 3 values
                             self.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':1'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':2'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve3.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':3'][:self.time_counter+1])
-                            # scale x-axis range if Follow is on
-                            if self.params.child('Plot settings').child('Follow').value():
-                                for plot in self.device_widgets[dev_id].plot_tab.plots:
-                                    plot.setXRange(self.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.current_time, padding=0)
-                                    plot.getViewBox().enableAutoRange(axis='y') # set y axis autorange on
-                                    plot.getViewBox().setAutoVisible(y=True) # scale according to visible data
-                        elif dev.child('Device type').value() == RHTP: # RHTP
+                        elif dev_type == RHTP: # RHTP
                             # update RHTP plot with all 3 values
                             self.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':rh'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':t'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve3.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':p'][:self.time_counter+1])
+                        elif dev_type == AFM: # AFM
+                            # update AFM plot with all 5 values
+                            self.device_widgets[dev_id].plot_tab.curves[0].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':f'][:self.time_counter+1])
+                            self.device_widgets[dev_id].plot_tab.curves[1].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':sf'][:self.time_counter+1])
+                            self.device_widgets[dev_id].plot_tab.curves[2].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':rh'][:self.time_counter+1])
+                            self.device_widgets[dev_id].plot_tab.curves[3].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':t'][:self.time_counter+1])
+                            self.device_widgets[dev_id].plot_tab.curves[4].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':p'][:self.time_counter+1])
                         else: # other devices
                             self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[dev_id][:self.time_counter+1])
+                        
+                        # scale x-axis range if Follow is on
+                        if self.params.child('Plot settings').child('Follow').value():
+                            if dev_type == Electrometer: # if Electrometer, update all 3 plots
+                                for plot in self.device_widgets[dev_id].plot_tab.plots:
+                                    plot.setXRange(self.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.current_time, padding=0)
+                            else: # other devices
+                                self.device_widgets[dev_id].plot_tab.plot.setXRange(self.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.current_time, padding=0)
 
                 # PSM CPC FLOW CHECK
                 # warn if no CPC is connected or update Set tab's CPC sample flow value
 
                 # if device type is PSM and it is connected
-                if dev.child('Device type').value() in [PSM ,PSM2] and dev.child('Connected').value():
+                if dev_type in [PSM ,PSM2] and dev.child('Connected').value():
                     # if no CPC is connected
                     if dev.child('Connected CPC').value() == 'None':
                         # if stored CPC flow is not 1, set it to 1
@@ -1415,7 +1448,7 @@ class MainWindow(QMainWindow):
                     pass
 
                 # if device is connected OR example device
-                elif dev.child('Connected').value() or dev.child('Device type').value() == -1:
+                elif dev.child('Connected').value() or dev.child('Device type').value() == Example_device:
 
                     try:
                         # store device id to variable for clarity
@@ -1493,6 +1526,8 @@ class MainWindow(QMainWindow):
                                     file.write('YYYY.MM.DD hh:mm:ss,CO2 (ppm),T (C),RH (%)')
                                 elif dev.child('Device type').value() == RHTP: # RHTP
                                     file.write('YYYY.MM.DD hh:mm:ss,RH (%),T (C),P (Pa)')
+                                elif dev.child('Device type').value() == AFM: # AFM
+                                    file.write('YYYY.MM.DD hh:mm:ss,Flow (lpm),Standard flow (slpm),RH (%),T (C),P (Pa)')
                                 elif dev.child('Device type').value() == eDiluter: # eDiluter
                                     file.write('YYYY.MM.DD hh:mm:ss,Status,P1,P2,T1,T2,T3,T4,T5,T6,DF1,DF2,DFTot')
                                 else:
@@ -1808,31 +1843,25 @@ class MainWindow(QMainWindow):
         # get list of available ports as serial objects
         ports = list_ports.comports()
         # check if ports list has changed from stored ports
-        if ports != self.current_ports: # if ports have changed, set flag for a specific time
-            self.inquiry_flag = True # set inquiry flag to True
-            self.inquiry_time = time() # store inquiry start timestamp for calculating timeout
-        self.current_ports = ports # store current ports
+        # if ports != self.current_ports: # if ports have changed, set flag for a specific time
+        #     self.inquiry_flag = True # set inquiry flag to True
+        #     self.inquiry_time = time() # store inquiry start timestamp for calculating timeout
+        # self.current_ports = ports # store current ports for comparison
         com_port_list = [] # list of port addresses
         new_ports = {} # dictionary for new ports, ports are added after *IDN? send
         # go through current ports
         for port in sorted(ports):
             # add comport to list of com port addresses
             com_port_list.append(port[0])
+            # if port is not in com_descriptions
+            if port[0] not in self.com_descriptions:
+                # add port to com_descriptions with default descripion
+                self.com_descriptions[port[0]] = port[1]
             # if inquiry flag is True, inquire IDN from ports that haven't been inquired yet
             if self.inquiry_flag == True:
-                # set send_idn flag to False
-                send_idn = False
                 # inquire IDN from ports with default description
-                # if port is not in com_descriptions
-                if port[0] not in self.com_descriptions:
-                    # add port to com_descriptions with default descripion
-                    self.com_descriptions[port[0]] = port[1]
-                # if port has default description
+                # if port has default description, port *IDN? hasn't been acquired
                 if self.com_descriptions[port[0]] == port[1]:
-                    # set send_idn flag to True
-                    send_idn = True
-                # if send_idn flag is True, port *IDN? hasn't been acquired
-                if send_idn == True:
                     try:
                         # open port
                         serial_connection = Serial(str(port[0]), 115200, timeout=0.2)
@@ -1862,8 +1891,6 @@ class MainWindow(QMainWindow):
             try:
                 # read received messages
                 messages = new_ports[port].read_all().decode().split("\r")
-                # close port
-                new_ports[port].close()
                 print("update_com_ports -", port, "messages:", messages)
                 # go through messages and find *IDN
                 for message in messages:
@@ -1876,10 +1903,18 @@ class MainWindow(QMainWindow):
                             serial_number = serial_number.strip("\n")
                             serial_number = serial_number.strip("\r")
                             self.com_descriptions[port] = serial_number
+                            new_ports[port].close() # close port after *IDN response
                         # eDiluter ID
                         elif " ID " in message:
                             # read device ID between " ID " and ", Status" and store to com_descriptions
                             self.com_descriptions[port] = message[message.index(" ID ")+4:message.index(", Status")]
+                            new_ports[port].close() # close port after *IDN response
+            except Exception as e:
+                print(traceback.format_exc())
+                logging.exception(e)
+            try: # if inquiry has ended and port is still open, close port
+                if self.inquiry_flag == False and new_ports[port].is_open:
+                    new_ports[port].close()
             except Exception as e:
                 print(traceback.format_exc())
                 logging.exception(e)
@@ -1962,7 +1997,7 @@ class MainWindow(QMainWindow):
         # remove all devices from the parameter tree
         self.params.child('Device settings').clearChildren()
         # dictionary of device names matching device type
-        device_names = {1: 'CPC', 2: 'PSM Retrofit', 3: 'Electrometer', 4: 'CO2 sensor', 5: 'RHTP', 6: 'eDiluter', 7: 'PSM 2.0', 8: 'TSI CPC', -1: 'Example device'}
+        device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', Electrometer: 'Electrometer', CO2_sensor: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', eDiluter: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', Example_device: 'Example device'}
         try:
             # go through each device in the device settings
             for dev_name, dev_values in device_settings.items():
@@ -2027,19 +2062,27 @@ class MainWindow(QMainWindow):
     # called when 'Plot to main' selection of any RHTP device is changed
     def rhtp_axis_changed(self, value):
         for dev in self.params.child('Device settings').children():
-            if dev.child('Device type').value() == 5 and dev.child('Plot to main').value() != value:
+            if dev.child('Device type').value() == RHTP and dev.child('Plot to main').value() != value:
+                dev.child('Plot to main').setValue(value)
+    # same as above but for AFM devices
+    def afm_axis_changed(self, value):
+        for dev in self.params.child('Device settings').children():
+            if dev.child('Device type').value() == AFM and dev.child('Plot to main').value() != value:
                 dev.child('Plot to main').setValue(value)
     
     # updates main_plot axes according to Plot to main settings
     def axis_check(self):
         # hide all axes
-        for i in range(0, len(self.main_plot.axes)):
-            self.main_plot.show_hide_axis(i+1, False)
+        for key in self.main_plot.axes:
+            self.main_plot.show_hide_axis(key, False)
         # show axes for devices that are set to plot to main
         for dev in self.params.child('Device settings').children():
             # RHTP
-            if dev.child('Device type').value() == 5:
+            if dev.child('Device type').value() == RHTP:
                 self.main_plot.change_rhtp_axis(dev.child('Plot to main').value())
+            # AFM
+            elif dev.child('Device type').value() == AFM:
+                self.main_plot.change_afm_axis(dev.child('Plot to main').value())
             # other devices
             elif dev.child('Plot to main').value():
                 self.main_plot.show_hide_axis(dev.child('Device type').value(), True)
@@ -2053,8 +2096,8 @@ class MainWindow(QMainWindow):
             dev_id = dev.child('DevID').value()
             # if device is in curve_dict
             if dev_id in self.curve_dict:
-                # RHTP
-                if dev.child('Device type').value() == 5:
+                # RHTP or AFM
+                if dev.child('Device type').value() in [RHTP, AFM]:
                     # if Plot to main is enabled
                     if dev.child('Plot to main').value() != None:
                         # add curve to legend with device name and current value of chosen parameter
@@ -2064,6 +2107,10 @@ class MainWindow(QMainWindow):
                             legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':t'][self.time_counter])
                         elif dev.child('Plot to main').value() == "P":
                             legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':p'][self.time_counter])
+                        elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Flow":
+                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id) + ':f'][self.time_counter])
+                        elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Standard flow":
+                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id) + ':sf'][self.time_counter])
                         self.main_plot.legend.addItem(self.curve_dict[dev_id], legend_string)
                     else: # if disabled
                         # remove curve from legend
@@ -2073,10 +2120,10 @@ class MainWindow(QMainWindow):
                 elif dev.child('Plot to main').value():
                     # compile legend string - device name and current value
                     # if CPC, round value to 2 decimals
-                    if dev.child('Device type').value() == 1:
-                        legend_string = dev.child('Device name').value() + ": " + str(round(self.plot_data[dev_id][self.time_counter], 2))
+                    if dev.child('Device type').value() in [CPC, TSI_CPC]:
+                        legend_string = dev.child('Device name').value() + ": " + str(round(self.plot_data[str(dev_id)][self.time_counter], 2))
                     # if Electrometer, get Voltage 2 value
-                    elif dev.child('Device type').value() == 3:
+                    elif dev.child('Device type').value() == Electrometer:
                         legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':2'][self.time_counter])
                     # other devices
                     else:
@@ -2264,7 +2311,7 @@ class MainWindow(QMainWindow):
                 widget = RHTPWidget(device_param) # create RHTP widget instance
                 # check if there are other RHTP devices and if so, set 'Plot to main' according to them
                 for dev in self.params.child('Device settings').children():
-                    if dev.child('Device type').value() == 5 and dev.child('DevID').value() != device_id:
+                    if dev.child('Device type').value() == RHTP and dev.child('DevID').value() != device_id:
                         # call rhtp_axis_changed() to change 'Plot to main' selection of new device
                         # delay ensures change is made to updated "Plot to main" RHTP menu
                         QTimer.singleShot(50, lambda: self.rhtp_axis_changed(dev.child('Plot to main').value()))
@@ -2272,6 +2319,19 @@ class MainWindow(QMainWindow):
                 # connect device parameter's 'Plot to main' value change to rhtp_axis_changed()
                 # delay ensures connection is made from updated "Plot to main" RHTP menu
                 QTimer.singleShot(60, lambda: device_param.child("Plot to main").sigValueChanged.connect(lambda parameter: self.rhtp_axis_changed(parameter.value())))
+            
+            if device_type == AFM: # if AFM
+                widget = AFMWidget(device_param) # create AFM widget instance
+                # check if there are other AFM devices and if so, set 'Plot to main' according to them
+                for dev in self.params.child('Device settings').children():
+                    if dev.child('Device type').value() == AFM and dev.child('DevID').value() != device_id:
+                        # call afm_axis_changed() to change 'Plot to main' selection of new device
+                        # delay ensures change is made to updated "Plot to main" AFM menu
+                        QTimer.singleShot(50, lambda: self.afm_axis_changed(dev.child('Plot to main').value()))
+                        break
+                # connect device parameter's 'Plot to main' value change to afm_axis_changed()
+                # delay ensures connection is made from updated "Plot to main" AFM menu
+                QTimer.singleShot(60, lambda: device_param.child("Plot to main").sigValueChanged.connect(lambda parameter: self.afm_axis_changed(parameter.value())))
             
             if device_type == eDiluter: # if eDiluter
                 widget = eDiluterWidget(device_param) # create eDiluter widget instance
@@ -2301,8 +2361,18 @@ class MainWindow(QMainWindow):
                 # connect baud rate parameter to connection's set_baud_rate function
                 device_param.child('Baud rate').sigValueChanged.connect(lambda: connection.set_baud_rate(device_param.child('Baud rate').value()))
             
-            if device_type == -1: # if Example device
+            if device_type == Example_device: # if Example device
                 widget = ExampleDeviceWidget(device_param) # create Example device widget instance
+            
+            # connect x range change of plot_tab's viewbox(es) to x_range_changed function (autoscale y)
+            if device_type == Electrometer:
+                for plot in widget.plot_tab.plots:
+                    plot.getViewBox().sigXRangeChanged.connect(self.x_range_changed)
+            elif device_type in [RHTP, AFM]:
+                for viewbox in widget.plot_tab.viewboxes:
+                    viewbox.sigXRangeChanged.connect(self.x_range_changed)
+            else:
+                widget.plot_tab.viewbox.sigXRangeChanged.connect(self.x_range_changed)
 
             # add widget instance to device_widgets dictionary with device ID as key
             self.device_widgets[device_id] = widget
@@ -2316,6 +2386,7 @@ class MainWindow(QMainWindow):
     def device_removed(self, param, child):
         if param == self.params.child("Device settings"):
             device_id = child.child("DevID").value()
+            device_type = child.child("Device type").value()
             # remove device widget from main tab widget
             self.device_tabs.removeTab(self.device_tabs.indexOf(self.device_widgets[device_id]))
             # close serial connection if open
@@ -2334,6 +2405,25 @@ class MainWindow(QMainWindow):
                     del dictionary[device_id]
                 except KeyError:
                     pass
+                # plot data string keys cleaning
+                if dictionary == self.plot_data:
+                    # check if device has multiple data types
+                    if device_type in [CPC, TSI_CPC, Electrometer, RHTP, AFM]:
+                        # determine value types based on device type
+                        if device_type in [CPC, TSI_CPC]:
+                            types = ['', ':raw'] # concentration, raw concentration
+                        elif device_type == Electrometer:
+                            types = [':1', ':2', ':3'] # voltage 1, voltage 2, voltage 3
+                        elif device_type == RHTP:
+                            types = [':rh', ':t', ':p'] # RH, T, P
+                        elif device_type == AFM:
+                            types = [':f', ':sf', ':rh', ':t', ':p'] # flow, standard flow, RH, T, P
+                        # remove all keys with device_id and value types
+                        for t in types:
+                            try:
+                                del dictionary[str(device_id)+t]
+                            except KeyError:
+                                pass
 
     def startTimer(self):
         # check start time and sync with next second
@@ -2358,6 +2448,9 @@ class MainPlot(GraphicsLayoutWidget):
         # create legend
         self.legend = LegendItem(offset=(70,20), labelTextColor='w', labelTextSize='11pt')
         self.legend.setParentItem(self.plot.graphicsItem())
+        # create dictionaries for viewboxes and axes, use device type as key
+        self.viewboxes = {}
+        self.axes = {}
 
         # time axis
         self.plot.setAxisItems({'bottom':DateAxisItem()}) # set time axis to bottom
@@ -2367,85 +2460,88 @@ class MainPlot(GraphicsLayoutWidget):
         self.axis_time.enableAutoSIPrefix(enable=False) # disable auto SI prefix
 
         # CPC viewbox
-        self.viewbox_cpc = self.plot.getViewBox() # store default viewbox to variable
+        self.viewboxes[CPC] = self.plot.getViewBox() # store default viewbox to dictionary
         # CPC axis
-        self.axis_cpc = self.plot.getAxis('left') # store left axis to variable
-        self.axis_cpc.setLabel('CPC concentration', units='#/cc', color='w') # set label
-        self.set_axis_style(self.axis_cpc, 'w') # set axis style
+        self.axes[CPC] = self.plot.getAxis('left') # store left axis to dictionary
+        self.axes[CPC].setLabel('CPC concentration', units='#/cc', color='w') # set label
+        self.set_axis_style(self.axes[CPC], 'w') # set axis style
 
-        # PSM viewbox
-        self.viewbox_psm = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox_psm) # add viewbox to scene
-        self.viewbox_psm.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        # PSM viewbox # TODO create function for viewbox and axis creation
+        self.viewboxes[PSM] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[PSM]) # add viewbox to scene
+        self.viewboxes[PSM].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # PSM axis
-        self.axis_psm = AxisItem('right') # create second axis
-        self.plot.layout.addItem(self.axis_psm, 2, 3) # add axis to plot
-        self.axis_psm.setLabel('PSM saturator flow rate', units='lpm', color='w') # set label
-        self.set_axis_style(self.axis_psm, 'w') # set axis style
-        self.axis_psm.linkToView(self.viewbox_psm) # link axis to viewbox
+        self.axes[PSM] = AxisItem('right') # create second axis
+        self.plot.layout.addItem(self.axes[PSM], 2, 3) # add axis to plot
+        self.axes[PSM].setLabel('PSM saturator flow rate', units='lpm', color='w') # set label
+        self.set_axis_style(self.axes[PSM], 'w') # set axis style
+        self.axes[PSM].linkToView(self.viewboxes[PSM]) # link axis to viewbox
 
         # Electrometer viewbox
-        self.viewbox_electrometer = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox_electrometer) # add viewbox to scene
-        self.viewbox_electrometer.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[Electrometer] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[Electrometer]) # add viewbox to scene
+        self.viewboxes[Electrometer].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # Electrometer axis
-        self.axis_electrometer = AxisItem('right') # create third axis
-        self.plot.layout.addItem(self.axis_electrometer, 2, 4) # add axis to plot
-        self.axis_electrometer.setLabel('Electrometer voltage 2', units='V', color='w') # set label
-        self.set_axis_style(self.axis_electrometer, 'w') # set axis style
-        self.axis_electrometer.linkToView(self.viewbox_electrometer) # link axis to viewbox
+        self.axes[Electrometer] = AxisItem('right') # create third axis
+        self.plot.layout.addItem(self.axes[Electrometer], 2, 4) # add axis to plot
+        self.axes[Electrometer].setLabel('Electrometer voltage 2', units='V', color='w') # set label
+        self.set_axis_style(self.axes[Electrometer], 'w') # set axis style
+        self.axes[Electrometer].linkToView(self.viewboxes[Electrometer]) # link axis to viewbox
 
         # CO2 viewbox
-        self.viewbox_co2 = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox_co2) # add viewbox to scene
-        self.viewbox_co2.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[CO2_sensor] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[CO2_sensor]) # add viewbox to scene
+        self.viewboxes[CO2_sensor].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # CO2 axis
-        self.axis_co2 = AxisItem('right') # create fourth axis
-        self.plot.layout.addItem(self.axis_co2, 2, 5) # add axis to plot
-        self.axis_co2.setLabel('CO2 concentration', units='ppm', color='w') # set label
-        self.set_axis_style(self.axis_co2, 'w') # set axis style
-        self.axis_co2.linkToView(self.viewbox_co2) # link axis to viewbox
+        self.axes[CO2_sensor] = AxisItem('right') # create fourth axis
+        self.plot.layout.addItem(self.axes[CO2_sensor], 2, 5) # add axis to plot
+        self.axes[CO2_sensor].setLabel('CO2 concentration', units='ppm', color='w') # set label
+        self.set_axis_style(self.axes[CO2_sensor], 'w') # set axis style
+        self.axes[CO2_sensor].linkToView(self.viewboxes[CO2_sensor]) # link axis to viewbox
 
         # RHTP viewbox
-        self.viewbox_rhtp = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox_rhtp) # add viewbox to scene
-        self.viewbox_rhtp.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[RHTP] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[RHTP]) # add viewbox to scene
+        self.viewboxes[RHTP].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # RHTP axis
-        self.axis_rhtp = AxisItem('right') # create fifth axis
-        self.plot.layout.addItem(self.axis_rhtp, 2, 6) # add axis to plot
-        self.axis_rhtp.setLabel('RHTP', color='w') # set label
-        self.set_axis_style(self.axis_rhtp, 'w') # set axis style
-        self.axis_rhtp.linkToView(self.viewbox_rhtp) # link axis to viewbox
+        self.axes[RHTP] = AxisItem('right') # create fifth axis
+        self.plot.layout.addItem(self.axes[RHTP], 2, 6) # add axis to plot
+        self.axes[RHTP].setLabel('RHTP', color='w') # set label
+        self.set_axis_style(self.axes[RHTP], 'w') # set axis style
+        self.axes[RHTP].linkToView(self.viewboxes[RHTP]) # link axis to viewbox
+
+        # AFM viewbox
+        self.viewboxes[AFM] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[AFM]) # add viewbox to scene
+        self.viewboxes[AFM].setXLink(self.plot)
+        # AFM axis
+        self.axes[AFM] = AxisItem('right') # create sixth axis
+        self.plot.layout.addItem(self.axes[AFM], 2, 7) # add axis to plot
+        self.axes[AFM].setLabel('AFM', color='w')
+        self.set_axis_style(self.axes[AFM], 'w')
+        self.axes[AFM].linkToView(self.viewboxes[AFM])
 
         # eDiluter viewbox
-        self.viewbox_ediluter = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox_ediluter) # add viewbox to scene
-        self.viewbox_ediluter.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[eDiluter] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[eDiluter]) # add viewbox to scene
+        self.viewboxes[eDiluter].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # eDiluter axis
-        self.axis_ediluter = AxisItem('right') # create axis
-        self.plot.layout.addItem(self.axis_ediluter, 2, 7) # add axis to plot
-        self.axis_ediluter.setLabel('eDiluter temperature', units='°C', color='w') # set label
-        self.set_axis_style(self.axis_ediluter, 'w') # set axis style
-        self.axis_ediluter.linkToView(self.viewbox_ediluter) # link axis to viewbox
+        self.axes[eDiluter] = AxisItem('right') # create axis
+        self.plot.layout.addItem(self.axes[eDiluter], 2, 8) # add axis to plot
+        self.axes[eDiluter].setLabel('eDiluter temperature', units='°C', color='w') # set label
+        self.set_axis_style(self.axes[eDiluter], 'w') # set axis style
+        self.axes[eDiluter].linkToView(self.viewboxes[eDiluter]) # link axis to viewbox
 
         # Example device viewbox
-        self.viewbox_test = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox_test) # add viewbox to scene
-        self.viewbox_test.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[Example_device] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[Example_device]) # add viewbox to scene
+        self.viewboxes[Example_device].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # Example device axis
-        self.axis_test = AxisItem('right') # create axis
-        self.plot.layout.addItem(self.axis_test, 2, 8) # add axis to plot
-        self.axis_test.setLabel('Example device', units='units', color='w') # set label
-        self.set_axis_style(self.axis_test, 'w') # set axis style
-        self.axis_test.linkToView(self.viewbox_test) # link axis to viewbox
-
-        # create list of viewboxes
-        self.viewboxes = [self.viewbox_cpc, self.viewbox_psm, self.viewbox_electrometer,
-                        self.viewbox_co2, self.viewbox_rhtp, self.viewbox_ediluter, self.viewbox_test]
-
-        # create list of axes
-        self.axes = [self.axis_cpc, self.axis_psm, self.axis_electrometer,
-                    self.axis_co2, self.axis_rhtp, self.axis_ediluter, self.axis_test]
+        self.axes[Example_device] = AxisItem('right') # create axis
+        self.plot.layout.addItem(self.axes[Example_device], 2, 9) # add axis to plot
+        self.axes[Example_device].setLabel('Example device', units='units', color='w') # set label
+        self.set_axis_style(self.axes[Example_device], 'w') # set axis style
+        self.axes[Example_device].linkToView(self.viewboxes[Example_device]) # link axis to viewbox
         
         # connect viewbox resize event to updateViews function
         self.plot.vb.sigResized.connect(self.updateViews)
@@ -2453,9 +2549,9 @@ class MainPlot(GraphicsLayoutWidget):
         self.updateViews()
 
         # hide axes and disable SI scaling by default
-        for axis in self.axes:
-            axis.hide()
-            axis.enableAutoSIPrefix(enable=False) # disable auto SI prefix
+        for key in self.axes:
+            self.axes[key].hide()
+            self.axes[key].enableAutoSIPrefix(enable=False) # disable auto SI prefix
         
         # use automatic downsampling and clipping to reduce the drawing load
         self.plot.setDownsampling(mode='peak')
@@ -2467,10 +2563,12 @@ class MainPlot(GraphicsLayoutWidget):
     # source: https://stackoverflow.com/questions/42931474/how-can-i-have-multiple-left-axisitems-with-the-same-alignment-position-using-py
     def updateViews(self):
         # set viewbox geometry to plot geometry
-        for viewbox in self.viewboxes[1:]: # exclude CPC viewbox
-            viewbox.setGeometry(self.plot.vb.sceneBoundingRect())
-            # update linked axes
-            viewbox.linkedViewChanged(self.plot.vb, viewbox.XAxis)
+        for viewbox in self.viewboxes.values():
+            # exclude CPC viewbox
+            if viewbox != self.viewboxes[CPC]:
+                viewbox.setGeometry(self.plot.vb.sceneBoundingRect())
+                # update linked axes
+                viewbox.linkedViewChanged(self.plot.vb, viewbox.XAxis)
     
     def set_axis_style(self, axis, color):
         axis.setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
@@ -2479,14 +2577,12 @@ class MainPlot(GraphicsLayoutWidget):
         axis.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
 
     def show_hide_axis(self, device_type, show):
-        if device_type == -1: # if Example device
-            axis = self.axes[-1]
-        elif device_type == PSM2:
-            axis = self.axes[1]
+        if device_type == PSM2:
+            axis = self.axes[PSM]
         elif device_type == TSI_CPC:
-            axis = self.axes[0]
+            axis = self.axes[CPC]
         else:
-            axis = self.axes[device_type - 1]
+            axis = self.axes[device_type]
         if show:
             axis.show() # show axis
         else:
@@ -2497,18 +2593,37 @@ class MainPlot(GraphicsLayoutWidget):
     def change_rhtp_axis(self, value):
         # TODO: only change axis if value differs from current axis
         if value == None:
-            self.axis_rhtp.setLabel('RHTP', units=None, color='w')
-            self.axis_rhtp.hide() # hide axis
+            self.axes[RHTP].setLabel('RHTP', units=None, color='w')
+            self.axes[RHTP].hide() # hide axis
         else:
             if value == "RH":
-                self.axis_rhtp.setLabel('RH', units='%', color='w')
+                self.axes[RHTP].setLabel('RHTP RH', units='%', color='w')
             elif value == "T":
-                self.axis_rhtp.setLabel('T', units='°C', color='w')
+                self.axes[RHTP].setLabel('RHTP T', units='°C', color='w')
             elif value == "P":
-                self.axis_rhtp.setLabel('P', units='Pa', color='w')
-            self.axis_rhtp.show() # show axis
+                self.axes[RHTP].setLabel('RHTP P', units='Pa', color='w')
+            self.axes[RHTP].show() # show axis
         # set axis style
-        self.set_axis_style(self.axis_rhtp, 'w')
+        self.set_axis_style(self.axes[RHTP], 'w')
+    
+    def change_afm_axis(self, value):
+        if value == None:
+            self.axes[AFM].setLabel('AFM', units=None, color='w')
+            self.axes[AFM].hide() # hide axis
+        else:
+            if value == "Flow":
+                self.axes[AFM].setLabel('AFM flow', units='lpm', color='w')
+            elif value == "Standard flow":
+                self.axes[AFM].setLabel('AFM standard flow', units='slpm', color='w')
+            elif value == "RH":
+                self.axes[AFM].setLabel('AFM RH', units='%', color='w')
+            elif value == "T":
+                self.axes[AFM].setLabel('AFM T', units='°C', color='w')
+            elif value == "P":
+                self.axes[AFM].setLabel('AFM P', units='Pa', color='w')
+            self.axes[AFM].show() # show axis
+        # set axis style
+        self.set_axis_style(self.axes[AFM], 'w')
         
 # triple plot widget containing three plots
 class TriplePlot(GraphicsLayoutWidget):
@@ -2600,6 +2715,97 @@ class TriplePlot(GraphicsLayoutWidget):
         axis.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
         axis.enableAutoSIPrefix(enable=False) # disable auto SI prefix
 
+class AFMPlot(GraphicsLayoutWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+        # define value names, units and colors
+        value_names = ["Flow", "Standard flow", "RH", "T", "P"]
+        unit_names = ["lpm", "slpm", "%", "°C", "Pa"]
+        colors = [(255,255,255), (255,100,255), (100,188,255), (255, 100, 100), (255, 255, 100)]
+
+        # create plot item and hide its default axes
+        self.plot = PlotItem()
+        self.plot.hideAxis('left')
+        self.plot.hideAxis('bottom')
+        # add plot to widget column 2, leave space for left axes
+        self.addItem(self.plot, row=0, col=2)
+
+        # create viewboxes for each axis
+        self.viewboxes = []
+        # store default viewbox
+        self.viewboxes.append(self.plot.getViewBox())
+        # create 4 additional viewboxes
+        for i in range(4):
+            viewbox = ViewBox() # create viewbox
+            self.plot.scene().addItem(viewbox) # add viewbox to scene
+            viewbox.setXLink(self.plot) # link x axis of viewbox to x axis of plot
+            self.viewboxes.append(viewbox) # store viewbox to list
+        
+        # create axes for each viewbox
+        self.axes = []
+        for i in range(2):
+            axis = AxisItem('left') # create left axis
+            self.axes.append(axis) # store axis to list
+            self.addItem(axis, row=0, col=i) # add axis to widget
+        for i in range(3):
+            axis = AxisItem('right') # create right axis
+            self.axes.append(axis) # store axis to list
+            self.addItem(axis, row=0, col=i+3) # add axis to widget, skip left axes and plot
+        
+        # link axes to viewboxes
+        for i in range(5):
+            self.axes[i].linkToView(self.viewboxes[i])
+        
+        # set axis labels and styles
+        for i in range(5):
+            # set label
+            self.axes[i].setLabel(value_names[i], units=unit_names[i], color=colors[i])
+            # set style
+            self.axes[i].setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
+            self.axes[i].setPen(colors[i])
+            self.axes[i].setTextPen(colors[i])
+            self.axes[i].label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
+            self.axes[i].enableAutoSIPrefix(enable=False) # disable auto SI prefix
+        
+        # create bottom time axis
+        self.axis_time = DateAxisItem('bottom')
+        # link time axis to viewbox
+        self.axis_time.linkToView(self.viewboxes[0])
+        # set botton axis label and style
+        self.axis_time.setLabel("Time")
+        self.axis_time.setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
+        self.axis_time.setPen('w')
+        self.axis_time.setTextPen('w')
+        self.axis_time.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
+        self.axis_time.enableAutoSIPrefix(enable=False) # disable auto SI prefix
+
+        # add bottom time axis to widget, same column as plot but on next row
+        self.addItem(self.axis_time, row=1, col=2)
+
+        # create curves for each viewbox
+        self.curves = []
+        for i in range(5):
+            curve = PlotCurveItem(pen=colors[i], connect="finite") # create curve
+            self.curves.append(curve) # store curve to list
+            self.viewboxes[i].addItem(curve) # add curve to viewbox
+        
+        # use automatic downsampling and clipping to reduce the drawing load
+        self.plot.setDownsampling(mode='peak')
+        self.plot.setClipToView(True)
+        
+        # connect viewbox resize event to updateViews function
+        self.plot.vb.sigResized.connect(self.updateViews)
+        # call updateViews function to set viewboxes to same size
+        self.updateViews()
+    
+    def updateViews(self):
+        # set viewbox geometry to plot geometry
+        for viewbox in self.viewboxes[1:]: # exclude first viewbox
+            viewbox.setGeometry(self.plot.vb.sceneBoundingRect())
+            # update linked axes
+            viewbox.linkedViewChanged(self.plot.vb, viewbox.XAxis)
+
 class ElectrometerPlot(GraphicsLayoutWidget):
     def __init__(self, *args, **kwargs):
         super().__init__()
@@ -2653,15 +2859,17 @@ class SinglePlot(GraphicsLayoutWidget):
         self.plot.setClipToView(True)
 
         # set y-axis label and units based on device type
-        if device_type == 1:
+        if device_type == CPC:
             self.plot.setLabel('left', "Concentration", units='#/cc')
-        if device_type == 2:
+        elif device_type == PSM:
             self.plot.setLabel('left', "Saturator flow", units='lpm')
-        elif device_type == 4:
+        elif device_type == CO2_sensor:
             self.plot.setLabel('left', "CO2", units='ppm')
-        elif device_type == 6:
+        elif device_type == eDiluter:
             self.plot.setLabel('left', "eDiluter temperature", units='°C')
-        elif device_type == -1:
+        elif device_type == AFM:
+            self.plot.setLabel('left', "Flow", units='lpm')
+        elif device_type == Example_device:
             self.plot.setLabel('left', "Example device", units='units')
         
         self.viewbox = self.plot.getViewBox() # store viewbox to variable
@@ -2679,7 +2887,7 @@ class CPCWidget(QTabWidget):
         self.status_tab = CPCStatusTab()
         self.addTab(self.status_tab, "Status")
         # create plot widget for Concentration
-        self.plot_tab = SinglePlot(device_type=1)
+        self.plot_tab = SinglePlot(device_type=CPC)
         self.addTab(self.plot_tab, "Concentration")
 
         # create list of widget references for updating gui with cpc system status
@@ -2783,7 +2991,7 @@ class PSMWidget(QTabWidget):
         self.measure_tab = PSMMeasureTab()
         self.addTab(self.measure_tab, "Measure")
         # create plot widget for PSM
-        self.plot_tab = SinglePlot(device_type=2)
+        self.plot_tab = SinglePlot(device_type=PSM)
         self.addTab(self.plot_tab, "PSM plot")
 
         # TODO check PSM 2.0 compatibility
@@ -3137,7 +3345,7 @@ class CO2Widget(QTabWidget):
         self.device_parameter = device_parameter # store device parameter tree reference
         self.name = device_parameter.name() # store device name
         # create plot widget for CO2
-        self.plot_tab = SinglePlot(device_type=4)
+        self.plot_tab = SinglePlot(device_type=CO2_sensor)
         self.addTab(self.plot_tab, "CO2 plot")
 
 # RHTP widget
@@ -3147,8 +3355,18 @@ class RHTPWidget(QTabWidget):
         self.device_parameter = device_parameter # store device parameter tree reference
         self.name = device_parameter.name() # store device name
         # create plot widget for RHTP
-        self.plot_tab = TriplePlot(device_type=5)
+        self.plot_tab = TriplePlot(device_type=RHTP)
         self.addTab(self.plot_tab, "RHTP plot")
+
+# AFM widget
+class AFMWidget(QTabWidget):
+    def __init__(self, device_parameter, *args, **kwargs):
+        super().__init__()
+        self.device_parameter = device_parameter # store device parameter tree reference
+        self.name = device_parameter.name() # store device name
+        # create plot widget for AFM
+        self.plot_tab = AFMPlot()
+        self.addTab(self.plot_tab, "AFM plot")
 
 # eDiluter widget
 class eDiluterWidget(QTabWidget):
@@ -3164,7 +3382,7 @@ class eDiluterWidget(QTabWidget):
         self.status_tab = eDiluterStatusTab()
         self.addTab(self.status_tab, "Status")
         # create plot widget for eDiluter
-        self.plot_tab = SinglePlot(device_type=6)
+        self.plot_tab = SinglePlot(device_type=eDiluter)
         self.addTab(self.plot_tab, "eDiluter plot")
         # create dictionary with mode names and corresponding widgets
         self.mode_dict = {"INIT": self.set_tab.init, "WARMUP": self.set_tab.warmup,
@@ -3206,7 +3424,7 @@ class TSIWidget(QTabWidget):
         self.device_parameter = device_parameter # store device parameter tree reference
         self.name = device_parameter.name() # store device name
         # create plot widget for TSI CPC
-        self.plot_tab = SinglePlot(device_type=1)
+        self.plot_tab = SinglePlot(device_type=CPC)
         self.addTab(self.plot_tab, "TSI CPC plot")
 
 # Example device widget
@@ -3216,7 +3434,7 @@ class ExampleDeviceWidget(QTabWidget):
         self.device_parameter = device_parameter # store device parameter tree reference
         self.name = device_parameter.name() # store device name
         # create plot widget for CO2
-        self.plot_tab = SinglePlot(device_type=-1)
+        self.plot_tab = SinglePlot(device_type=Example_device)
         self.addTab(self.plot_tab, "Example device plot")
 
 class eDiluterSetTab(QWidget):
