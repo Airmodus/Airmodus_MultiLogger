@@ -183,18 +183,24 @@ class ScalableGroup(parameterTypes.GroupParameter):
         # if added device is CPC, update cpc_dict
         if device_value in [CPC, TSI_CPC]:
             self.update_cpc_dict()
+            # if Airmodus CPC, add hidden 10 hz parameter
+            # when 10 hz is True, OPC concentration is polled
+            if device_value == CPC:
+                self.children()[-1].addChild({'name': '10 hz', 'type': 'bool', 'value': False, 'readonly': True, 'visible': True}) # TODO set visible to False after testing
 
-        # if added device is PSM, add option for 'Connected CPC'
+        # if added device is PSM, add hidden parameters and option for 'Connected CPC'
         if device_value in [PSM, PSM2]:
+            # if device is PSM Retrofit, add hidden CO flow parameter
+            if device_value == PSM:
+                self.children()[-1].addChild({'name': 'CO flow', 'type': 'str', 'visible': False})
+            # add hidden 10 hz parameter for storing 10 hz status for startup
+            self.children()[-1].addChild({'name': '10 hz', 'type': 'bool', 'value': False, 'readonly': True, 'visible': True}) # TODO set visible to False after testing
             # add options for connected CPC
             self.children()[-1].addChild({'name': 'Connected CPC', 'type': 'list', 'values': self.cpc_dict, 'value': 'None'})
             # add cpc_changed flag to device
             self.children()[-1].cpc_changed = False
             # connect value change signal of Connected CPC to update_cpc_changed slot
             self.children()[-1].child('Connected CPC').sigValueChanged.connect(self.update_cpc_changed)
-            # if device is PSM Retrofit, add hidden CO flow parameter
-            if device_value == PSM:
-                self.children()[-1].addChild({'name': 'CO flow', 'type': 'str', 'visible': False})
         
         # if added device is RHTP, add options for plotted value
         if device_value == RHTP:
@@ -1822,6 +1828,42 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.device_widgets[dev_id].set_tab.command_widget.update_text_box(str(e))
     
+    # change PSM's 10 Hz status and set up connected CPC if it exists
+    def ten_hz_clicked(self, psm_param, psm_widget):
+        device_id = psm_param.child('DevID').value()
+        status = psm_param.child('10 hz').value()
+        # if 10 hz is off, turn it on
+        if status == False:
+            # set 10 hz flag to True
+            psm_param.child('10 hz').setValue(True)
+            psm_widget.measure_tab.ten_hz.change_color(1)
+
+            # check if a connected CPC exists
+            if psm_param.child('Connected CPC').value() != 'None':
+                # check if connected CPC is Airmodus CPC and is connected
+                for cpc in self.params.child('Device settings').children():
+                    if cpc.child('DevID').value() == psm_param.child('Connected CPC').value():
+                        if cpc.child('Device type').value() == CPC: # and cpc.child('Connected').value():
+                            # set averaging time to 0.1 s and 10 hz parameter to True
+                            cpc.child('Connection').value().send_message(":SET:TAVG 0.1")
+                            cpc.child('10 hz').setValue(True)
+                            
+        # if 10 hz is on, turn it off
+        elif status == True:
+            # set 10 hz flag to False
+            psm_param.child('10 hz').setValue(False)
+            psm_widget.measure_tab.ten_hz.change_color(0)
+
+            # check if a connected CPC exists
+            if psm_param.child('Connected CPC').value() != 'None':
+                # check if connected CPC is Airmodus CPC and is connected
+                for cpc in self.params.child('Device settings').children():
+                    if cpc.child('DevID').value() == psm_param.child('Connected CPC').value():
+                        if cpc.child('Device type').value() == CPC: # and cpc.child('Connected').value():
+                            # set averaging time to 1 s and 10 hz parameter to False
+                            cpc.child('Connection').value().send_message(":SET:TAVG 1") # set averaging time to 1 s
+                            cpc.child('10 hz').setValue(False)
+    
     # compare current day to file start day (self.start_day defined in save_changed)
     def compare_day(self):
         # check if saving is on
@@ -1958,9 +2000,10 @@ class MainWindow(QMainWindow):
                 # if resume on startup is on, load the stored configuration
                 if resume_measurements:
                     self.load_configuration(json_path)
-        except:
+        except Exception as e:
             # If the file does not exist, raise an exception saying that the file does not exist
-            print("No ini file found")
+            #print("No ini file found")
+            print(traceback.format_exc())
         
     def save_configuration(self, json_path):
         # Get the parameter tree values
@@ -2027,6 +2070,14 @@ class MainWindow(QMainWindow):
                     param.setValue(values.get(param.name(), param.value()))
                     # Set CO flow value to related PSM widget
                     self.device_widgets[param.parent().child("DevID").value()].set_tab.set_co_flow.value_spinbox.setValue(round(float(param.value()), 3))
+                # Check if parameter name is 10 hz
+                elif param.name() == '10 hz':
+                    # Set the parameter value as usual
+                    param.setValue(values.get(param.name(), param.value()))
+                    # if device type is PSM or PSM2
+                    if param.parent().child('Device type').value() in [PSM, PSM2]:
+                        # Set 10 hz status (True/False) to ten_hz button
+                        self.device_widgets[param.parent().child("DevID").value()].measure_tab.ten_hz.change_color(int(values.get(param.name(), param.value())))
                 else:
                     # Set the parameter value as usual
                     param.setValue(values.get(param.name(), param.value()))
@@ -2246,6 +2297,8 @@ class MainWindow(QMainWindow):
                 widget.measure_tab.scan.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_scan()))
                 widget.measure_tab.step.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_step()))
                 widget.measure_tab.fixed.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_fixed()))
+                # connect ten_hz button to ten_hz_clicked function
+                widget.measure_tab.ten_hz.clicked.connect(lambda: self.ten_hz_clicked(device_param, widget))
                 # connect SetTab SetWidgets to send_set_val function and set settings update flag to True
                 # growth tube temperature set
                 widget.set_tab.set_growth_tube_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:GT "))
