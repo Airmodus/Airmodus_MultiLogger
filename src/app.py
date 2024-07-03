@@ -2283,8 +2283,18 @@ class MainWindow(QMainWindow):
                 widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_saturator_temp.value_input.text()), ":SET:TEMP:SAT "))
                 widget.set_tab.set_condenser_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:CON "))
                 widget.set_tab.set_condenser_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_condenser_temp.value_input.text()), ":SET:TEMP:CON "))
-                widget.set_tab.set_averaging_time.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TAVG "))
-                widget.set_tab.set_averaging_time.value_input.returnPressed.connect(lambda: connection.send_set_val(int(widget.set_tab.set_averaging_time.value_input.text()), ":SET:TAVG "))
+                #widget.set_tab.set_averaging_time.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TAVG "))
+                #widget.set_tab.set_averaging_time.value_input.returnPressed.connect(lambda: connection.send_set_val(int(widget.set_tab.set_averaging_time.value_input.text()), ":SET:TAVG "))
+
+                # Use integer formatting with times > 1 to preserve compatibility with older firmware
+                def send_averaging_time(value: float):
+                    output: float | int = value
+                    if value >= 1.0:
+                        output = round(value)
+                    connection.send_set_val(output, ":SET:TAVG ")
+
+                widget.set_tab.set_averaging_time.value_spinbox.stepChanged.connect(lambda value: send_averaging_time(value))
+                widget.set_tab.set_averaging_time.value_input.returnPressed.connect(lambda: send_averaging_time(float(widget.set_tab.set_averaging_time.value_input.text())))
 
             if device_type in [PSM, PSM2]: # if PSM TODO optimize structure, remove repetition
                 # create PSM widget instance
@@ -2994,8 +3004,8 @@ class CPCWidget(QTabWidget):
             # update value
             if str(settings[5]) == 'nan': # if nan, set to 0
                 self.set_tab.set_averaging_time.value_spinbox.setValue(0)
-            else: # else update value as int
-                self.set_tab.set_averaging_time.value_spinbox.setValue(int(settings[5]))
+            else: # else update value
+                self.set_tab.set_averaging_time.value_spinbox.setValue(settings[5])
             # if averaging time is nan, clear visible value
             if str(settings[5]) == 'nan':
                 self.set_tab.set_averaging_time.value_spinbox.clear()
@@ -3253,14 +3263,14 @@ class PSMMeasureTab(QWidget):
         self.set_max_flow = SetWidget("Maximum flow", " lpm")
         self.set_max_flow.value_spinbox.setValue(1.9)
         layout.addWidget(self.set_max_flow, 2, 0)
-        self.set_scan_time = SetWidget("Scan time", " s")
+        self.set_scan_time = SetWidget("Scan time", " s", integer=True)
         self.set_scan_time.value_spinbox.setValue(240)
         layout.addWidget(self.set_scan_time, 3, 0)
 
         # step mode widgets
         self.step = StartButton("Step")
         layout.addWidget(self.step, 0, 1)
-        self.step_time = SetWidget("Step time", " s")
+        self.step_time = SetWidget("Step time", " s", integer=True)
         self.step_time.value_spinbox.setValue(30)
         layout.addWidget(self.step_time, 1, 1)
         self.steps = StepsWidget()
@@ -3623,7 +3633,7 @@ class CommandWidget(QWidget):
 
 # used in CPCSetTab and PSMSetTab
 class SetWidget(QWidget):
-    def __init__(self, name, suffix, *args, **kwargs):
+    def __init__(self, name, suffix, *args, integer=False, **kwargs):
         super().__init__()
         layout = QVBoxLayout()
         font = self.font() # get current global font
@@ -3635,10 +3645,11 @@ class SetWidget(QWidget):
         name_label.setFont(font) # apply font to label
         layout.addWidget(name_label)
         # create normal / double spin box for setting value
-        if suffix == " s": # if suffix is s, use spin box (int)
+        self.is_integer = integer
+        if integer: # if value is integer, use spin box (int)
             self.value_spinbox = SpinBox(objectName="spin_box", maximum=9999)
             validator = QIntValidator() # create int validator
-        else: # if suffix is not seconds, use double spin box (float)
+        else: # if not integer, use double spin box (float)
             if "decimals" in kwargs: # if decimals are specified in kwargs
                 self.value_spinbox = DoubleSpinBox(objectName="double_spin_box", singleStep=0.1, maximum=9999, decimals=kwargs["decimals"])
             else:
@@ -3667,7 +3678,7 @@ class SetWidget(QWidget):
     def value_input_return_pressed(self):
         value = self.value_input.text()
         try:
-            if self.value_spinbox.suffix() == " s":
+            if self.is_integer:
                 self.value_spinbox.setValue(int(value))
             else:
                 self.value_spinbox.setValue(float(value))
