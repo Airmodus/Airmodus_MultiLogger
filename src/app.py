@@ -95,12 +95,14 @@ class SerialDeviceConnection():
             # print message if connection does not exist
             print("send_message - no connection, message -", message)
     
-    def send_multiple_messages(self, device_type):
+    def send_multiple_messages(self, device_type, ten_hz=False):
 
         if device_type == 1: # CPC
             self.send_message(":MEAS:ALL")
             QTimer.singleShot(100, lambda: self.send_message(":SYST:PRNT"))
             QTimer.singleShot(200, lambda: self.send_message(":SYST:PALL"))
+            if ten_hz:
+                QTimer.singleShot(300, lambda: self.send_message(":MEAS:OPC_CONC_LOG"))
         
         elif device_type == TSI_CPC: # TSI CPC
             self.send_message("RD") # read concentration
@@ -442,6 +444,7 @@ class MainWindow(QMainWindow):
     # delayed functions are launched after a short delay
     def delayed_functions(self):
         self.readIndata() # read and compile data from connected serial devices
+        self.ten_hz_check() # check and update 10 hz settings
         self.update_plot_data() # update plot data lists with latest data
         self.update_figures_and_menus() # update figures and menus
         self.compare_day() # check if day has changed and create new files if necessary
@@ -522,7 +525,10 @@ class MainWindow(QMainWindow):
 
                     if device_type in [CPC, TSI_CPC]: # CPC
                         # send multiple messages to device according to type
-                        dev.child('Connection').value().send_multiple_messages(device_type)
+                        if device_type == CPC and dev.child('10 hz').value() == True:
+                            dev.child('Connection').value().send_multiple_messages(device_type, ten_hz=True)
+                        else:
+                            dev.child('Connection').value().send_multiple_messages(device_type)
 
                     elif device_type in [PSM, PSM2]: # PSM
                         # if settings update flag is True, fetch set points from PSM and update GUI
@@ -1033,6 +1039,53 @@ class MainWindow(QMainWindow):
                 # TODO is this needed?
                 if dev.child('Device type').value() == CO2_sensor: # CO2 sensor
                     self.latest_data[dev.child('DevID').value()] = full(3, nan)
+
+    # check and update 10 hz settings
+    def ten_hz_check(self):
+        # go through devices
+        for dev in self.params.child('Device settings').children():
+
+            # if device is Airmodus CPC, set TAVG according to 10 hz parameter and check connection to PSM
+            if dev.child('Device type').value() == CPC:
+                # if 10 hz is on
+                if dev.child('10 hz').value() == True:
+                    # if device is connected
+                    if dev.child('Connected').value() == True:
+                        # if TAVG is not 0.1, set it to 0.1
+                        if self.latest_settings[dev.child('DevID').value()][0] != 0.1:
+                            dev.child('Connection').value().send_message(":SET:TAVG 0.1")
+                    # check if CPC is still connected to PSM with 10 hz on
+                    ten_hz_connected = False
+                    for psm in self.params.child('Device settings').children():
+                        if psm.child('Device type').value() in [PSM, PSM2]:
+                            if psm.child('Connected CPC').value() == dev.child('DevID').value():
+                                if psm.child('10 hz').value() == True:
+                                    ten_hz_connected = True
+                                    break
+                    # if CPC is not connected to PSM with 10 hz on, set 10 hz off
+                    if ten_hz_connected == False:
+                        dev.child('10 hz').setValue(False)
+                # if 10 hz is off
+                else:
+                    # if device is connected
+                    if dev.child('Connected').value() == True:
+                        # if TAVG is smaller than 1, set it to 1
+                        if self.latest_settings[dev.child('DevID').value()][0] < 1:
+                            dev.child('Connection').value().send_message(":SET:TAVG 1")
+            
+            # if device is PSM and 10 hz is on, check if connected CPC has 10 hz on
+            elif dev.child('Device type').value() in [PSM, PSM2]:
+                if dev.child('10 hz').value() == True:
+                    # if a connected CPC exists
+                    if dev.child('Connected CPC').value() != 'None':
+                        for cpc in self.params.child('Device settings').children():
+                            if cpc.child('DevID').value() == dev.child('Connected CPC').value():
+                                # check if connected CPC is Airmodus CPC
+                                if cpc.child('Device type').value() == CPC:
+                                    # if connected CPC has 10 hz off, set it on
+                                    if cpc.child('10 hz').value() == False:
+                                        cpc.child('10 hz').setValue(True)
+                                break      
     
     # update plot data lists
     def update_plot_data(self):
@@ -1830,39 +1883,34 @@ class MainWindow(QMainWindow):
     
     # change PSM's 10 Hz status and set up connected CPC if it exists
     def ten_hz_clicked(self, psm_param, psm_widget):
-        device_id = psm_param.child('DevID').value()
+        # get current status of PSM 10 hz parameter
         status = psm_param.child('10 hz').value()
         # if 10 hz is off, turn it on
         if status == False:
             # set 10 hz flag to True
             psm_param.child('10 hz').setValue(True)
             psm_widget.measure_tab.ten_hz.change_color(1)
-
-            # check if a connected CPC exists
-            if psm_param.child('Connected CPC').value() != 'None':
-                # check if connected CPC is Airmodus CPC and is connected
-                for cpc in self.params.child('Device settings').children():
-                    if cpc.child('DevID').value() == psm_param.child('Connected CPC').value():
-                        if cpc.child('Device type').value() == CPC: # and cpc.child('Connected').value():
-                            # set averaging time to 0.1 s and 10 hz parameter to True
-                            cpc.child('Connection').value().send_message(":SET:TAVG 0.1")
-                            cpc.child('10 hz').setValue(True)
-                            
+            # # check if a connected CPC exists
+            # if psm_param.child('Connected CPC').value() != 'None':
+            #     # check if connected CPC is Airmodus CPC
+            #     for cpc in self.params.child('Device settings').children():
+            #         if cpc.child('DevID').value() == psm_param.child('Connected CPC').value():
+            #             if cpc.child('Device type').value() == CPC:
+            #                 # set 10 hz parameter to True
+            #                 cpc.child('10 hz').setValue(True)         
         # if 10 hz is on, turn it off
         elif status == True:
             # set 10 hz flag to False
             psm_param.child('10 hz').setValue(False)
             psm_widget.measure_tab.ten_hz.change_color(0)
-
-            # check if a connected CPC exists
-            if psm_param.child('Connected CPC').value() != 'None':
-                # check if connected CPC is Airmodus CPC and is connected
-                for cpc in self.params.child('Device settings').children():
-                    if cpc.child('DevID').value() == psm_param.child('Connected CPC').value():
-                        if cpc.child('Device type').value() == CPC: # and cpc.child('Connected').value():
-                            # set averaging time to 1 s and 10 hz parameter to False
-                            cpc.child('Connection').value().send_message(":SET:TAVG 1") # set averaging time to 1 s
-                            cpc.child('10 hz').setValue(False)
+            # # check if a connected CPC exists
+            # if psm_param.child('Connected CPC').value() != 'None':
+            #     # check if connected CPC is Airmodus CPC
+            #     for cpc in self.params.child('Device settings').children():
+            #         if cpc.child('DevID').value() == psm_param.child('Connected CPC').value():
+            #             if cpc.child('Device type').value() == CPC:
+            #                 # set 10 hz parameter to False
+            #                 cpc.child('10 hz').setValue(False)
     
     # compare current day to file start day (self.start_day defined in save_changed)
     def compare_day(self):
