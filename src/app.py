@@ -1720,7 +1720,7 @@ class MainWindow(QMainWindow):
     # compile settings list for CPC .par file
     def compile_cpc_settings(self, prnt, pall):
         cpc_settings = [
-            int(prnt[5]), pall[24], prnt[10], # averaging time, nominal inlet flow rate, measured cpc flow rate
+            prnt[5], pall[24], prnt[10], # averaging time, nominal inlet flow rate, measured cpc flow rate
             prnt[8], prnt[6], prnt[7], # temperature set points: saturator, condenser, optics
             int(prnt[1]), pall[26], pall[27], int(prnt[4]), # autofill, OPC counter threshold voltage, OPC counter threshold voltage 2, water removal
             prnt[12], int(prnt[2]), pall[20], pall[25] # dead time correction, drain, k-factor, tau
