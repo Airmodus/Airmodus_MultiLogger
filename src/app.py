@@ -343,6 +343,7 @@ class MainWindow(QMainWindow):
         self.latest_psm_prnt = {} # contains latest PSM prnt values
         self.latest_poly_correction = {} # contains latest polynomial correction values from PSM
         self.latest_command = {} # contains latest user entered command message
+        self.latest_ten_hz = {} # contains latest 10 hz OPC concentration log values
         self.extra_data = {} # contains extra data, used when multiple data prints are received at once
         # plot related
         self.plot_data = {} # contains plotted values
@@ -355,6 +356,7 @@ class MainWindow(QMainWindow):
         # filenames
         self.dat_filenames = {} # contains filenames of .dat files
         self.par_filenames = {} # contains filenames of .par files (CPC and PSM)
+        self.ten_hz_filenames = {} # contains filenames of 10 hz OPC concentration log files (CPC)
         # flags
         self.par_updates = {} # contains .par update flags: 1 = update, 0 = no update
         self.psm_settings_updates = {} # contains PSM settings update flags: 1 = update, 0 = no update
@@ -574,6 +576,9 @@ class MainWindow(QMainWindow):
                     meas_list = full(16, nan)
                     prnt_list = full(13, nan)
                     pall_list = full(28, nan)
+                    # if 10 hz is True, create nan list for 10 hz data
+                    if dev.child('10 hz').value() == True:
+                        self.latest_ten_hz[dev.child('DevID').value()] = full(10, nan)
 
                     try:
                         readings = dev.child('Connection').value().connection.read_all()
@@ -608,6 +613,11 @@ class MainWindow(QMainWindow):
                                 data[22] = "NaN" # set device id and firmware variant letter to NaN before float conversion
                                 data[23] = "NaN" # TODO store device id and firmware variant letter somewhere
                                 pall_list = list(map(float,data))
+                            
+                            elif command == ":MEAS:OPC_CONC_LOG":
+                                print("OPC_CONC_LOG", data) # TODO remove after testing
+                                del data[0] # remove first item (timestamp)
+                                self.latest_ten_hz[dev.child('DevID').value()] = data # store data to latest_ten_hz dictionary
                             
                             elif command == ":STAT:SELF:LOG":
                                 self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box(message_string)
@@ -1549,6 +1559,35 @@ class MainWindow(QMainWindow):
                                 with open(self.filePath + filename ,"w",encoding='UTF-8'):
                                     pass
                                 self.par_updates[dev.child('DevID').value()] = 1 # set .par update flag, ensuring new .par file is updated at start
+                        
+                        # check if device is Airmodus CPC and 10hz parameter is on
+                        if dev.child('Device type').value() == CPC and dev.child('10 hz').value():
+                            # if device is not in ten_hz_filenames dict, create .csv file and add filename to ten_hz_filenames
+                            if dev_id not in self.ten_hz_filenames:
+                                # format timestamp for filename
+                                timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
+                                # get device name from device settings
+                                device_name = dev.child('Device name').value()
+                                # get serial number from device settings
+                                serial_number = dev.child('Serial number').value()
+                                # if serial number is not empty, add underscore to beginning
+                                if serial_number != "":
+                                    serial_number = '_' + serial_number
+                                # get file tag from data settings
+                                file_tag = self.params.child('Measurement status').child('Data settings').child('File tag').value()
+                                # if file tag is not empty, add underscore to beginning
+                                if file_tag != "":
+                                    file_tag = '_' + file_tag
+                                # compile filename and add to ten_hz_filenames
+                                if osx_mode:
+                                    filename = '/' + timestamp_file + serial_number + '_' + device_name + '_10hz' + file_tag + '.csv'
+                                else:
+                                    filename = '\\' + timestamp_file + serial_number + '_' + device_name + '_10hz' + file_tag + '.csv'
+                                self.ten_hz_filenames[dev_id] = filename
+                                # create file and write header
+                                with open(self.filePath + filename ,"w",encoding='UTF-8') as file:
+                                    # write header
+                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration 1 (#/cc),Concentration 2 (#/cc),Concentration 3 (#/cc),Concentration 4 (#/cc),Concentration 5 (#/cc),Concentration 6 (#/cc),Concentration 7 (#/cc),Concentration 8 (#/cc),Concentration 9 (#/cc),Concentration 10 (#/cc)')
                             
                         # get filename from dictionary and add path to front
                         filename = self.filePath + self.dat_filenames[dev_id]
@@ -1696,6 +1735,21 @@ class MainWindow(QMainWindow):
                                     if dev_id in self.latest_command:
                                         # write latest command to file and remove from dictionary
                                         file.write(',' + self.latest_command.pop(dev_id))
+                        
+                        # check if device is Airmodus CPC and 10hz parameter is on
+                        if dev.child('Device type').value() == CPC and dev.child('10 hz').value():
+                            # check if device is in latest_ten_hz dictionary
+                            if dev_id in self.latest_ten_hz:
+                                # get filename from dictionary and add path to front
+                                filename = self.filePath + self.ten_hz_filenames[dev_id]
+                                # append file with new data
+                                with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
+                                    file.write("\n")
+                                    # Add timestamp
+                                    file.write(timeStampStr+',')
+                                    # Convert data to string
+                                    write_data = ','.join(str(vals) for vals in self.latest_ten_hz[dev_id])
+                                    file.write(write_data)
 
                     # if saving fails, set saving status to 0
                     except Exception as e:
@@ -1738,6 +1792,7 @@ class MainWindow(QMainWindow):
     def reset_filenames(self):
         self.dat_filenames = {}
         self.par_filenames = {}
+        self.ten_hz_filenames = {}
         self.par_updates = {}
     
     # remove specific device from filename dictionaries, results in new files being created
@@ -1748,6 +1803,8 @@ class MainWindow(QMainWindow):
             self.par_filenames.pop(dev_id)
         if dev_id in self.par_updates:
             self.par_updates.pop(dev_id)
+        if dev_id in self.ten_hz_filenames:
+            self.ten_hz_filenames.pop(dev_id)
 
     # compile data list for CPC .dat file
     def compile_cpc_data(self, meas, status_hex, total_errors):
@@ -1881,7 +1938,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.device_widgets[dev_id].set_tab.command_widget.update_text_box(str(e))
     
-    # change PSM's 10 Hz status and set up connected CPC if it exists
+    # change PSM's 10 Hz parameter and button status
     def ten_hz_clicked(self, psm_param, psm_widget):
         # get current status of PSM 10 hz parameter
         status = psm_param.child('10 hz').value()
@@ -1889,28 +1946,12 @@ class MainWindow(QMainWindow):
         if status == False:
             # set 10 hz flag to True
             psm_param.child('10 hz').setValue(True)
-            psm_widget.measure_tab.ten_hz.change_color(1)
-            # # check if a connected CPC exists
-            # if psm_param.child('Connected CPC').value() != 'None':
-            #     # check if connected CPC is Airmodus CPC
-            #     for cpc in self.params.child('Device settings').children():
-            #         if cpc.child('DevID').value() == psm_param.child('Connected CPC').value():
-            #             if cpc.child('Device type').value() == CPC:
-            #                 # set 10 hz parameter to True
-            #                 cpc.child('10 hz').setValue(True)         
+            psm_widget.measure_tab.ten_hz.change_color(1)       
         # if 10 hz is on, turn it off
         elif status == True:
             # set 10 hz flag to False
             psm_param.child('10 hz').setValue(False)
             psm_widget.measure_tab.ten_hz.change_color(0)
-            # # check if a connected CPC exists
-            # if psm_param.child('Connected CPC').value() != 'None':
-            #     # check if connected CPC is Airmodus CPC
-            #     for cpc in self.params.child('Device settings').children():
-            #         if cpc.child('DevID').value() == psm_param.child('Connected CPC').value():
-            #             if cpc.child('Device type').value() == CPC:
-            #                 # set 10 hz parameter to False
-            #                 cpc.child('10 hz').setValue(False)
     
     # compare current day to file start day (self.start_day defined in save_changed)
     def compare_day(self):
@@ -2506,11 +2547,15 @@ class MainWindow(QMainWindow):
             except AttributeError:
                 pass
             # set empty data to curve_dict (remove curve from Main plot)
-            self.curve_dict[device_id].setData(x=[], y=[])
+            try:
+                self.curve_dict[device_id].setData(x=[], y=[])
+            except KeyError:
+                pass
             # remove device from all device related dictionaries
-            for dictionary in [self.latest_data, self.latest_settings, self.latest_psm_prnt, self.latest_poly_correction, self.extra_data, # data
+            for dictionary in [self.latest_data, self.latest_settings, self.latest_psm_prnt, # data
+                self.latest_poly_correction, self.latest_ten_hz, self.extra_data, # data
                 self.plot_data, self.curve_dict, self.start_times, self.device_widgets, # plots and widgets
-                self.dat_filenames, self.par_filenames, # filenames
+                self.dat_filenames, self.par_filenames, self.ten_hz_filenames, # filenames
                 self.par_updates, self.psm_settings_updates, self.device_errors]: # flags
                 try:
                     del dictionary[device_id]
