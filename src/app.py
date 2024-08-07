@@ -441,7 +441,7 @@ class MainWindow(QMainWindow):
         if self.first_connection: # if first connection has been made
             self.get_dev_data() # send read commands to connected serial devices
             # launch delayed_functions after specified ms (orig. 350 ms)
-            QTimer.singleShot(400, self.delayed_functions)
+            QTimer.singleShot(500, self.delayed_functions) # changed from 400 to 500
 
     # delayed functions are launched after a short delay
     def delayed_functions(self):
@@ -642,7 +642,7 @@ class MainWindow(QMainWindow):
 
                             else: # print these to command widget text box
                                 self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box(message_string)
-                                logging.warning("readIndata - unknown command: %s", command)
+                                #logging.warning("readIndata - unknown command: %s", command)
 
                     except Exception as e: # if reading fails, print error message
                         print(traceback.format_exc())
