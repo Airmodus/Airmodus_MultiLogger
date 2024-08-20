@@ -8,7 +8,7 @@ import random
 import traceback
 import json
 
-from numpy import full, nan, array, polyval, array_equal
+from numpy import full, nan, array, polyval, array_equal, isnan
 from serial import Serial
 from serial.tools import list_ports
 from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
@@ -572,18 +572,31 @@ class MainWindow(QMainWindow):
         for dev in self.params.child('Device settings').children():
             # if device is connected
             if dev.child('Connected').value():
+                # store device ID for convenience
+                dev_id = dev.child('DevID').value()
 
                 if dev.child('Device type').value() == CPC: # CPC
 
-                    # start with nan lists to avoid false values in case lists cannot be updated
-                    # TODO create nan lists in init function and assign here from there
-                    self.latest_data[dev.child('DevID').value()] = full(14, nan)
-                    meas_list = full(16, nan)
-                    prnt_list = full(13, nan)
-                    pall_list = full(28, nan)
-                    # if 10 hz is True, create nan list for 10 hz data
+                    # check if there's data from last round in extra_data dictionary
+                    # if no extra data, start with nan lists
+                    if dev_id in self.extra_data:
+                        self.latest_data[dev_id] = self.extra_data.pop(dev_id)
+                    else:
+                        self.latest_data[dev_id] = full(14, nan)
+                    if str(dev_id)+":prnt" in self.extra_data:
+                        prnt_list = self.extra_data.pop(str(dev_id)+":prnt")
+                    else:
+                        prnt_list = full(13, nan)
+                    if str(dev_id)+":pall" in self.extra_data:
+                        pall_list = self.extra_data.pop(str(dev_id)+":pall")
+                    else:
+                        pall_list = full(28, nan)
+                    # if 10 hz is True, initialize 10 hz data with extra data or nan list
                     if dev.child('10 hz').value() == True:
-                        self.latest_ten_hz[dev.child('DevID').value()] = full(10, nan)
+                        if str(dev_id)+":10hz" in self.extra_data:
+                            self.latest_ten_hz[dev_id] = self.extra_data.pop(str(dev_id)+":10hz")
+                        else:
+                            self.latest_ten_hz[dev_id] = full(10, nan)
 
                     try:
                         readings = dev.child('Connection').value().connection.read_all()
@@ -599,46 +612,62 @@ class MainWindow(QMainWindow):
                                 status_hex = data[-1] # store status hex value
 
                                 # update widget error colors and store total errors
-                                total_errors = self.device_widgets[dev.child('DevID').value()].update_errors(status_hex)
+                                total_errors = self.device_widgets[dev_id].update_errors(status_hex)
                                 
                                 # set error_status flag if total errors is not 0
                                 if total_errors != 0:
                                     self.error_status = 1
                                     # set device error flag
-                                    self.set_device_error(dev.child('DevID').value(), True)
+                                    self.set_device_error(dev_id, True)
 
                                 meas_list = list(map(float,data[:-1])) # convert to float without status hex
                                 # compile data list
-                                self.latest_data[dev.child('DevID').value()] = self.compile_cpc_data(meas_list, status_hex, total_errors)
+                                # if latest_data is nan, store data normally
+                                if isnan(self.latest_data[dev_id][0]):
+                                    self.latest_data[dev_id] = self.compile_cpc_data(meas_list, status_hex, total_errors)
+                                else: # if not nan, store data to extra_data dictionary
+                                    self.extra_data[dev_id] = self.compile_cpc_data(meas_list, status_hex, total_errors)
 
                             elif command == ":SYST:PRNT":
-                                prnt_list = list(map(float,data)) # convert to float
+                                # if prnt_list is nan, store data normally
+                                if isnan(prnt_list[0]):
+                                    prnt_list = list(map(float,data)) # convert to float
+                                else: # if not nan, store data to extra_data dictionary
+                                    self.extra_data[str(dev_id)+":prnt"] = list(map(float,data))
 
                             elif command == ":SYST:PALL":
                                 data[22] = "NaN" # set device id and firmware variant letter to NaN before float conversion
                                 data[23] = "NaN" # TODO store device id and firmware variant letter somewhere
-                                pall_list = list(map(float,data))
+                                # if pall_list is nan, store data normally
+                                if isnan(pall_list[0]): # TODO make sure this value (inlet press lower limit) is never nan in valid data
+                                    pall_list = list(map(float,data))
+                                else: # if not nan, store data to extra_data dictionary
+                                    self.extra_data[str(dev_id)+":pall"] = list(map(float,data))
                             
                             elif command == ":MEAS:OPC_CONC_LOG":
                                 print("OPC_CONC_LOG", data) # TODO remove after testing
                                 del data[0] # remove first item (timestamp)
-                                self.latest_ten_hz[dev.child('DevID').value()] = data # store data to latest_ten_hz dictionary
+                                # if latest_ten_hz is nan, store data normally
+                                if isnan(self.latest_ten_hz[dev_id][0]):
+                                    self.latest_ten_hz[dev_id] = data
+                                else: # if not nan, store data to extra_data dictionary
+                                    self.extra_data[str(dev_id)+":10hz"] = data
                             
                             elif command == ":STAT:SELF:LOG":
-                                self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box(message_string)
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 # TODO make sure largest error index in firmware is 28
                                 status_bin = bin(int(data[0], 16)) # convert hex to int and int to binary
                                 status_bin = status_bin[2:].zfill(28) # remove 0b from string and fill with 0s to make 28 digits
                                 # print self test error binary
-                                self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
                                 # print error indices
                                 for i in range(28): # loop through binary digits
                                     bit_index = 27 - i # this should match the indices or errors in manual
                                     if status_bin[i] == "1":
-                                        self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box("self test error bit index: " + str(bit_index))
+                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(bit_index))
                             
                             elif command == "*IDN":
-                                self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box(message_string)
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 serial_number = data[0]
                                 serial_number = serial_number.strip("\n")
                                 serial_number = serial_number.strip("\r")
@@ -646,7 +675,7 @@ class MainWindow(QMainWindow):
                                     dev.child('Serial number').setValue(serial_number)
 
                             else: # print these to command widget text box
-                                self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box(message_string)
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 #logging.warning("readIndata - unknown command: %s", command)
 
                     except Exception as e: # if reading fails, print error message
@@ -654,9 +683,9 @@ class MainWindow(QMainWindow):
                         logging.exception(e)
                     
                     # update CPC widget data values
-                    self.device_widgets[dev.child('DevID').value()].update_values(self.latest_data[dev.child('DevID').value()])
+                    self.device_widgets[dev_id].update_values(self.latest_data[dev_id])
                     # update CPC widget set values
-                    self.device_widgets[dev.child('DevID').value()].update_settings(prnt_list)
+                    self.device_widgets[dev_id].update_settings(prnt_list)
 
                     # set settings update flag if both lists are successfully read
                     if str(prnt_list[0]) != "nan" and str(pall_list[0]) != "nan": # if both lists are not nan (checks first item only)
@@ -668,34 +697,34 @@ class MainWindow(QMainWindow):
                     if settings_update == True: # if settings are valid, not nan
                         
                         # if device doesn't yet exist in latest_settings dictionary, add as nan list
-                        if dev.child('DevID').value() not in self.latest_settings:
-                            self.latest_settings[dev.child('DevID').value()] = full(13, nan)
+                        if dev_id not in self.latest_settings:
+                            self.latest_settings[dev_id] = full(13, nan)
                         
                         # get previous settings form latest_settings dictionary
-                        previous_settings = self.latest_settings[dev.child('DevID').value()]
+                        previous_settings = self.latest_settings[dev_id]
                         # compile settings list
                         settings = self.compile_cpc_settings(prnt_list, pall_list)
 
                         if not array_equal(settings, previous_settings, equal_nan=True): # if values have changed
                             # update latest settings
-                            self.latest_settings[dev.child('DevID').value()] = settings
+                            self.latest_settings[dev_id] = settings
                             # set .par update flag
-                            self.par_updates[dev.child('DevID').value()] = 1
+                            self.par_updates[dev_id] = 1
                         else:
                             # clear .par update flag
-                            self.par_updates[dev.child('DevID').value()] = 0
+                            self.par_updates[dev_id] = 0
                     
                     else: # if settings are not valid, clear .par update flag
-                        self.par_updates[dev.child('DevID').value()] = 0
+                        self.par_updates[dev_id] = 0
                 
                 if dev.child('Device type').value() in [PSM, PSM2]: # PSM
                     
                     # if device doesn't yet exist in latest_data dictionary, add as nan list
-                    if dev.child('DevID').value() not in self.latest_data:
-                        self.latest_data[dev.child('DevID').value()] = full(31, nan)
+                    if dev_id not in self.latest_data:
+                        self.latest_data[dev_id] = full(31, nan)
 
                     # clear par update flag
-                    self.par_updates[dev.child('DevID').value()] = 0
+                    self.par_updates[dev_id] = 0
 
                     # set settings_fetched flag to False
                     # flag is set to True when settings are successfully fetched
@@ -720,47 +749,47 @@ class MainWindow(QMainWindow):
                             if command == ":MEAS:SCAN" or command == ":MEAS:STEP" or command == ":MEAS:FIXD":
                                 
                                 # update PSM widget data values in GUI
-                                self.device_widgets[dev.child('DevID').value()].update_values(data)
+                                self.device_widgets[dev_id].update_values(data)
                                 # update active measure mode color
-                                self.device_widgets[dev.child('DevID').value()].measure_tab.change_mode_color(command)
+                                self.device_widgets[dev_id].measure_tab.change_mode_color(command)
                                 # status hex handling
                                 status_hex = data[-2]
                                 try:
                                     # update widget errors colors
-                                    total_errors = self.device_widgets[dev.child('DevID').value()].update_errors(status_hex)
+                                    total_errors = self.device_widgets[dev_id].update_errors(status_hex)
                                     # set error_status flag if total errors is not 0
                                     if total_errors != 0:
                                         self.error_status = 1
                                         # set device error flag
-                                        self.set_device_error(dev.child('DevID').value(), True)
+                                        self.set_device_error(dev_id, True)
                                 except Exception as e:
                                     print(traceback.format_exc())
                                     logging.exception(e)
                                 # note hex handling
                                 note_hex = data[-1]
                                 # update widget liquid states with note hex, get liquid sets in return
-                                liquid_sets = self.device_widgets[dev.child('DevID').value()].update_notes(note_hex)
+                                liquid_sets = self.device_widgets[dev_id].update_notes(note_hex)
                                 # store polynomial correction value as float to dictionary
-                                self.latest_poly_correction[dev.child('DevID').value()] = float(data[14])
+                                self.latest_poly_correction[dev_id] = float(data[14])
                                 
                                 # compile and store psm data to latest data dictionary with device id as key
                                 if dev.child('Device type').value() == PSM: # PSM
-                                    self.latest_data[dev.child('DevID').value()] = self.compile_psm_data(data, status_hex, note_hex, psm_version=1)
+                                    self.latest_data[dev_id] = self.compile_psm_data(data, status_hex, note_hex, psm_version=1)
                                 elif dev.child('Device type').value() == PSM2: # PSM2
-                                    self.latest_data[dev.child('DevID').value()] = self.compile_psm_data(data, status_hex, note_hex, psm_version=2)
+                                    self.latest_data[dev_id] = self.compile_psm_data(data, status_hex, note_hex, psm_version=2)
                             
                             elif command == ":SYST:PRNT":
                                 # update GUI set points
-                                self.device_widgets[dev.child('DevID').value()].update_settings(data)
+                                self.device_widgets[dev_id].update_settings(data)
                                 # store settings to latest PSM prnt dictionary with device id as key
-                                self.latest_psm_prnt[dev.child('DevID').value()] = data
+                                self.latest_psm_prnt[dev_id] = data
                                 # print settings to command widget text box
-                                self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box(message_string)
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 # set settings_fetched flag to True
                                 settings_fetched = True
                             
                             elif command == "*IDN":
-                                self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box(message_string)
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 serial_number = data[0]
                                 serial_number = serial_number.strip("\n")
                                 serial_number = serial_number.strip("\r")
@@ -768,36 +797,36 @@ class MainWindow(QMainWindow):
                                     dev.child('Serial number').setValue(serial_number)
                             
                             else: # print other messages to command widget text box
-                                self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box(message_string)
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
 
                     except Exception as e: # if reading fails, store nan values to latest_data
                         print(traceback.format_exc())
-                        self.latest_data[dev.child('DevID').value()] = full(31, nan) # TODO determine amount of data items
+                        self.latest_data[dev_id] = full(31, nan) # TODO determine amount of data items
                         logging.exception(e)
                         # update widget error colors
-                        self.device_widgets[dev.child('DevID').value()].measure_tab.scan.change_color(0)
-                        self.device_widgets[dev.child('DevID').value()].measure_tab.step.change_color(0)
-                        self.device_widgets[dev.child('DevID').value()].measure_tab.fixed.change_color(0)
+                        self.device_widgets[dev_id].measure_tab.scan.change_color(0)
+                        self.device_widgets[dev_id].measure_tab.step.change_color(0)
+                        self.device_widgets[dev_id].measure_tab.fixed.change_color(0)
                     
                     # compile settings list if update flag is True and settings_fetched is True
-                    if self.psm_settings_updates[dev.child('DevID').value()] == True and settings_fetched == True:
+                    if self.psm_settings_updates[dev_id] == True and settings_fetched == True:
                         try:
                             if dev.child('Device type').value() == PSM:
                                 # get CO flow rate from PSM widget
-                                co_flow = round(self.device_widgets[dev.child('DevID').value()].set_tab.set_co_flow.value_spinbox.value(), 3)
+                                co_flow = round(self.device_widgets[dev_id].set_tab.set_co_flow.value_spinbox.value(), 3)
                                 psm_version = 1
                             elif dev.child('Device type').value() == PSM2:
                                 # set nan as placeholder
                                 co_flow = "nan"
                                 psm_version = 2
                             # compile settings with latest PSM prnt settings and CO flow rate
-                            settings = self.compile_psm_settings(self.latest_psm_prnt[dev.child('DevID').value()], co_flow, psm_version)
+                            settings = self.compile_psm_settings(self.latest_psm_prnt[dev_id], co_flow, psm_version)
                             # store settings to latest settings dictionary with device id as key
-                            self.latest_settings[dev.child('DevID').value()] = settings
+                            self.latest_settings[dev_id] = settings
                             # add par update flag
-                            self.par_updates[dev.child('DevID').value()] = 1
+                            self.par_updates[dev_id] = 1
                             # remove update settings flag once settings have been updated and compiled
-                            self.psm_settings_updates[dev.child('DevID').value()] = False
+                            self.psm_settings_updates[dev_id] = False
                         except Exception as e:
                             print(traceback.format_exc())
                             logging.exception(e)
@@ -807,10 +836,10 @@ class MainWindow(QMainWindow):
                         readings = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
                         readings = list(map(float,readings.split(";")))
                         # store to latest_data dictionary with device id as key
-                        self.latest_data[dev.child('DevID').value()] = readings
+                        self.latest_data[dev_id] = readings
                     except Exception as e: # if reading fails, store nan values to latest_data
                         print(traceback.format_exc())
-                        self.latest_data[dev.child('DevID').value()] = full(3, nan)
+                        self.latest_data[dev_id] = full(3, nan)
                         logging.exception(e)
 
                 if dev.child('Device type').value() == CO2_sensor: # CO2 sensor TODO make CO2 process similar to RHTP?
@@ -830,7 +859,7 @@ class MainWindow(QMainWindow):
                                         serial_number = serial_number.strip("\r")
                                         dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
                             # store nan values to latest_data
-                            self.latest_data[dev.child('DevID').value()] = full(3, nan)
+                            self.latest_data[dev_id] = full(3, nan)
 
                         # if Serial number has been acquired, read data normally
                         else:
@@ -839,13 +868,13 @@ class MainWindow(QMainWindow):
                             readings = list(map(float,readings.split(";")))
                             if readings[0] != 0: # if data is something else than 0
                                 # store to latest_data dictionary with device id as key
-                                self.latest_data[dev.child('DevID').value()] = readings
+                                self.latest_data[dev_id] = readings
                             else: # if data is 0, not valid
-                                self.latest_data[dev.child('DevID').value()] = full(3, nan)
+                                self.latest_data[dev_id] = full(3, nan)
 
                     except Exception as e: # if reading fails, store nan values to latest_data
                         print(traceback.format_exc())
-                        self.latest_data[dev.child('DevID').value()] = full(3, nan)
+                        self.latest_data[dev_id] = full(3, nan)
                         logging.exception(e)
                 
                 if dev.child('Device type').value() == RHTP: # RHTP
@@ -865,7 +894,7 @@ class MainWindow(QMainWindow):
                                         serial_number = serial_number.strip("\r")
                                         dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
                             # store nan values to latest_data
-                            self.latest_data[dev.child('DevID').value()] = full(3, nan)
+                            self.latest_data[dev_id] = full(3, nan)
                         
                         # if Serial number has been acquired, read data normally
                         else:
@@ -895,14 +924,14 @@ class MainWindow(QMainWindow):
                             # check if data is valid and store to latest_data dictionary
                             if float(readings[0]) != 0: # if data is valid, not 0
                                 # store data to latest_data
-                                self.latest_data[dev.child('DevID').value()] = readings
+                                self.latest_data[dev_id] = readings
                             else: # if data is not valid, 0
                                 # store nan values to latest_data
-                                self.latest_data[dev.child('DevID').value()] = full(3, nan)
+                                self.latest_data[dev_id] = full(3, nan)
 
                     except Exception as e: # if reading fails, store nan values to latest_data
                         print(traceback.format_exc())
-                        self.latest_data[dev.child('DevID').value()] = full(3, nan)
+                        self.latest_data[dev_id] = full(3, nan)
                         logging.exception(e)
                 
                 if dev.child('Device type').value() == AFM: # AFM
@@ -922,7 +951,7 @@ class MainWindow(QMainWindow):
                                         serial_number = serial_number.strip("\r")
                                         dev.child('Serial number').setValue(serial_number)
                             # store nan values to latest_data
-                            self.latest_data[dev.child('DevID').value()] = full(5, nan)
+                            self.latest_data[dev_id] = full(5, nan)
                         
                         # if Serial number has been acquired, read data normally
                         else:
@@ -952,27 +981,27 @@ class MainWindow(QMainWindow):
 
                             # check if data is valid and store to latest_data dictionary
                             if float(readings[2]) != 0: # if RH data is valid, not 0
-                                self.latest_data[dev.child('DevID').value()] = readings
+                                self.latest_data[dev_id] = readings
                             else:
-                                self.latest_data[dev.child('DevID').value()] = full(5, nan)
+                                self.latest_data[dev_id] = full(5, nan)
                     
                     except Exception as e: # if reading fails, store nan values to latest_data
                         print(traceback.format_exc())
-                        self.latest_data[dev.child('DevID').value()] = full(5, nan)
+                        self.latest_data[dev_id] = full(5, nan)
                         logging.exception(e)
                 
                 if dev.child('Device type').value() == eDiluter: # eDiluter
                     try:
                         # store nan values to latest_data in case reading fails
-                        self.latest_data[dev.child('DevID').value()] = full(12, nan)
+                        self.latest_data[dev_id] = full(12, nan)
                         # flag indicating if data has already been received, used for handling extra data
                         data_received = False
                         # check if there's extra data from last round
-                        if dev.child('DevID').value() in self.extra_data:
+                        if dev_id in self.extra_data:
                             # store extra data to latest_data
-                            self.latest_data[dev.child('DevID').value()] = self.extra_data[dev.child('DevID').value()]
+                            self.latest_data[dev_id] = self.extra_data[dev_id]
                             # remove extra data from dictionary
-                            del self.extra_data[dev.child('DevID').value()]
+                            del self.extra_data[dev_id]
                         # read all data from buffer
                         readings = dev.child('Connection').value().connection.read_all()
                         # decode, separate messages and remove last empty message
@@ -996,11 +1025,11 @@ class MainWindow(QMainWindow):
                                     # if data has already been received
                                     if data_received == True:
                                         # store extra data to extra_data dictionary for next round
-                                        self.extra_data[dev.child('DevID').value()] = data
+                                        self.extra_data[dev_id] = data
                                     # if data has not been received yet
                                     else:
                                         # store data to latest_data dictionary with device id as key
-                                        self.latest_data[dev.child('DevID').value()] = data
+                                        self.latest_data[dev_id] = data
                                         # set data received flag to True
                                         data_received = True
                                 else: # if message is not full
@@ -1011,24 +1040,24 @@ class MainWindow(QMainWindow):
                             # if message starts with "SUCCESS:" - command message response
                             elif message.split(" ")[0] == "SUCCESS:":
                                 # append device's command widget text box
-                                self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box(message)
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message)
                             
                             # if message starts with "ERROR:" - command message response
                             elif message.split(" ")[0] == "ERROR:":
                                 # append device's command widget text box
-                                self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box(message)
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message)
                             
                             else: # if message is not recognized
                                 logging.error("readIndata - eDiluter unknown message: %s", message)
                                 # append device's command widget text box
-                                self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box(message)
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message)
                         
                     except Exception as e:
                         print(traceback.format_exc())
                         logging.exception(e)
                     
                     # update eDiluter status tab values
-                    self.device_widgets[dev.child('DevID').value()].update_values(self.latest_data[dev.child('DevID').value()])
+                    self.device_widgets[dev_id].update_values(self.latest_data[dev_id])
                 
                 if dev.child('Device type').value() == TSI_CPC:
                     try: # try to read data, decode and split
@@ -1037,23 +1066,18 @@ class MainWindow(QMainWindow):
                         readings[0] = float(readings[0]) # convert concentration to float
 
                         # store to latest data dictionary
-                        self.latest_data[dev.child('DevID').value()] = readings
+                        self.latest_data[dev_id] = readings
 
                         # set error_status flag if instrument errors is not equal to 0
                         if int(readings[1], 16) != 0:
                             self.error_status = 1
                             # set device error flag
-                            self.set_device_error(dev.child('DevID').value(), True)
+                            self.set_device_error(dev_id, True)
                     
                     except Exception as e: # if reading fails, store nan values to latest_data
                         print(traceback.format_exc())
                         logging.exception(e)
-                        self.latest_data[dev.child('DevID').value()] = full(2, nan)
-
-            else: # if not connected, store nan values to latest_data
-                # TODO is this needed?
-                if dev.child('Device type').value() == CO2_sensor: # CO2 sensor
-                    self.latest_data[dev.child('DevID').value()] = full(3, nan)
+                        self.latest_data[dev_id] = full(2, nan)
 
     # check and update 10 hz settings
     def ten_hz_check(self):
