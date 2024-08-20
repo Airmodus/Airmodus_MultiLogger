@@ -458,6 +458,11 @@ class MainWindow(QMainWindow):
             self.time_counter += 1 # increment time counter
         else: # if time counter has reached max_time - 1 (max index)
             self.max_reached = True # set max_reached flag to True
+        # convert current_time to datetime object
+        current_datetime = dt.fromtimestamp(self.current_time)
+        # restart timer daily (at 23:59:59) to prevent drifting over time
+        if current_datetime.hour == 23 and current_datetime.minute == 59 and current_datetime.second == 59:
+            self.restartTimer()
 
     # Check if serial connection is established
     def connection_test(self):
@@ -2593,6 +2598,13 @@ class MainWindow(QMainWindow):
     def endTimer(self):
         self.timer.stop()
         print("Timer stopped.")
+    
+    # restart timer to sync to seconds
+    def restartTimer(self):
+        self.endTimer() # stop timer
+        print("Restarting timer...")
+        self.startTimer() # start timer
+        self.timer_functions() # call timer functions at start time
 
 # main plot widget
 class MainPlot(GraphicsLayoutWidget):
