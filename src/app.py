@@ -8,14 +8,14 @@ import random
 import traceback
 import json
 
-from numpy import full, nan, array, polyval, array_equal
+from numpy import full, nan, array, polyval, array_equal, roll, nanmean
 from serial import Serial
 from serial.tools import list_ports
 from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QGridLayout, QLabel, QWidget,
     QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QSizePolicy,
-    QFileDialog)
+    QFileDialog, QComboBox, QSpacerItem)
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
@@ -1204,6 +1204,18 @@ class MainWindow(QMainWindow):
                         self.plot_data[dev_id] = full(self.plot_data[dev_id].shape[0] * 2, nan)
                         self.plot_data[dev_id][:tmp_data.shape[0]] = tmp_data
                 
+                # create lists for pulse duration and pulse ratio if they don't exist yet
+                if dev.child('Device type').value() == CPC:
+                    if str(dev_id)+':pd' not in self.plot_data:
+                        self.plot_data[str(dev_id)+':pd'] = full(86400, nan) # 24 hours in seconds
+                    if str(dev_id)+':pr' not in self.plot_data:
+                        self.plot_data[str(dev_id)+':pr'] = full(86400, nan)
+                    # roll data
+                    self.plot_data[str(dev_id)+':pd'] = roll(self.plot_data[str(dev_id)+':pd'], -1)
+                    self.plot_data[str(dev_id)+':pd'][-1] = nan
+                    self.plot_data[str(dev_id)+':pr'] = roll(self.plot_data[str(dev_id)+':pr'], -1)
+                    self.plot_data[str(dev_id)+':pr'][-1] = nan
+                
                 # if device is connected, add latest_values data to plot_data according to device
                 if dev.child('Connected').value():
                     if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
@@ -1221,6 +1233,19 @@ class MainWindow(QMainWindow):
                             self.plot_data[str(dev_id)][self.time_counter] = self.latest_data[dev_id][0]
                         # add raw concentration value to plot_data
                         self.plot_data[str(dev_id)+':raw'][self.time_counter] = self.latest_data[dev_id][0]
+                        
+                        # update pulse duration and pulse ratio lists
+                        if dev.child('Device type').value() == CPC:
+                            # check if concentration value is below threshold (valid)
+                            if self.latest_data[dev_id][0] < 5000: # A20 threshold
+                                # store pulse duration and pulse ratio values to plot_data
+                                self.plot_data[str(dev_id)+':pd'][-1] = self.latest_data[dev_id][1]
+                                self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][11]
+                            else: # if concentration is above threshold (invalid)
+                                # store nan values to plot_data
+                                self.plot_data[str(dev_id)+':pd'][-1] = nan
+                                self.plot_data[str(dev_id)+':pr'][-1] = nan
+
                     elif dev.child('Device type').value() in [PSM, PSM2]: # PSM
                         # add latest saturator flow rate value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][2]
@@ -1349,6 +1374,41 @@ class MainWindow(QMainWindow):
                         if dev_type in [CPC, TSI_CPC]: # CPC
                             # update plot with raw CPC concentration
                             self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':raw'][:self.time_counter+1])
+                            # update CPC pulse quality scatter plot with pulse duration and pulse ratio values
+                            if dev_type == CPC:
+                                # check selected average time and history draw limit
+                                draw_limit_h = self.device_widgets[dev_id].pulse_quality.history_time # hours
+                                draw_limit_s = draw_limit_h * 3600 # seconds
+                                avg_time = self.device_widgets[dev_id].pulse_quality.average_time * 3600 # seconds
+                                # calculate average values (ignore nan values)
+                                avg_pulse_duration = nanmean(self.plot_data[str(dev_id)+':pd'][-avg_time:])
+                                avg_pulse_ratio = nanmean(self.plot_data[str(dev_id)+':pr'][-avg_time:])
+                                # slice pulse duration and pulse ratio data to selected history time
+                                # number of points is always 3600, longer times are drawn with lower resolution
+                                # start at end of list, stop at negative draw limit in seconds, step size negative draw limit in hours
+                                sliced_pd = self.plot_data[str(dev_id)+':pd'][-1:-1*(draw_limit_s+1):-1*draw_limit_h]
+                                sliced_pr = self.plot_data[str(dev_id)+':pr'][-1:-1*(draw_limit_s+1):-1*draw_limit_h]
+
+                                # update pulse quality scatter plot and value labels
+                                # draw history with sliced data
+                                #self.device_widgets[dev_id].pulse_quality.data_points.setData(self.plot_data[str(dev_id)+':pd'][-1*draw_limit_s::-1*draw_limit_h], self.plot_data[str(dev_id)+':pr'][-1*draw_limit_s::-1*draw_limit_h])
+                                #self.device_widgets[dev_id].pulse_quality.data_points.setData(self.plot_data[str(dev_id)+':pd'][-3600:], self.plot_data[str(dev_id)+':pr'][-3600:])
+                                self.device_widgets[dev_id].pulse_quality.data_points.setData(sliced_pd, sliced_pr)
+                                # update current point and labels
+                                # check if concentration value is below threshold (valid)
+                                if self.latest_data[dev_id][0] < 5000: # A20 threshold
+                                    self.device_widgets[dev_id].pulse_quality.current_point.setData(x=[self.plot_data[str(dev_id)+':pd'][-1]], y=[self.plot_data[str(dev_id)+':pr'][-1]])
+                                    self.device_widgets[dev_id].pulse_quality.current_duration.setText(str(round(self.plot_data[str(dev_id)+':pd'][-1], 3)))
+                                    self.device_widgets[dev_id].pulse_quality.current_ratio.setText(str(round(self.plot_data[str(dev_id)+':pr'][-1], 3)))
+                                else: # if concentration is above threshold (invalid)
+                                    self.device_widgets[dev_id].pulse_quality.current_point.setData(x=[], y=[]) # set current point to empty if invalid data
+                                    self.device_widgets[dev_id].pulse_quality.current_duration.setText("Concentration > 5000")
+                                    self.device_widgets[dev_id].pulse_quality.current_ratio.setText("Concentration > 5000")
+                                # update average point and labels
+                                self.device_widgets[dev_id].pulse_quality.average_point.setData(x=[avg_pulse_duration], y=[avg_pulse_ratio])
+                                self.device_widgets[dev_id].pulse_quality.average_duration.setText(str(round(avg_pulse_duration, 3)))
+                                self.device_widgets[dev_id].pulse_quality.average_ratio.setText(str(round(avg_pulse_ratio, 3)))
+
                         elif dev_type == Electrometer: # Electrometer
                             # update Electrometer plot with all 3 values
                             self.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':1'][:self.time_counter+1])
@@ -2889,6 +2949,9 @@ class CPCWidget(QTabWidget):
         # create plot widget for Concentration
         self.plot_tab = SinglePlot(device_type=CPC)
         self.addTab(self.plot_tab, "Concentration")
+        # create pulse quality widget for CPC pulse quality monitoring
+        self.pulse_quality = PulseQuality()
+        self.addTab(self.pulse_quality, "Pulse quality")
 
         # create list of widget references for updating gui with cpc system status
         self.cpc_status_widgets = [
@@ -3791,6 +3854,134 @@ class IndicatorWidget(QWidget):
             if self.name in self.ok_error_indicators:
                 self.change_value("OK")
 
+class PulseQuality(QWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+        # average time and history time values
+        self.average_time = 0
+        self.history_time = 0
+
+        layout = QGridLayout() # create layout
+        self.setLayout(layout) # set layout
+        # add spacer item to layout
+        spacer = QSpacerItem(1, 1, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        layout.addItem(spacer, 0, 0, 1, 2) # row 0, 2 units wide
+        layout.addItem(spacer, 2, 0, 1, 2) # row 2, 2 units wide
+
+        # create graphics layout and add scatter plot
+        graphics_layout = GraphicsLayoutWidget()
+        layout.addWidget(graphics_layout, 1, 0)
+        self.scatter = graphics_layout.addPlot()
+        # set graphics layout size to square
+        graphics_layout.setFixedSize(600, 600)
+        # use automatic downsampling and clipping to reduce the drawing load
+        self.scatter.setDownsampling(mode='peak')
+        self.scatter.setClipToView(True)
+        # set viewbox default padding
+        self.scatter.getViewBox().setDefaultPadding(padding=0.3)
+        # create data points, average point and current point plots
+        self.data_points = self.scatter.plot(pen=None, symbol='o', symbolPen=None, symbolSize=6, symbolBrush=(255, 255, 255, 50))
+        self.average_point = self.scatter.plot(pen=None, symbol='o', symbolPen=(0, 0, 0), symbolSize=10, symbolBrush=(255, 255, 255))
+        self.current_point = self.scatter.plot(pen=None, symbol='o', symbolPen=(0, 0, 0), symbolSize=10, symbolBrush=(255, 50, 50))
+        # set up axis labels and styles
+        y_axis = self.scatter.getAxis('left')
+        y_axis.setLabel('Pulse ratio', color='w')
+        y_axis.enableAutoSIPrefix(False)
+        self.set_axis_style(y_axis, 'w')
+        x_axis = self.scatter.getAxis('bottom')
+        x_axis.setLabel('Pulse duration', units='ns', color='w')
+        x_axis.enableAutoSIPrefix(False)
+        self.set_axis_style(x_axis, 'w')
+        # create legend and add items
+        self.legend = LegendItem(offset=(-1, 1), labelTextColor='w', labelTextSize='8pt')
+        self.legend.setParentItem(self.scatter.graphicsItem())
+
+        # create options layout
+        options_layout = QGridLayout()
+        layout.addLayout(options_layout, 1, 1)
+        # set font for main labels
+        label_font = self.font() # get current global font
+        label_font.setPointSize(12) # set font size
+        # add values label
+        values_label = QLabel("Values", objectName="label")
+        values_label.setAlignment(Qt.AlignCenter)
+        values_label.setFont(label_font) # apply font to value label
+        options_layout.addWidget(values_label, 0, 0, 1, 2)
+        # current values
+        options_layout.addWidget(QLabel("Pulse duration (ns)", objectName="label"), 1, 0)
+        self.current_duration = QLabel("0", objectName="value-label")
+        options_layout.addWidget(self.current_duration, 1, 1)
+        options_layout.addWidget(QLabel("Pulse ratio", objectName="label"), 2, 0)
+        self.current_ratio = QLabel("0", objectName="value-label")
+        options_layout.addWidget(self.current_ratio, 2, 1)
+        # average values
+        self.average_duration_label = QLabel("", objectName="label")
+        options_layout.addWidget(self.average_duration_label, 3, 0)
+        self.average_duration = QLabel("0", objectName="value-label")
+        options_layout.addWidget(self.average_duration, 3, 1)
+        self.average_ratio_label = QLabel("", objectName="label")
+        options_layout.addWidget(self.average_ratio_label, 4, 0)
+        self.average_ratio = QLabel("0", objectName="value-label")
+        options_layout.addWidget(self.average_ratio, 4, 1)
+        # add options label
+        options_label = QLabel("Options", objectName="label")
+        options_label.setAlignment(Qt.AlignCenter)
+        options_label.setFont(label_font)
+        options_layout.addWidget(options_label, 5, 0, 1, 2)
+        # history time selection dropdown
+        options_layout.addWidget(QLabel("History draw limit", objectName="label"), 6, 0)
+        self.history_time_select = QComboBox(objectName="combo_box")
+        self.history_time_select.addItems(["1h", "2h", "6h", "12h", "24h"])
+        self.history_time_select.setCurrentIndex(0)
+        self.history_time_select.currentIndexChanged.connect(self.update_values)
+        options_layout.addWidget(self.history_time_select, 6, 1)
+        # average time selection dropdown
+        options_layout.addWidget(QLabel("Average time", objectName="label"), 7, 0)
+        self.average_time_select = QComboBox(objectName="combo_box")
+        self.average_time_select.addItems(["1h", "2h", "6h", "12h", "24h"])
+        self.average_time_select.setCurrentIndex(0)
+        self.average_time_select.currentIndexChanged.connect(self.update_values)
+        options_layout.addWidget(self.average_time_select, 7, 1)
+
+        # update legend and labels
+        self.update_values()
+
+        # TESTING
+
+        import numpy as np
+        # create test data arrays and plot them
+        test_size = 86400 # h = 3600, 24h = 86400
+        test_cutoff = 3600
+        #test_x = [1, 2, 3, 4, 5]
+        #test_y = [2, 2, 1, 5, 3]
+        test_x = np.random.normal(size=test_size)
+        test_y = np.random.normal(size=test_size)
+        # plot test data, average point and current point
+        self.data_points.setData(test_x[(-1*test_cutoff):], test_y[(-1*test_cutoff):])
+        self.average_point.setData([np.average(test_x)], [np.average(test_y)])
+        self.current_point.setData([test_x[-1]], [test_y[-1]])
+        #self.current_point.setData([], []) # set empty data
+    
+    def set_axis_style(self, axis, color):
+        axis.setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
+        axis.setPen(color)
+        axis.setTextPen(color)
+        axis.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
+    
+    def update_values(self):
+        history_str = self.history_time_select.currentText() + " history"
+        average_str = self.average_time_select.currentText() + " avg"
+        self.legend.clear()
+        self.legend.addItem(self.data_points, name=history_str)
+        self.legend.addItem(self.average_point, name=average_str)
+        self.legend.addItem(self.current_point, name="Current value")
+        self.average_duration_label.setText(average_str + " pulse duration (ns)")
+        self.average_ratio_label.setText(average_str + " pulse ratio")
+        # update average and history time values
+        self.history_time = int(self.history_time_select.currentText().replace("h", ""))
+        self.average_time = int(self.average_time_select.currentText().replace("h", ""))
+        
 # widget showing measurement and saving status
 # displayed under parameter tree
 class StatusLights(QSplitter):
