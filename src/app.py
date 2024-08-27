@@ -3949,19 +3949,19 @@ class PulseQuality(QWidget):
 
         # TESTING
 
-        import numpy as np
-        # create test data arrays and plot them
-        test_size = 86400 # h = 3600, 24h = 86400
-        test_cutoff = 3600
-        #test_x = [1, 2, 3, 4, 5]
-        #test_y = [2, 2, 1, 5, 3]
-        test_x = np.random.normal(size=test_size)
-        test_y = np.random.normal(size=test_size)
-        # plot test data, average point and current point
-        self.data_points.setData(test_x[(-1*test_cutoff):], test_y[(-1*test_cutoff):])
-        self.average_point.setData([np.average(test_x)], [np.average(test_y)])
-        self.current_point.setData([test_x[-1]], [test_y[-1]])
-        #self.current_point.setData([], []) # set empty data
+        # import numpy as np
+        # # create test data arrays and plot them
+        # test_size = 86400 # h = 3600, 24h = 86400
+        # test_cutoff = 3600
+        # #test_x = [1, 2, 3, 4, 5]
+        # #test_y = [2, 2, 1, 5, 3]
+        # test_x = np.random.normal(size=test_size)
+        # test_y = np.random.normal(size=test_size)
+        # # plot test data, average point and current point
+        # self.data_points.setData(test_x[(-1*test_cutoff):], test_y[(-1*test_cutoff):])
+        # self.average_point.setData([np.average(test_x)], [np.average(test_y)])
+        # self.current_point.setData([test_x[-1]], [test_y[-1]])
+        # #self.current_point.setData([], []) # set empty data
     
     def set_axis_style(self, axis, color):
         axis.setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
