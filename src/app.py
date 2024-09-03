@@ -203,6 +203,8 @@ class ScalableGroup(parameterTypes.GroupParameter):
             self.children()[-1].cpc_changed = False
             # connect value change signal of Connected CPC to update_cpc_changed slot
             self.children()[-1].child('Connected CPC').sigValueChanged.connect(self.update_cpc_changed)
+            # add firmware version parameter to index 3
+            self.children()[-1].insertChild(3, {'name': 'Firmware version', 'type': 'str', 'value': "", 'readonly': True})
         
         # if added device is RHTP, add options for plotted value
         if device_value == RHTP:
@@ -561,7 +563,12 @@ class MainWindow(QMainWindow):
                     if device_type in [CPC, PSM, PSM2, CO2_sensor, RHTP, AFM]: # CPC, PSM, CO2, RHTP, AFM
                         # if Serial number is empty, send IDN inquiry with delay
                         if dev.child('Serial number').value() == "":
-                            QTimer.singleShot(300, lambda: dev.child('Connection').value().connection.write(b'*IDN?\n'))
+                            QTimer.singleShot(400, lambda: dev.child('Connection').value().connection.write(b'*IDN?\n'))
+                        # if Serial number has been acquired, check if Firmware version is empty
+                        elif device_type in [PSM, PSM2]:
+                            # if Firmware version is empty, send firmware version inquiry with delay
+                            if dev.child('Firmware version').value() == "":
+                                QTimer.singleShot(400, lambda: dev.child('Connection').value().connection.write(b':SYST:VER\n'))
                         
                 except Exception as e:
                     print(traceback.format_exc())
@@ -773,10 +780,7 @@ class MainWindow(QMainWindow):
                                 self.latest_poly_correction[dev_id] = float(data[14])
                                 
                                 # compile and store psm data to latest data dictionary with device id as key
-                                if dev.child('Device type').value() == PSM: # PSM
-                                    self.latest_data[dev_id] = self.compile_psm_data(data, status_hex, note_hex, psm_version=1)
-                                elif dev.child('Device type').value() == PSM2: # PSM2
-                                    self.latest_data[dev_id] = self.compile_psm_data(data, status_hex, note_hex, psm_version=2)
+                                self.latest_data[dev_id] = self.compile_psm_data(data, status_hex, note_hex, psm_version=dev.child('Device type').value())
                             
                             elif command == ":SYST:PRNT":
                                 # update GUI set points
@@ -796,6 +800,13 @@ class MainWindow(QMainWindow):
                                 if dev.child('Serial number').value() != serial_number:
                                     dev.child('Serial number').setValue(serial_number)
                             
+                            elif command == "Firmware":
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                if "version: " in data[0]:
+                                    firmware_version = data[0].split(": ")[1]
+                                    if dev.child('Firmware version').value() != firmware_version:
+                                        dev.child('Firmware version').setValue(firmware_version)
+                            
                             else: # print other messages to command widget text box
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
 
@@ -811,14 +822,13 @@ class MainWindow(QMainWindow):
                     # compile settings list if update flag is True and settings_fetched is True
                     if self.psm_settings_updates[dev_id] == True and settings_fetched == True:
                         try:
-                            if dev.child('Device type').value() == PSM:
+                            psm_version = dev.child('Device type').value()
+                            if psm_version == PSM:
                                 # get CO flow rate from PSM widget
                                 co_flow = round(self.device_widgets[dev_id].set_tab.set_co_flow.value_spinbox.value(), 3)
-                                psm_version = 1
-                            elif dev.child('Device type').value() == PSM2:
+                            elif psm_version == PSM2:
                                 # set nan as placeholder
                                 co_flow = "nan"
-                                psm_version = 2
                             # compile settings with latest PSM prnt settings and CO flow rate
                             settings = self.compile_psm_settings(self.latest_psm_prnt[dev_id], co_flow, psm_version)
                             # store settings to latest settings dictionary with device id as key
@@ -1869,7 +1879,6 @@ class MainWindow(QMainWindow):
 
     # compile data list for PSM .dat file
     def compile_psm_data(self, meas, status_hex, note_hex, psm_version):
-        # psm_version: 1 = PSM, 2 = PSM 2.0
 
         # determine PSM status
         if int(status_hex, 16) == 0:
@@ -1894,14 +1903,13 @@ class MainWindow(QMainWindow):
             status_hex, note_hex # PSM status (hex), PSM notes (hex)
         ]
         # if PSM 2.0, insert vacuum flow rate
-        if psm_version == 2:
+        if psm_version == PSM2:
             psm_data.insert(14, meas[13]) # vacuum flow rate
 
         return psm_data
     
     # compile settings list for PSM .par file
     def compile_psm_settings(self, prnt, co_flow, psm_version):
-        # psm_version: 1 = PSM, 2 = PSM 2.0
         
         # inlet flow is calculated and stored in update_plot_data
         psm_settings = [
@@ -1910,7 +1918,7 @@ class MainWindow(QMainWindow):
         ]
 
         # if PSM, add CO flow rate
-        if psm_version == 1:
+        if psm_version == PSM:
             psm_settings.append(co_flow)
 
         # add CPC values later in write_data if CPC connected
