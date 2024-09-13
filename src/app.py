@@ -1238,8 +1238,10 @@ class MainWindow(QMainWindow):
                         if dev.child('Device type').value() == CPC:
                             # check if concentration value is below threshold (valid)
                             if self.latest_data[dev_id][0] < 5000: # A20 threshold
+                                # pulse duration = dead time * 1000 (micro to nano) / number of pulses
+                                pulse_duration = round(self.latest_data[dev_id][1] * 1000 / self.latest_data[dev_id][2], 2)
                                 # store pulse duration and pulse ratio values to plot_data
-                                self.plot_data[str(dev_id)+':pd'][-1] = self.latest_data[dev_id][1]
+                                self.plot_data[str(dev_id)+':pd'][-1] = pulse_duration
                                 self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][11]
                             else: # if concentration is above threshold (invalid)
                                 # store nan values to plot_data
