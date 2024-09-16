@@ -778,9 +778,33 @@ class MainWindow(QMainWindow):
                                 liquid_sets = self.device_widgets[dev_id].update_notes(note_hex)
                                 # store polynomial correction value as float to dictionary
                                 self.latest_poly_correction[dev_id] = float(data[14])
+
+                                scan_status = "9" # set scan status to 9 (undefined) as default
+                                # check firmware number to determine if scan status is included in data
+                                try:
+                                    if dev.child('Firmware version').value() != "":
+                                        firmware_version = dev.child('Firmware version').value().split(".")
+                                        # Retrofit: version >= 0.5.4
+                                        if dev.child('Device type').value() == PSM:
+                                            if int(firmware_version[1]) > 5:
+                                                scan_status = data[15]
+                                            elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 4:
+                                                scan_status = data[15]
+                                        # PSM 2.0: version >= 0.6.8
+                                        elif dev.child('Device type').value() == PSM2:
+                                            if int(firmware_version[1]) > 6:
+                                                scan_status = data[15]
+                                            elif int(firmware_version[1]) == 6 and int(firmware_version[2]) >= 8:
+                                                scan_status = data[15]
+                                except Exception as e:
+                                    print(traceback.format_exc())
+                                    logging.exception(e)
+                                
+                                # TODO remove after testing
+                                print(dev.child('Device name').value(), "scan status:", scan_status)
                                 
                                 # compile and store psm data to latest data dictionary with device id as key
-                                self.latest_data[dev_id] = self.compile_psm_data(data, status_hex, note_hex, psm_version=dev.child('Device type').value())
+                                self.latest_data[dev_id] = self.compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
                             
                             elif command == ":SYST:PRNT":
                                 # update GUI set points
@@ -1182,7 +1206,7 @@ class MainWindow(QMainWindow):
                             
                             elif dev.child('Device type').value() == PSM2:
                                 # get vacuum mfc flow rate from latest data
-                                vacuum_flow = float(self.latest_data[psm_id][14])
+                                vacuum_flow = float(self.latest_data[psm_id][15])
                                 # TODO vacuum flow GUI value is updated in PSMWidget's update_values, check if it works and remove line below
                                 #self.device_widgets[psm_id].status_tab.flow_vacuum.change_value(str(round(vacuum_flow, 3)))
                                 inlet_flow = cpc_flow + vacuum_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
@@ -1227,12 +1251,13 @@ class MainWindow(QMainWindow):
                                     cpc_data[12], cpc_data[13] # number of errors, system status (hex)
                                 ]
                                 # replace PSM's latest_data CPC placeholders with connected CPC data
-                                if dev.child('Device type').value() == PSM:
-                                    # PSM: index 16-29 (no vacuum flow)
-                                    self.latest_data[psm_id][16:30] = connected_cpc_data
-                                elif dev.child('Device type').value() == PSM2:
-                                    # PSM: index 17-30 (with vacuum flow)
-                                    self.latest_data[psm_id][17:31] = connected_cpc_data
+                                self.latest_data[psm_id][-16:-2] = connected_cpc_data # 14 values before status hex and note hex
+                                # if dev.child('Device type').value() == PSM:
+                                #     # PSM: index 17-30 (no vacuum flow)
+                                #     self.latest_data[psm_id][17:31] = connected_cpc_data
+                                # elif dev.child('Device type').value() == PSM2:
+                                #     # PSM: index 18-31 (with vacuum flow)
+                                #     self.latest_data[psm_id][18:32] = connected_cpc_data
             
             except Exception as e:
                 print(traceback.format_exc())
@@ -1653,10 +1678,10 @@ class MainWindow(QMainWindow):
                                     file.write('YYYY.MM.DD hh:mm:ss,Concentration (#/cc),Dead time (µs),Number of pulses,Saturator T (C),Condenser T (C),Optics T (C),Cabin T (C),Inlet P (kPa),Critical orifice P (kPa),Nozzle P (kPa),Liquid level,Pulse ratio,Total CPC errors,System status error')
                                 elif dev.child('Device type').value() == PSM: # PSM
                                     # TODO check if PSM headers are ok
-                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)')
+                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)')
                                 elif dev.child('Device type').value() == PSM2: # PSM 2.0
                                     # TODO check if correct
-                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Vacuum flow (lpm),PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)')
+                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,Vacuum flow (lpm),PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)')
                                 elif dev.child('Device type').value() == Electrometer: # Electrometer
                                     file.write('YYYY.MM.DD hh:mm:ss,Voltage 1 (V),Voltage 2 (V),Voltage 3 (V)')
                                 elif dev.child('Device type').value() == CO2_sensor: # CO2
@@ -1878,7 +1903,7 @@ class MainWindow(QMainWindow):
         return cpc_settings
 
     # compile data list for PSM .dat file
-    def compile_psm_data(self, meas, status_hex, note_hex, psm_version):
+    def compile_psm_data(self, meas, status_hex, note_hex, scan_status, psm_version):
 
         # determine PSM status
         if int(status_hex, 16) == 0:
@@ -1897,14 +1922,15 @@ class MainWindow(QMainWindow):
             "nan", "nan", meas[0], meas[1], # concentration from PSM, cut-off diameter, saturator flow rate, excess flow rate
             meas[3], meas[2], meas[4], meas[6], meas[5], meas[7], # psm saturator t, growth tube t, inlet t, drainage t, heater t, psm cabin t
             meas[9], meas[10], meas[11], meas[12], # inlet p, inlet-sat p, sat-excess p, critical orifice p,
+            scan_status, # scan status number (9 if undefined)
             psm_status, psm_note, # PSM status (1 ok / 0 nok), PSM notes (1 ok / 0 notes)
             # CPC nan placeholders, replaced later if CPC is connected
             "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan",
             status_hex, note_hex # PSM status (hex), PSM notes (hex)
         ]
-        # if PSM 2.0, insert vacuum flow rate
+        # if PSM 2.0, insert vacuum flow rate (before PSM status number)
         if psm_version == PSM2:
-            psm_data.insert(14, meas[13]) # vacuum flow rate
+            psm_data.insert(15, meas[13]) # vacuum flow rate
 
         return psm_data
     
