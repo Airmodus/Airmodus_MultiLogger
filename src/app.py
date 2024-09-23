@@ -7,6 +7,7 @@ import logging
 import random
 import traceback
 import json
+import warnings
 
 from numpy import full, nan, array, polyval, array_equal, roll, nanmean
 from serial import Serial
@@ -33,6 +34,9 @@ PSM2 = 7
 TSI_CPC = 8
 AFM = 9
 Example_device = -1
+
+warnings.filterwarnings("ignore", message='Mean of empty slice')
+warnings.filterwarnings("ignore", message='All-NaN slice encountered')
 
 # Set the LC_ALL environment variable to US English (en_US)
 locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
@@ -1236,14 +1240,27 @@ class MainWindow(QMainWindow):
                         
                         # update pulse duration and pulse ratio lists
                         if dev.child('Device type').value() == CPC:
-                            # check if concentration value is below threshold (valid)
-                            if self.latest_data[dev_id][0] < 5000: # A20 threshold
-                                # pulse duration = dead time * 1000 (micro to nano) / number of pulses
-                                pulse_duration = round(self.latest_data[dev_id][1] * 1000 / self.latest_data[dev_id][2], 2)
-                                # store pulse duration and pulse ratio values to plot_data
-                                self.plot_data[str(dev_id)+':pd'][-1] = pulse_duration
-                                self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][11]
-                            else: # if concentration is above threshold (invalid)
+                            try:
+                                print("concentration", self.latest_data[dev_id][0], "* sample flow", self.latest_settings[dev_id][2], "=", self.latest_data[dev_id][0] * self.latest_settings[dev_id][2])
+                                # check if (concentration * sample flow) is above 50 and below 5000 (valid)
+                                check_value = self.latest_data[dev_id][0] * self.latest_settings[dev_id][2]
+                                if check_value > 50 and check_value < 5000:
+                                    # calculate pulse duration
+                                    if self.latest_data[dev_id][2] == 0:
+                                        pulse_duration = 0 # if number of pulses is 0, set pulse duration to 0
+                                    else:
+                                        # pulse duration = dead time * 1000 (micro to nano) / number of pulses
+                                        pulse_duration = round(self.latest_data[dev_id][1] * 1000 / self.latest_data[dev_id][2], 2)
+                                    # store pulse duration and pulse ratio values to plot_data
+                                    self.plot_data[str(dev_id)+':pd'][-1] = pulse_duration
+                                    self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][11]
+                                else: # if concentration is outside range (invalid)
+                                    # store nan values to plot_data
+                                    self.plot_data[str(dev_id)+':pd'][-1] = nan
+                                    self.plot_data[str(dev_id)+':pr'][-1] = nan
+                            except Exception as e:
+                                print(traceback.format_exc())
+                                logging.exception(e)
                                 # store nan values to plot_data
                                 self.plot_data[str(dev_id)+':pd'][-1] = nan
                                 self.plot_data[str(dev_id)+':pr'][-1] = nan
