@@ -99,14 +99,14 @@ class SerialDeviceConnection():
 
         if device_type == 1: # CPC
             self.send_message(":MEAS:ALL")
-            QTimer.singleShot(100, lambda: self.send_message(":SYST:PRNT"))
-            QTimer.singleShot(200, lambda: self.send_message(":SYST:PALL"))
+            QTimer.singleShot(150, lambda: self.send_message(":SYST:PRNT"))
+            QTimer.singleShot(300, lambda: self.send_message(":SYST:PALL"))
             if ten_hz:
-                QTimer.singleShot(300, lambda: self.send_message(":MEAS:OPC_CONC_LOG"))
+                QTimer.singleShot(450, lambda: self.send_message(":MEAS:OPC_CONC_LOG"))
         
         elif device_type == TSI_CPC: # TSI CPC
             self.send_message("RD") # read concentration
-            QTimer.singleShot(100, lambda: self.send_message("RIE")) # read instrument errors
+            QTimer.singleShot(150, lambda: self.send_message("RIE")) # read instrument errors
     
     # --- CPC & PSM set/command functions ---
 
@@ -442,8 +442,8 @@ class MainWindow(QMainWindow):
         self.connection_test() # check if devices are connected
         if self.first_connection: # if first connection has been made
             self.get_dev_data() # send read commands to connected serial devices
-            # launch delayed_functions after specified ms (orig. 350 ms)
-            QTimer.singleShot(500, self.delayed_functions) # changed from 400 to 500
+            # launch delayed_functions after specified ms
+            QTimer.singleShot(600, self.delayed_functions) # changed from 500 to 600
 
     # delayed functions are launched after a short delay
     def delayed_functions(self):
