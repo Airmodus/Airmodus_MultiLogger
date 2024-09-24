@@ -21,7 +21,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.6.0"
+version_number = "0.7.0"
 
 # Define instrument types
 CPC = 1
@@ -1241,7 +1241,7 @@ class MainWindow(QMainWindow):
                         # update pulse duration and pulse ratio lists
                         if dev.child('Device type').value() == CPC:
                             try:
-                                print("concentration", self.latest_data[dev_id][0], "* sample flow", self.latest_settings[dev_id][2], "=", self.latest_data[dev_id][0] * self.latest_settings[dev_id][2])
+                                #print("concentration", self.latest_data[dev_id][0], "* sample flow", self.latest_settings[dev_id][2], "=", self.latest_data[dev_id][0] * self.latest_settings[dev_id][2])
                                 # check if (concentration * sample flow) is above 50 and below 5000 (valid)
                                 check_value = self.latest_data[dev_id][0] * self.latest_settings[dev_id][2]
                                 if check_value > 50 and check_value < 5000:
