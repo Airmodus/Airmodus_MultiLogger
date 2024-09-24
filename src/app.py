@@ -1426,8 +1426,8 @@ class MainWindow(QMainWindow):
                                     self.device_widgets[dev_id].pulse_quality.current_ratio.setText("Concentration out of range")
                                 # update average point and labels
                                 self.device_widgets[dev_id].pulse_quality.average_point.setData(x=[avg_pulse_duration], y=[avg_pulse_ratio])
-                                self.device_widgets[dev_id].pulse_quality.average_duration.setText(str(round(avg_pulse_duration, 3)))
-                                self.device_widgets[dev_id].pulse_quality.average_ratio.setText(str(round(avg_pulse_ratio, 3)))
+                                self.device_widgets[dev_id].pulse_quality.average_duration.setText(str(round(avg_pulse_duration, 2)))
+                                self.device_widgets[dev_id].pulse_quality.average_ratio.setText(str(round(avg_pulse_ratio, 2)))
 
                         elif dev_type == Electrometer: # Electrometer
                             # update Electrometer plot with all 3 values
