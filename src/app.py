@@ -1414,15 +1414,16 @@ class MainWindow(QMainWindow):
                                 #self.device_widgets[dev_id].pulse_quality.data_points.setData(self.plot_data[str(dev_id)+':pd'][-3600:], self.plot_data[str(dev_id)+':pr'][-3600:])
                                 self.device_widgets[dev_id].pulse_quality.data_points.setData(sliced_pd, sliced_pr)
                                 # update current point and labels
-                                # check if concentration value is below threshold (valid)
-                                if self.latest_data[dev_id][0] < 5000: # A20 threshold
+                                # check if (concentration * sample flow) is above 50 and below 5000 (valid)
+                                check_value = self.latest_data[dev_id][0] * self.latest_settings[dev_id][2]
+                                if check_value > 50 and check_value < 5000:
                                     self.device_widgets[dev_id].pulse_quality.current_point.setData(x=[self.plot_data[str(dev_id)+':pd'][-1]], y=[self.plot_data[str(dev_id)+':pr'][-1]])
                                     self.device_widgets[dev_id].pulse_quality.current_duration.setText(str(round(self.plot_data[str(dev_id)+':pd'][-1], 3)))
                                     self.device_widgets[dev_id].pulse_quality.current_ratio.setText(str(round(self.plot_data[str(dev_id)+':pr'][-1], 3)))
-                                else: # if concentration is above threshold (invalid)
+                                else: # if concentration is outside range (invalid)
                                     self.device_widgets[dev_id].pulse_quality.current_point.setData(x=[], y=[]) # set current point to empty if invalid data
-                                    self.device_widgets[dev_id].pulse_quality.current_duration.setText("Concentration > 5000")
-                                    self.device_widgets[dev_id].pulse_quality.current_ratio.setText("Concentration > 5000")
+                                    self.device_widgets[dev_id].pulse_quality.current_duration.setText("Concentration out of range")
+                                    self.device_widgets[dev_id].pulse_quality.current_ratio.setText("Concentration out of range")
                                 # update average point and labels
                                 self.device_widgets[dev_id].pulse_quality.average_point.setData(x=[avg_pulse_duration], y=[avg_pulse_ratio])
                                 self.device_widgets[dev_id].pulse_quality.average_duration.setText(str(round(avg_pulse_duration, 3)))
@@ -3942,19 +3943,21 @@ class PulseQuality(QWidget):
         options_layout.addWidget(values_label, 0, 0, 1, 2)
         # current values
         options_layout.addWidget(QLabel("Pulse duration (ns)", objectName="label"), 1, 0)
-        self.current_duration = QLabel("0", objectName="value-label")
+        self.current_duration = QLabel("", objectName="value-label")
+        self.current_duration.setWordWrap(True)
         options_layout.addWidget(self.current_duration, 1, 1)
         options_layout.addWidget(QLabel("Pulse ratio", objectName="label"), 2, 0)
-        self.current_ratio = QLabel("0", objectName="value-label")
+        self.current_ratio = QLabel("", objectName="value-label")
+        self.current_ratio.setWordWrap(True)
         options_layout.addWidget(self.current_ratio, 2, 1)
         # average values
         self.average_duration_label = QLabel("", objectName="label")
         options_layout.addWidget(self.average_duration_label, 3, 0)
-        self.average_duration = QLabel("0", objectName="value-label")
+        self.average_duration = QLabel("", objectName="value-label")
         options_layout.addWidget(self.average_duration, 3, 1)
         self.average_ratio_label = QLabel("", objectName="label")
         options_layout.addWidget(self.average_ratio_label, 4, 0)
-        self.average_ratio = QLabel("0", objectName="value-label")
+        self.average_ratio = QLabel("", objectName="value-label")
         options_layout.addWidget(self.average_ratio, 4, 1)
         # add options label
         options_label = QLabel("Options", objectName="label")
