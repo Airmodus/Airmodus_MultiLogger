@@ -16,8 +16,8 @@ from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QGridLayout, QLabel, QWidget,
     QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QSizePolicy,
-    QFileDialog, QComboBox, QSpacerItem)
-from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem
+    QFileDialog, QComboBox, QSpacerItem, QGraphicsRectItem)
+from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
@@ -3892,17 +3892,30 @@ class PulseQuality(QWidget):
         graphics_layout = GraphicsLayoutWidget()
         layout.addWidget(graphics_layout, 1, 0)
         self.scatter = graphics_layout.addPlot()
+        viewbox = self.scatter.getViewBox()
+        viewbox.setDefaultPadding(padding=0.2) # set default padding
         # set graphics layout size to square
         graphics_layout.setFixedSize(600, 600)
         # use automatic downsampling and clipping to reduce the drawing load
         self.scatter.setDownsampling(mode='peak')
         self.scatter.setClipToView(True)
-        # set viewbox default padding
-        self.scatter.getViewBox().setDefaultPadding(padding=0.3)
+        # create color zones (yellow, black, green)
+        yellow_zone = QGraphicsRectItem(-40000, -10, 80000, 20) # x, y, w, h
+        yellow_zone.setPen(mkPen(0, 0, 0))
+        yellow_zone.setBrush(mkBrush(150, 150, 0))
+        viewbox.addItem(yellow_zone, ignoreBounds=True)
+        black_zone = QGraphicsRectItem(0, 0.8, 800, 0.25) # x, y, w, h
+        black_zone.setPen(mkPen(0, 0, 0)) # black pen
+        black_zone.setBrush(mkBrush(0, 0, 0)) # black brush
+        viewbox.addItem(black_zone, ignoreBounds=True)
+        green_zone = QGraphicsRectItem(150, 0.95, 500, 0.1) # x, y, w, h
+        green_zone.setPen(mkPen(0, 0, 0))
+        green_zone.setBrush(mkBrush(0, 130, 0))
+        viewbox.addItem(green_zone, ignoreBounds=True)
         # create data points, average point and current point plots
-        self.data_points = self.scatter.plot(pen=None, symbol='o', symbolPen=None, symbolSize=6, symbolBrush=(255, 255, 255, 50))
-        self.average_point = self.scatter.plot(pen=None, symbol='o', symbolPen=(0, 0, 0), symbolSize=10, symbolBrush=(255, 255, 255))
-        self.current_point = self.scatter.plot(pen=None, symbol='o', symbolPen=(0, 0, 0), symbolSize=10, symbolBrush=(255, 50, 50))
+        self.data_points = self.scatter.plot(pen=None, symbol='o', symbolPen=None, symbolSize=8, symbolBrush=(255, 255, 255, 50))
+        self.average_point = self.scatter.plot(pen=None, symbol='o', symbolPen={'color':(255, 0, 255), 'width':3}, symbolSize=14, symbolBrush=None)
+        self.current_point = self.scatter.plot(pen=None, symbol='o', symbolPen={'color':(0, 0, 0), 'width':2}, symbolSize=14, symbolBrush=(255, 255, 255))
         # set up axis labels and styles
         y_axis = self.scatter.getAxis('left')
         y_axis.setLabel('Pulse ratio', color='w')
@@ -3971,11 +3984,12 @@ class PulseQuality(QWidget):
         # import numpy as np
         # # create test data arrays and plot them
         # test_size = 86400 # h = 3600, 24h = 86400
-        # test_cutoff = 3600
+        # #test_cutoff = 3600
+        # test_cutoff = 600
         # #test_x = [1, 2, 3, 4, 5]
         # #test_y = [2, 2, 1, 5, 3]
-        # test_x = np.random.normal(size=test_size)
-        # test_y = np.random.normal(size=test_size)
+        # test_x = np.random.normal(loc=400, scale=75, size=test_size)
+        # test_y = np.random.normal(loc=0.95, scale=0.02, size=test_size)
         # # plot test data, average point and current point
         # self.data_points.setData(test_x[(-1*test_cutoff):], test_y[(-1*test_cutoff):])
         # self.average_point.setData([np.average(test_x)], [np.average(test_y)])
