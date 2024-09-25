@@ -21,7 +21,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.7.0"
+version_number = "0.7.1"
 
 # Define instrument types
 CPC = 1
@@ -1393,41 +1393,9 @@ class MainWindow(QMainWindow):
                         if dev_type in [CPC, TSI_CPC]: # CPC
                             # update plot with raw CPC concentration
                             self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':raw'][:self.time_counter+1])
-                            # update CPC pulse quality scatter plot with pulse duration and pulse ratio values
+                            # update CPC pulse quality tab view (scatter plot and labels)
                             if dev_type == CPC:
-                                # check selected average time and history draw limit
-                                draw_limit_h = self.device_widgets[dev_id].pulse_quality.history_time # hours
-                                draw_limit_s = draw_limit_h * 3600 # seconds
-                                avg_time = self.device_widgets[dev_id].pulse_quality.average_time * 3600 # seconds
-                                # calculate average values (ignore nan values)
-                                avg_pulse_duration = nanmean(self.plot_data[str(dev_id)+':pd'][-avg_time:])
-                                avg_pulse_ratio = nanmean(self.plot_data[str(dev_id)+':pr'][-avg_time:])
-                                # slice pulse duration and pulse ratio data to selected history time
-                                # number of points is always 3600, longer times are drawn with lower resolution
-                                # start at end of list, stop at negative draw limit in seconds, step size negative draw limit in hours
-                                sliced_pd = self.plot_data[str(dev_id)+':pd'][-1:-1*(draw_limit_s+1):-1*draw_limit_h]
-                                sliced_pr = self.plot_data[str(dev_id)+':pr'][-1:-1*(draw_limit_s+1):-1*draw_limit_h]
-
-                                # update pulse quality scatter plot and value labels
-                                # draw history with sliced data
-                                #self.device_widgets[dev_id].pulse_quality.data_points.setData(self.plot_data[str(dev_id)+':pd'][-1*draw_limit_s::-1*draw_limit_h], self.plot_data[str(dev_id)+':pr'][-1*draw_limit_s::-1*draw_limit_h])
-                                #self.device_widgets[dev_id].pulse_quality.data_points.setData(self.plot_data[str(dev_id)+':pd'][-3600:], self.plot_data[str(dev_id)+':pr'][-3600:])
-                                self.device_widgets[dev_id].pulse_quality.data_points.setData(sliced_pd, sliced_pr)
-                                # update current point and labels
-                                # check if (concentration * sample flow) is above 50 and below 5000 (valid)
-                                check_value = self.latest_data[dev_id][0] * self.latest_settings[dev_id][2]
-                                if check_value > 50 and check_value < 5000:
-                                    self.device_widgets[dev_id].pulse_quality.current_point.setData(x=[self.plot_data[str(dev_id)+':pd'][-1]], y=[self.plot_data[str(dev_id)+':pr'][-1]])
-                                    self.device_widgets[dev_id].pulse_quality.current_duration.setText(str(round(self.plot_data[str(dev_id)+':pd'][-1], 3)))
-                                    self.device_widgets[dev_id].pulse_quality.current_ratio.setText(str(round(self.plot_data[str(dev_id)+':pr'][-1], 3)))
-                                else: # if concentration is outside range (invalid)
-                                    self.device_widgets[dev_id].pulse_quality.current_point.setData(x=[], y=[]) # set current point to empty if invalid data
-                                    self.device_widgets[dev_id].pulse_quality.current_duration.setText("Concentration out of range")
-                                    self.device_widgets[dev_id].pulse_quality.current_ratio.setText("Concentration out of range")
-                                # update average point and labels
-                                self.device_widgets[dev_id].pulse_quality.average_point.setData(x=[avg_pulse_duration], y=[avg_pulse_ratio])
-                                self.device_widgets[dev_id].pulse_quality.average_duration.setText(str(round(avg_pulse_duration, 2)))
-                                self.device_widgets[dev_id].pulse_quality.average_ratio.setText(str(round(avg_pulse_ratio, 2)))
+                                self.pulse_quality_update(dev_id)
 
                         elif dev_type == Electrometer: # Electrometer
                             # update Electrometer plot with all 3 values
@@ -2214,6 +2182,45 @@ class MainWindow(QMainWindow):
                     # remove curve from legend
                     self.main_plot.legend.removeItem(self.curve_dict[dev_id])
     
+    # update CPC pulse quality tab view (scatter plot and labels)
+    # called in update_figures_and_menus and when pulse quality options ae changed
+    def pulse_quality_update(self, device_id):
+        try:
+            # check selected average time and history draw limit
+            draw_limit_h = self.device_widgets[device_id].pulse_quality.history_time # hours
+            draw_limit_s = draw_limit_h * 3600 # seconds
+            avg_time = self.device_widgets[device_id].pulse_quality.average_time * 3600 # seconds
+            # calculate average values (ignore nan values)
+            avg_pulse_duration = nanmean(self.plot_data[str(device_id)+':pd'][-avg_time:])
+            avg_pulse_ratio = nanmean(self.plot_data[str(device_id)+':pr'][-avg_time:])
+            # slice pulse duration and pulse ratio data to selected history time
+            # number of points is always 3600, longer times are drawn with lower resolution
+            # start at end of list, stop at negative draw limit in seconds, step size negative draw limit in hours
+            sliced_pd = self.plot_data[str(device_id)+':pd'][-1:-1*(draw_limit_s+1):-1*draw_limit_h]
+            sliced_pr = self.plot_data[str(device_id)+':pr'][-1:-1*(draw_limit_s+1):-1*draw_limit_h]
+
+            # update pulse quality scatter plot and value labels
+            # draw history with sliced data
+            self.device_widgets[device_id].pulse_quality.data_points.setData(sliced_pd, sliced_pr)
+            # update current point and labels
+            # check if (concentration * sample flow) is above 50 and below 5000 (valid)
+            check_value = self.latest_data[device_id][0] * self.latest_settings[device_id][2]
+            if check_value > 50 and check_value < 5000:
+                self.device_widgets[device_id].pulse_quality.current_point.setData(x=[self.plot_data[str(device_id)+':pd'][-1]], y=[self.plot_data[str(device_id)+':pr'][-1]])
+                self.device_widgets[device_id].pulse_quality.current_duration.setText(str(round(self.plot_data[str(device_id)+':pd'][-1], 3)))
+                self.device_widgets[device_id].pulse_quality.current_ratio.setText(str(round(self.plot_data[str(device_id)+':pr'][-1], 3)))
+            else: # if concentration is outside range (invalid)
+                self.device_widgets[device_id].pulse_quality.current_point.setData(x=[], y=[]) # set current point to empty if invalid data
+                self.device_widgets[device_id].pulse_quality.current_duration.setText("Concentration out of range")
+                self.device_widgets[device_id].pulse_quality.current_ratio.setText("Concentration out of range")
+            # update average point and labels
+            self.device_widgets[device_id].pulse_quality.average_point.setData(x=[avg_pulse_duration], y=[avg_pulse_ratio])
+            self.device_widgets[device_id].pulse_quality.average_duration.setText(str(round(avg_pulse_duration, 2)))
+            self.device_widgets[device_id].pulse_quality.average_ratio.setText(str(round(avg_pulse_ratio, 2)))
+        except Exception as e:
+            print(traceback.format_exc())
+            #logging.exception(e)
+    
     # set device error status in dictionary
     def set_device_error(self, device_id, error):
         self.device_errors[device_id] = error
@@ -2314,6 +2321,9 @@ class MainWindow(QMainWindow):
                 widget.set_tab.set_condenser_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_condenser_temp.value_input.text()), ":SET:TEMP:CON "))
                 widget.set_tab.set_averaging_time.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TAVG "))
                 widget.set_tab.set_averaging_time.value_input.returnPressed.connect(lambda: connection.send_set_val(int(widget.set_tab.set_averaging_time.value_input.text()), ":SET:TAVG "))
+                # connect Pulse quality tab options to pulse_quality_update function
+                widget.pulse_quality.history_time_select.currentIndexChanged.connect(lambda: self.pulse_quality_update(device_id))
+                widget.pulse_quality.average_time_select.currentIndexChanged.connect(lambda: self.pulse_quality_update(device_id))
 
             if device_type in [PSM, PSM2]: # if PSM TODO optimize structure, remove repetition
                 # create PSM widget instance
