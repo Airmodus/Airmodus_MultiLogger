@@ -1,0 +1,9 @@
+name: multilogger
+channels:
+  - conda-forge
+dependencies:
+  - numpy
+  - pyinstaller
+  - pyqt
+  - pyqtgraph=0.13.3
+  - pyserial
