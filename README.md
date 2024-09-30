@@ -10,16 +10,16 @@ All required [dependencies](#dependencies) are specified in the `environment.yam
 ```
 conda env create -f environment.yaml
 ```
-The default environment name is `multilogger`. To specify a different name, use `-n`:
+The default environment name is `multilogger-env`. To specify a different name, use `-n`:
 ```
 conda env create -f environment.yaml -n env_name
 ```
 ### 3. Activate the new environment
 Activate the new Anaconda environment using:
 ```
-conda activate multilogger
+conda activate multilogger-env
 ```
-If the environment was given a different name, use it instead of `multilogger` in the above line.
+If the environment was given a different name, use it instead of `multilogger-env` in the above line.
 ### 4. Run app.py
 To start MultiLogger, navigate to the repository's `src` folder and run `app.py`.
 ## Dependencies

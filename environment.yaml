@@ -1,4 +1,4 @@
-name: multilogger
+name: multilogger-env
 channels:
   - conda-forge
 dependencies:
