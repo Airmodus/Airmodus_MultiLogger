@@ -188,7 +188,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
             # if Airmodus CPC, add hidden 10 hz parameter
             # when 10 hz is True, OPC concentration is polled
             if device_value == CPC:
-                self.children()[-1].addChild({'name': '10 hz', 'type': 'bool', 'value': False, 'readonly': True, 'visible': True}) # TODO set visible to False after testing
+                self.children()[-1].addChild({'name': '10 hz', 'type': 'bool', 'value': False, 'readonly': True, 'visible': False})
 
         # if added device is PSM, add hidden parameters and option for 'Connected CPC'
         if device_value in [PSM, PSM2]:
@@ -196,7 +196,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
             if device_value == PSM:
                 self.children()[-1].addChild({'name': 'CO flow', 'type': 'str', 'visible': False})
             # add hidden 10 hz parameter for storing 10 hz status for startup
-            self.children()[-1].addChild({'name': '10 hz', 'type': 'bool', 'value': False, 'readonly': True, 'visible': True}) # TODO set visible to False after testing
+            self.children()[-1].addChild({'name': '10 hz', 'type': 'bool', 'value': False, 'readonly': True, 'visible': False})
             # add options for connected CPC
             self.children()[-1].addChild({'name': 'Connected CPC', 'type': 'list', 'values': self.cpc_dict, 'value': 'None'})
             # add cpc_changed flag to device
@@ -652,7 +652,6 @@ class MainWindow(QMainWindow):
                                     self.extra_data[str(dev_id)+":pall"] = list(map(float,data))
                             
                             elif command == ":MEAS:OPC_CONC_LOG":
-                                print("OPC_CONC_LOG", data) # TODO remove after testing
                                 del data[0] # remove first item (timestamp)
                                 # if latest_ten_hz is nan, store data normally
                                 if isnan(self.latest_ten_hz[dev_id][0]):
@@ -2221,7 +2220,10 @@ class MainWindow(QMainWindow):
                     # Set the parameter value as usual
                     param.setValue(values.get(param.name(), param.value()))
                     # Set CO flow value to related PSM widget
-                    self.device_widgets[param.parent().child("DevID").value()].set_tab.set_co_flow.value_spinbox.setValue(round(float(param.value()), 3))
+                    try:
+                        self.device_widgets[param.parent().child("DevID").value()].set_tab.set_co_flow.value_spinbox.setValue(round(float(param.value()), 3))
+                    except ValueError:
+                        pass # if value has not been saved, skip
                 # Check if parameter name is 10 hz
                 elif param.name() == '10 hz':
                     # Set the parameter value as usual
