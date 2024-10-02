@@ -4107,57 +4107,59 @@ class PulseQuality(QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__()
 
+        layout = QGridLayout() # create layout
+        self.setLayout(layout) # set layout
+
+        # PULSE MONITOR
+
         # average time and history time values
         self.average_time = 0
         self.history_time = 0
 
-        layout = QGridLayout() # create layout
-        self.setLayout(layout) # set layout
-
-        # create graphics layout and add scatter plot
-        graphics_layout = GraphicsLayoutWidget()
-        layout.addWidget(graphics_layout, 0, 0)
-        self.scatter = graphics_layout.addPlot()
-        viewbox = self.scatter.getViewBox()
-        viewbox.setDefaultPadding(padding=0.2) # set default padding
+        # pulse monitor graphics layout and plot
+        pm_graphics = GraphicsLayoutWidget()
+        layout.addWidget(pm_graphics, 0, 0)
+        pm_plot = pm_graphics.addPlot()
+        pm_viewbox = pm_plot.getViewBox()
+        pm_viewbox.setDefaultPadding(padding=0.2) # set default padding
         # set graphics layout size to square
-        graphics_layout.setFixedSize(600, 600)
+        #pm_graphics.setFixedSize(500, 500)
         # use automatic downsampling and clipping to reduce the drawing load
-        self.scatter.setDownsampling(mode='peak')
-        self.scatter.setClipToView(True)
+        pm_plot.setDownsampling(mode='peak')
+        pm_plot.setClipToView(True)
         # create color zones (yellow, black, green)
         yellow_zone = QGraphicsRectItem(-40000, -10, 80000, 20) # x, y, w, h
         yellow_zone.setPen(mkPen(0, 0, 0))
         yellow_zone.setBrush(mkBrush(150, 150, 0))
-        viewbox.addItem(yellow_zone, ignoreBounds=True)
+        pm_viewbox.addItem(yellow_zone, ignoreBounds=True)
         black_zone = QGraphicsRectItem(0, 0.8, 800, 0.25) # x, y, w, h
         black_zone.setPen(mkPen(0, 0, 0)) # black pen
         black_zone.setBrush(mkBrush(0, 0, 0)) # black brush
-        viewbox.addItem(black_zone, ignoreBounds=True)
+        pm_viewbox.addItem(black_zone, ignoreBounds=True)
         green_zone = QGraphicsRectItem(150, 0.95, 500, 0.1) # x, y, w, h
         green_zone.setPen(mkPen(0, 0, 0))
         green_zone.setBrush(mkBrush(0, 130, 0))
-        viewbox.addItem(green_zone, ignoreBounds=True)
+        pm_viewbox.addItem(green_zone, ignoreBounds=True)
         # create data points, average point and current point plots
-        self.data_points = self.scatter.plot(pen=None, symbol='o', symbolPen=None, symbolSize=8, symbolBrush=(255, 255, 255, 50))
-        self.average_point = self.scatter.plot(pen=None, symbol='o', symbolPen={'color':(255, 0, 255), 'width':3}, symbolSize=14, symbolBrush=None)
-        self.current_point = self.scatter.plot(pen=None, symbol='o', symbolPen={'color':(0, 0, 0), 'width':2}, symbolSize=14, symbolBrush=(255, 255, 255))
+        self.data_points = pm_plot.plot(pen=None, symbol='o', symbolPen=None, symbolSize=8, symbolBrush=(255, 255, 255, 50))
+        self.average_point = pm_plot.plot(pen=None, symbol='o', symbolPen={'color':(255, 0, 255), 'width':3}, symbolSize=14, symbolBrush=None)
+        self.current_point = pm_plot.plot(pen=None, symbol='o', symbolPen={'color':(0, 0, 0), 'width':2}, symbolSize=14, symbolBrush=(255, 255, 255))
         # set up axis labels and styles
-        y_axis = self.scatter.getAxis('left')
+        y_axis = pm_plot.getAxis('left')
         y_axis.setLabel('Pulse ratio', color='w')
         y_axis.enableAutoSIPrefix(False)
         self.set_axis_style(y_axis, 'w')
-        x_axis = self.scatter.getAxis('bottom')
+        x_axis = pm_plot.getAxis('bottom')
         x_axis.setLabel('Pulse duration', units='ns', color='w')
         x_axis.enableAutoSIPrefix(False)
         self.set_axis_style(x_axis, 'w')
         # create legend and add items
         self.legend = LegendItem(offset=(-1, 1), labelTextColor='w', labelTextSize='8pt')
-        self.legend.setParentItem(self.scatter.graphicsItem())
+        self.legend.setParentItem(pm_plot.graphicsItem())
 
-        # create options layout
-        options_layout = QGridLayout()
-        layout.addLayout(options_layout, 0, 1)
+        # pulse monitor options layout
+        pm_options = QGridLayout()
+        layout.addLayout(pm_options, 1, 0)
         # set font for main labels
         label_font = self.font() # get current global font
         label_font.setPointSize(12) # set font size
@@ -4165,47 +4167,95 @@ class PulseQuality(QWidget):
         values_label = QLabel("Values", objectName="label")
         values_label.setAlignment(Qt.AlignCenter)
         values_label.setFont(label_font) # apply font to value label
-        options_layout.addWidget(values_label, 0, 0, 1, 2)
+        pm_options.addWidget(values_label, 0, 0, 1, 2)
         # current values
-        options_layout.addWidget(QLabel("Pulse duration (ns)", objectName="label"), 1, 0)
+        pm_options.addWidget(QLabel("Pulse duration (ns)", objectName="label"), 1, 0)
         self.current_duration = QLabel("", objectName="value-label")
         self.current_duration.setWordWrap(True)
-        options_layout.addWidget(self.current_duration, 1, 1)
-        options_layout.addWidget(QLabel("Pulse ratio", objectName="label"), 2, 0)
+        pm_options.addWidget(self.current_duration, 1, 1)
+        pm_options.addWidget(QLabel("Pulse ratio", objectName="label"), 2, 0)
         self.current_ratio = QLabel("", objectName="value-label")
         self.current_ratio.setWordWrap(True)
-        options_layout.addWidget(self.current_ratio, 2, 1)
+        pm_options.addWidget(self.current_ratio, 2, 1)
         # average values
         self.average_duration_label = QLabel("", objectName="label")
-        options_layout.addWidget(self.average_duration_label, 3, 0)
+        pm_options.addWidget(self.average_duration_label, 3, 0)
         self.average_duration = QLabel("", objectName="value-label")
-        options_layout.addWidget(self.average_duration, 3, 1)
+        pm_options.addWidget(self.average_duration, 3, 1)
         self.average_ratio_label = QLabel("", objectName="label")
-        options_layout.addWidget(self.average_ratio_label, 4, 0)
+        pm_options.addWidget(self.average_ratio_label, 4, 0)
         self.average_ratio = QLabel("", objectName="value-label")
-        options_layout.addWidget(self.average_ratio, 4, 1)
+        pm_options.addWidget(self.average_ratio, 4, 1)
         # add options label
         options_label = QLabel("Options", objectName="label")
         options_label.setAlignment(Qt.AlignCenter)
         options_label.setFont(label_font)
-        options_layout.addWidget(options_label, 5, 0, 1, 2)
+        pm_options.addWidget(options_label, 5, 0, 1, 2)
         # history time selection dropdown
-        options_layout.addWidget(QLabel("History draw limit", objectName="label"), 6, 0)
+        pm_options.addWidget(QLabel("History draw limit", objectName="label"), 6, 0)
         self.history_time_select = QComboBox(objectName="combo_box")
         self.history_time_select.addItems(["1h", "2h", "6h", "12h", "24h"])
         self.history_time_select.setCurrentIndex(0)
-        self.history_time_select.currentIndexChanged.connect(self.update_values)
-        options_layout.addWidget(self.history_time_select, 6, 1)
+        self.history_time_select.currentIndexChanged.connect(self.update_pm_labels)
+        pm_options.addWidget(self.history_time_select, 6, 1)
         # average time selection dropdown
-        options_layout.addWidget(QLabel("Average time", objectName="label"), 7, 0)
+        pm_options.addWidget(QLabel("Average time", objectName="label"), 7, 0)
         self.average_time_select = QComboBox(objectName="combo_box")
         self.average_time_select.addItems(["1h", "2h", "6h", "12h", "24h"])
         self.average_time_select.setCurrentIndex(0)
-        self.average_time_select.currentIndexChanged.connect(self.update_values)
-        options_layout.addWidget(self.average_time_select, 7, 1)
+        self.average_time_select.currentIndexChanged.connect(self.update_pm_labels)
+        pm_options.addWidget(self.average_time_select, 7, 1)
 
         # update legend and labels
-        self.update_values()
+        self.update_pm_labels()
+
+        # PULSE ANALYSIS
+
+        # analysis flag (True = on, False = off)
+        self.analysis_flag = False
+
+        # pulse analysis graphics layout and plot
+        pa_graphics = GraphicsLayoutWidget()
+        layout.addWidget(pa_graphics, 0, 1)
+        pa_plot = pa_graphics.addPlot()
+        pa_viewbox = pa_plot.getViewBox()
+        pa_plot.setDownsampling(mode='peak')
+        pa_plot.setClipToView(True)
+        # set up axis labels and styles
+        y_axis = pa_plot.getAxis('left')
+        y_axis.setLabel('Threshold value', color='w')
+        y_axis.enableAutoSIPrefix(False)
+        self.set_axis_style(y_axis, 'w')
+        x_axis = pa_plot.getAxis('bottom')
+        x_axis.setLabel('Pulse width', color='w')
+        x_axis.enableAutoSIPrefix(False)
+        self.set_axis_style(x_axis, 'w')
+
+        # pulse analysis options layout
+        pa_options = QGridLayout()
+        layout.addLayout(pa_options, 1, 1)
+        # start analysis button
+        self.start_analysis = QPushButton("Start pulse analysis", objectName="button_widget")
+        font = self.start_analysis.font() # get current font
+        font.setPointSize(12) # set font size
+        self.start_analysis.setFont(font) # apply font
+        pa_options.addWidget(self.start_analysis, 0, 0, 1, 2)
+        # analysis status
+        pa_options.addWidget(QLabel("Analysis status", objectName="label"), 1, 0)
+        self.analysis_status = QLabel("", objectName="label")
+        self.analysis_status.setWordWrap(True)
+        pa_options.addWidget(self.analysis_status, 1, 1)
+        # original threshold 1
+        pa_options.addWidget(QLabel("Original threshold 1", objectName="label"), 2, 0)
+        self.original_threshold_1 = QLabel("", objectName="value-label")
+        pa_options.addWidget(self.original_threshold_1, 2, 1)
+        # original threshold 2
+        pa_options.addWidget(QLabel("Original threshold 2", objectName="label"), 3, 0)
+        self.original_threshold_2 = QLabel("", objectName="value-label")
+        pa_options.addWidget(self.original_threshold_2, 3, 1)
+
+        # update pulse analysis status
+        self.update_pa_status()
 
         # TESTING
 
@@ -4230,7 +4280,8 @@ class PulseQuality(QWidget):
         axis.setTextPen(color)
         axis.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
     
-    def update_values(self):
+    # update pulse monitor labels and legend
+    def update_pm_labels(self):
         history_str = self.history_time_select.currentText() + " history"
         average_str = self.average_time_select.currentText() + " avg"
         self.legend.clear()
@@ -4242,6 +4293,12 @@ class PulseQuality(QWidget):
         # update average and history time values
         self.history_time = int(self.history_time_select.currentText().replace("h", ""))
         self.average_time = int(self.average_time_select.currentText().replace("h", ""))
+    
+    def update_pa_status(self):
+        if self.analysis_flag:
+            self.analysis_status.setText("Analysing pulse...")
+        else:
+            self.analysis_status.setText("Ready to analyse")
         
 # widget showing measurement and saving status
 # displayed under parameter tree
