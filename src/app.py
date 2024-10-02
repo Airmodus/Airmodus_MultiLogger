@@ -16,7 +16,7 @@ from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QGridLayout, QLabel, QWidget,
     QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QSizePolicy,
-    QFileDialog, QComboBox, QSpacerItem, QGraphicsRectItem)
+    QFileDialog, QComboBox, QGraphicsRectItem)
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
@@ -4113,14 +4113,10 @@ class PulseQuality(QWidget):
 
         layout = QGridLayout() # create layout
         self.setLayout(layout) # set layout
-        # add spacer item to layout
-        spacer = QSpacerItem(1, 1, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        layout.addItem(spacer, 0, 0, 1, 2) # row 0, 2 units wide
-        layout.addItem(spacer, 2, 0, 1, 2) # row 2, 2 units wide
 
         # create graphics layout and add scatter plot
         graphics_layout = GraphicsLayoutWidget()
-        layout.addWidget(graphics_layout, 1, 0)
+        layout.addWidget(graphics_layout, 0, 0)
         self.scatter = graphics_layout.addPlot()
         viewbox = self.scatter.getViewBox()
         viewbox.setDefaultPadding(padding=0.2) # set default padding
@@ -4161,7 +4157,7 @@ class PulseQuality(QWidget):
 
         # create options layout
         options_layout = QGridLayout()
-        layout.addLayout(options_layout, 1, 1)
+        layout.addLayout(options_layout, 0, 1)
         # set font for main labels
         label_font = self.font() # get current global font
         label_font.setPointSize(12) # set font size
