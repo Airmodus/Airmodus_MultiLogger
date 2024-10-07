@@ -113,8 +113,9 @@ class SerialDeviceConnection():
             QTimer.singleShot(150, lambda: self.send_message("RIE")) # read instrument errors
     
     def send_pulse_analysis_messages(self, threshold):
-        print(threshold)
-        # TODO send required messages for pulse analysis
+        # send required messages for pulse analysis
+        self.send_message(":SET:OPC:THRS " + str(threshold))
+        QTimer.singleShot(150, lambda: self.send_message(":MEAS:ALL"))
     
     # --- CPC & PSM set/command functions ---
 
@@ -1196,8 +1197,8 @@ class MainWindow(QMainWindow):
                     # get connected CPC ID
                     cpc_id = dev.child('Connected CPC').value()
 
-                    # if connected CPC is not 'None'
-                    if cpc_id != 'None':
+                    # if connected CPC is not 'None' and CPC is not in pulse analysis mode
+                    if cpc_id != 'None' and cpc_id not in self.pulse_analysis_index:
                         
                         # get connected CPC device parameter
                         for cpc in self.params.child('Device settings').children():
@@ -1372,47 +1373,73 @@ class MainWindow(QMainWindow):
                 # if device is connected, add latest_values data to plot_data according to device
                 if dev.child('Connected').value():
                     if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
-                        psm_connection = False
-                        # check if this CPC is connected to any PSM
-                        for psm in self.params.child('Device settings').children():
-                            if psm.child('Device type').value() in [PSM, PSM2] and psm.child('Connected').value():
-                                if psm.child('Connected CPC').value() == dev_id:
-                                    # if PSM connection exists, add latest PSM concentration value to plot_data
-                                    self.plot_data[str(dev_id)][self.time_counter] = self.latest_data[psm.child('DevID').value()][0]
-                                    psm_connection = True
-                                    break
-                        # if not connected to PSM, add CPC concentration value to plot_data
-                        if psm_connection == False:
-                            self.plot_data[str(dev_id)][self.time_counter] = self.latest_data[dev_id][0]
-                        # add raw concentration value to plot_data
-                        self.plot_data[str(dev_id)+':raw'][self.time_counter] = self.latest_data[dev_id][0]
                         
-                        # update pulse duration and pulse ratio lists
-                        if dev.child('Device type').value() == CPC:
-                            try:
-                                #print("concentration", self.latest_data[dev_id][0], "* sample flow", self.latest_settings[dev_id][2], "=", self.latest_data[dev_id][0] * self.latest_settings[dev_id][2])
-                                # check if (concentration * sample flow) is above 50 and below 5000 (valid)
-                                check_value = self.latest_data[dev_id][0] * self.latest_settings[dev_id][2]
-                                if check_value > 50 and check_value < 5000:
-                                    # calculate pulse duration
-                                    if self.latest_data[dev_id][2] == 0:
-                                        pulse_duration = 0 # if number of pulses is 0, set pulse duration to 0
-                                    else:
-                                        # pulse duration = dead time * 1000 (micro to nano) / number of pulses
-                                        pulse_duration = round(self.latest_data[dev_id][1] * 1000 / self.latest_data[dev_id][2], 2)
-                                    # store pulse duration and pulse ratio values to plot_data
-                                    self.plot_data[str(dev_id)+':pd'][-1] = pulse_duration
-                                    self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][11]
-                                else: # if concentration is outside range (invalid)
+                        # if CPC is in pulse analysis mode, update pulse analysis plot data instead of normal plot data
+                        if dev_id in self.pulse_analysis_index:
+                            # calculate current pulse duration
+                            dead_time = self.latest_data[dev_id][1]
+                            number_of_pulses = self.latest_data[dev_id][2]
+                            if number_of_pulses == 0:
+                                pulse_duration = 0 # if number of pulses is 0, set pulse duration to 0
+                            else:
+                                # pulse duration = dead time * 1000 (micro to nano) / number of pulses
+                                pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
+                            # get current threshold value with pulse_analysis_index
+                            threshold_value = self.pulse_analysis_thresholds[self.pulse_analysis_index[dev_id]]
+                            # TODO remove print after testing
+                            print(f"threshold: {threshold_value} pulse duration: {pulse_duration} dead time: {dead_time} number of pulses: {number_of_pulses}")
+                            # add analysis point to pulse quality widget
+                            self.device_widgets[dev_id].pulse_quality.add_analysis_point(pulse_duration, threshold_value)
+
+                            # TODO move section below to write_data later
+                            # increase pulse_analysis_index by 1
+                            self.pulse_analysis_index[dev_id] += 1
+                            # if all thresholds have been gone through, end pulse analysis
+                            if self.pulse_analysis_index[dev_id] >= len(self.pulse_analysis_thresholds):
+                                self.pulse_analysis_stop(dev_id, dev)
+
+                        else:
+                            psm_connection = False
+                            # check if this CPC is connected to any PSM
+                            for psm in self.params.child('Device settings').children():
+                                if psm.child('Device type').value() in [PSM, PSM2] and psm.child('Connected').value():
+                                    if psm.child('Connected CPC').value() == dev_id:
+                                        # if PSM connection exists, add latest PSM concentration value to plot_data
+                                        self.plot_data[str(dev_id)][self.time_counter] = self.latest_data[psm.child('DevID').value()][0]
+                                        psm_connection = True
+                                        break
+                            # if not connected to PSM, add CPC concentration value to plot_data
+                            if psm_connection == False:
+                                self.plot_data[str(dev_id)][self.time_counter] = self.latest_data[dev_id][0]
+                            # add raw concentration value to plot_data
+                            self.plot_data[str(dev_id)+':raw'][self.time_counter] = self.latest_data[dev_id][0]
+                            
+                            # update pulse duration and pulse ratio lists
+                            if dev.child('Device type').value() == CPC:
+                                try:
+                                    #print("concentration", self.latest_data[dev_id][0], "* sample flow", self.latest_settings[dev_id][2], "=", self.latest_data[dev_id][0] * self.latest_settings[dev_id][2])
+                                    # check if (concentration * sample flow) is above 50 and below 5000 (valid)
+                                    check_value = self.latest_data[dev_id][0] * self.latest_settings[dev_id][2]
+                                    if check_value > 50 and check_value < 5000:
+                                        # calculate pulse duration
+                                        if self.latest_data[dev_id][2] == 0:
+                                            pulse_duration = 0 # if number of pulses is 0, set pulse duration to 0
+                                        else:
+                                            # pulse duration = dead time * 1000 (micro to nano) / number of pulses
+                                            pulse_duration = round(self.latest_data[dev_id][1] * 1000 / self.latest_data[dev_id][2], 2)
+                                        # store pulse duration and pulse ratio values to plot_data
+                                        self.plot_data[str(dev_id)+':pd'][-1] = pulse_duration
+                                        self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][11]
+                                    else: # if concentration is outside range (invalid)
+                                        # store nan values to plot_data
+                                        self.plot_data[str(dev_id)+':pd'][-1] = nan
+                                        self.plot_data[str(dev_id)+':pr'][-1] = nan
+                                except Exception as e:
+                                    print(traceback.format_exc())
+                                    logging.exception(e)
                                     # store nan values to plot_data
                                     self.plot_data[str(dev_id)+':pd'][-1] = nan
                                     self.plot_data[str(dev_id)+':pr'][-1] = nan
-                            except Exception as e:
-                                print(traceback.format_exc())
-                                logging.exception(e)
-                                # store nan values to plot_data
-                                self.plot_data[str(dev_id)+':pd'][-1] = nan
-                                self.plot_data[str(dev_id)+':pr'][-1] = nan
 
                     elif dev.child('Device type').value() in [PSM, PSM2]: # PSM
                         # add latest saturator flow rate value to time_counter index of plot_data
@@ -2457,7 +2484,7 @@ class MainWindow(QMainWindow):
             original_threshold = self.latest_settings[device_id][7]
             # if threshold value is nan, stop pulse analysis
             if isnan(original_threshold):
-                self.pulse_analysis_stop(device_id)
+                self.pulse_analysis_stop(device_id, device_param)
                 return
             # show original threshold value in pulse quality tab
             self.device_widgets[device_id].pulse_quality.original_threshold.setText(str(original_threshold))
@@ -2485,22 +2512,24 @@ class MainWindow(QMainWindow):
                 # write header
                 file.write('Threshold (mV),Number of pulses,Dead time (µs),Pulse duration (ns)')
 
-            # TODO remove prints after testing
-            print(self.pulse_analysis_thresholds)
-            print(type(self.pulse_analysis_thresholds))
-            print(self.pulse_analysis_index)
-            print(self.pulse_analysis_thresholds[self.pulse_analysis_index[device_id]])
-
-            QTimer.singleShot(3000, lambda: self.pulse_analysis_stop(device_id))
+            print("Pulse analysis started")
         
         except Exception as e:
             print(traceback.format_exc())
             logging.exception(e)
             # if pulse analysis cannot be started, stop it (resume normal operation)
-            self.pulse_analysis_stop(device_id)
+            self.pulse_analysis_stop(device_id, device_param)
     
     # stop CPC pulse analysis, resume normal operation
-    def pulse_analysis_stop(self, device_id):
+    def pulse_analysis_stop(self, device_id, device_param):
+        # restore original threshold value to device
+        try:
+            device_param.child('Connection').value().send_message(":SET:OPC:THRS " + str(self.latest_settings[device_id][7]))
+        except Exception as e:
+            print(traceback.format_exc())
+            logging.exception(e)
+        # clear current threshold value
+        self.device_widgets[device_id].pulse_quality.current_threshold.setText("")
         # remove device id from pulse_analysis_index dictionary
         self.pulse_analysis_index.pop(device_id)
         # remove device id from pulse_analysis_filenames dictionary
@@ -2512,9 +2541,7 @@ class MainWindow(QMainWindow):
         # update pulse analysis status
         self.device_widgets[device_id].pulse_quality.update_pa_status(False)
 
-        # TODO remove prints after testing
-        print(self.pulse_analysis_index)
-        print(self.pulse_analysis_thresholds[60])
+        print("Pulse analysis ended")
     
     # set device error status in dictionary
     def set_device_error(self, device_id, error):
@@ -4312,13 +4339,7 @@ class PulseQuality(QWidget):
         pa_plot.setClipToView(True)
         # create analysis plot and values list
         self.analysis_points = pa_plot.plot(pen=None, symbol='o', symbolPen=None, symbolSize=12, symbolBrush=(255, 255, 255))
-        self.analysis_values = [] # list for storing analysis values as tuples [x, y] (x = duration, y = threshold)
-        # TODO remove after testing
-        self.add_analysis_point(1, 1)
-        self.add_analysis_point(2, 2)
-        self.add_analysis_point(3, 4)
-        self.add_analysis_point(4, 8)
-        self.add_analysis_point(5, 16)
+        self.analysis_values = [] # list for storing analysis values as tuples (x = duration, y = threshold)
         # set up axis labels and styles
         y_axis = pa_plot.getAxis('left')
         y_axis.setLabel('Threshold value', color='w')
@@ -4356,6 +4377,13 @@ class PulseQuality(QWidget):
         self.update_pa_status(False)
 
         # TESTING
+
+        # TODO remove after testing
+        self.add_analysis_point(1, 1)
+        self.add_analysis_point(2, 2)
+        self.add_analysis_point(3, 4)
+        self.add_analysis_point(4, 8)
+        self.add_analysis_point(5, 16)
 
         # import numpy as np
         # # create test data arrays and plot them
@@ -4402,17 +4430,21 @@ class PulseQuality(QWidget):
     
     def add_analysis_point(self, pulse_duration, threshold_value):
         # add analysis point to list of values as tuple
-        self.analysis_values.append([pulse_duration, threshold_value])
+        self.analysis_values.append((pulse_duration, threshold_value))
         # update plot with new values
         x_values = [n[0] for n in self.analysis_values]
         y_values = [n[1] for n in self.analysis_values]
         self.analysis_points.setData(x_values, y_values)
+        # update current threshold value
+        self.current_threshold.setText(str(threshold_value))
     
     def clear_analysis_points(self):
         # clear list of analysis values
         self.analysis_values.clear()
         # clear plot with empty data
         self.analysis_points.setData([], [])
+        # clear current threshold value
+        self.current_threshold.setText("")
         
 # widget showing measurement and saving status
 # displayed under parameter tree
