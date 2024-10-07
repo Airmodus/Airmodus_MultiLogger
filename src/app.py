@@ -370,6 +370,7 @@ class MainWindow(QMainWindow):
         self.dat_filenames = {} # contains filenames of .dat files
         self.par_filenames = {} # contains filenames of .par files (CPC and PSM)
         self.ten_hz_filenames = {} # contains filenames of 10 hz OPC concentration log files (CPC)
+        self.pulse_analysis_filenames = {} # contains filenames of pulse analysis files (CPC)
         # flags
         self.par_updates = {} # contains .par update flags: 1 = update, 0 = no update
         self.psm_settings_updates = {} # contains PSM settings update flags: 1 = update, 0 = no update
@@ -2443,7 +2444,7 @@ class MainWindow(QMainWindow):
             #logging.exception(e)
     
     # start CPC pulse analysis, stop normal operation
-    def pulse_analysis_start(self, device_id):
+    def pulse_analysis_start(self, device_id, device_param):
         try:
             # add device to pulse_analysis_index dictionary with index value 0
             self.pulse_analysis_index[device_id] = 0
@@ -2460,11 +2461,29 @@ class MainWindow(QMainWindow):
                 return
             # show original threshold value in pulse quality tab
             self.device_widgets[device_id].pulse_quality.original_threshold.setText(str(original_threshold))
-            
+
             # clear previous pulse analysis points
             self.device_widgets[device_id].pulse_quality.clear_analysis_points()
 
-            # TODO create file, store threshold value
+            # create file and store threshold value
+            filepath = self.params.child('Measurement status').child('Data settings').child('File path').value()
+            # timestamp
+            timestamp = dt.fromtimestamp(self.current_time)
+            timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
+            # device name and serial number
+            device_name = device_param.child('Device name').value()
+            serial_number = device_param.child('Serial number').value()
+            # compile filename and add to pulse_analysis_filenames dictionary
+            if osx_mode:
+                filename = '/' + timestamp_file + '_pulse_analysis_' + serial_number + '_' + device_name + '.csv'
+            else:
+                filename = '\\' + timestamp_file + '_pulse_analysis_' + serial_number + '_' + device_name + '.csv'
+            self.pulse_analysis_filenames[device_id] = filename
+            with open(filepath + filename ,"w",encoding='UTF-8') as file:
+                # write info row (serial number and original threshold)
+                file.write(serial_number + ' original threshold: ' + str(original_threshold) + ' mV\n')
+                # write header
+                file.write('Threshold (mV),Number of pulses,Dead time (µs),Pulse duration (ns)')
 
             # TODO remove prints after testing
             print(self.pulse_analysis_thresholds)
@@ -2484,6 +2503,10 @@ class MainWindow(QMainWindow):
     def pulse_analysis_stop(self, device_id):
         # remove device id from pulse_analysis_index dictionary
         self.pulse_analysis_index.pop(device_id)
+        # remove device id from pulse_analysis_filenames dictionary
+        if device_id in self.pulse_analysis_filenames:
+            self.pulse_analysis_filenames.pop(device_id)
+
         # TODO add analysis here
         # TODO enable command input
         # update pulse analysis status
@@ -2603,7 +2626,7 @@ class MainWindow(QMainWindow):
                 widget.pulse_quality.history_time_select.currentIndexChanged.connect(lambda: self.pulse_quality_update(device_id))
                 widget.pulse_quality.average_time_select.currentIndexChanged.connect(lambda: self.pulse_quality_update(device_id))
                 # connect pulse analysis start button to pulse_analysis_start function
-                widget.pulse_quality.start_analysis.clicked.connect(lambda: self.pulse_analysis_start(device_id))
+                widget.pulse_quality.start_analysis.clicked.connect(lambda: self.pulse_analysis_start(device_id, device_param))
 
             if device_type in [PSM, PSM2]: # if PSM TODO optimize structure, remove repetition
                 # create PSM widget instance
