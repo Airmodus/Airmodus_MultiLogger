@@ -2460,6 +2460,9 @@ class MainWindow(QMainWindow):
                 return
             # show original threshold value in pulse quality tab
             self.device_widgets[device_id].pulse_quality.original_threshold.setText(str(original_threshold))
+            
+            # clear previous pulse analysis points
+            self.device_widgets[device_id].pulse_quality.clear_analysis_points()
 
             # TODO create file, store threshold value
 
@@ -4284,7 +4287,15 @@ class PulseQuality(QWidget):
         pa_viewbox = pa_plot.getViewBox()
         pa_plot.setDownsampling(mode='peak')
         pa_plot.setClipToView(True)
-        # TODO create plot for storing data points
+        # create analysis plot and values list
+        self.analysis_points = pa_plot.plot(pen=None, symbol='o', symbolPen=None, symbolSize=12, symbolBrush=(255, 255, 255))
+        self.analysis_values = [] # list for storing analysis values as tuples [x, y] (x = duration, y = threshold)
+        # TODO remove after testing
+        self.add_analysis_point(1, 1)
+        self.add_analysis_point(2, 2)
+        self.add_analysis_point(3, 4)
+        self.add_analysis_point(4, 8)
+        self.add_analysis_point(5, 16)
         # set up axis labels and styles
         y_axis = pa_plot.getAxis('left')
         y_axis.setLabel('Threshold value', color='w')
@@ -4365,6 +4376,20 @@ class PulseQuality(QWidget):
         else:
             self.analysis_status.setText("Ready to analyse")
             self.start_analysis.setDisabled(False)
+    
+    def add_analysis_point(self, pulse_duration, threshold_value):
+        # add analysis point to list of values as tuple
+        self.analysis_values.append([pulse_duration, threshold_value])
+        # update plot with new values
+        x_values = [n[0] for n in self.analysis_values]
+        y_values = [n[1] for n in self.analysis_values]
+        self.analysis_points.setData(x_values, y_values)
+    
+    def clear_analysis_points(self):
+        # clear list of analysis values
+        self.analysis_values.clear()
+        # clear plot with empty data
+        self.analysis_points.setData([], [])
         
 # widget showing measurement and saving status
 # displayed under parameter tree
