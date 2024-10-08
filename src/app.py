@@ -16,7 +16,7 @@ from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QGridLayout, QLabel, QWidget,
     QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QSizePolicy,
-    QFileDialog, QComboBox, QGraphicsRectItem)
+    QFileDialog, QComboBox, QGraphicsRectItem, QMessageBox)
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
@@ -2499,6 +2499,10 @@ class MainWindow(QMainWindow):
     
     # start CPC pulse analysis, stop normal operation
     def pulse_analysis_start(self, device_id, device_param):
+        # ask for user confirmation before starting
+        start = QMessageBox.question(self, 'Start pulse analysis?', 'Regular measurement for this device will pause for one minute.\nStart pulse analysis?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if start == QMessageBox.No:
+            return
         try:
             # add device to pulse_analysis_index dictionary with index value 0
             self.pulse_analysis_index[device_id] = 0
