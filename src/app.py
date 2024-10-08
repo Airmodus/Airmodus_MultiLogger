@@ -1391,13 +1391,6 @@ class MainWindow(QMainWindow):
                             # add analysis point to pulse quality widget
                             self.device_widgets[dev_id].pulse_quality.add_analysis_point(pulse_duration, threshold_value)
 
-                            # TODO move section below to write_data later
-                            # increase pulse_analysis_index by 1
-                            self.pulse_analysis_index[dev_id] += 1
-                            # if all thresholds have been gone through, end pulse analysis
-                            if self.pulse_analysis_index[dev_id] >= len(self.pulse_analysis_thresholds):
-                                self.pulse_analysis_stop(dev_id, dev)
-
                         else:
                             psm_connection = False
                             # check if this CPC is connected to any PSM
@@ -1670,6 +1663,9 @@ class MainWindow(QMainWindow):
                 # if device is TSI CPC, do nothing
                 if dev.child('Device type').value() == TSI_CPC:
                     pass
+                # if device is in pulse analysis mode, do nothing
+                elif dev.child('DevID').value() in self.pulse_analysis_index:
+                    pass
 
                 # if device is connected OR example device
                 elif dev.child('Connected').value() or dev.child('Device type').value() == Example_device:
@@ -1919,6 +1915,37 @@ class MainWindow(QMainWindow):
 
         else: # if saving is toggled off
             self.saving_status = 0 # set saving status to 0
+        
+        # write data to pulse analysis file if pulse analysis is on
+        for dev in self.params.child('Device settings').children():
+            dev_id = dev.child('DevID').value()
+            if dev_id in self.pulse_analysis_index:
+                try:
+                    # calculate current pulse duration
+                    dead_time = self.latest_data[dev_id][1]
+                    number_of_pulses = self.latest_data[dev_id][2]
+                    if number_of_pulses == 0:
+                        pulse_duration = 0 # if number of pulses is 0, set pulse duration to 0
+                    else:
+                        # pulse duration = dead time * 1000 (micro to nano) / number of pulses
+                        pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
+                    # get current threshold value with pulse_analysis_index
+                    threshold_value = self.pulse_analysis_thresholds[self.pulse_analysis_index[dev_id]]
+                    # get filename from dictionary (includes file path)
+                    filename = self.pulse_analysis_filenames[dev_id]
+                    # append file with new data
+                    with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
+                        file.write('\n') # create new line
+                        file.write(str(threshold_value) + ',' + str(number_of_pulses) + ',' + str(dead_time) + ',' + str(pulse_duration))
+                except Exception as e:
+                    print(traceback.format_exc())
+                    logging.exception(e)
+                
+                # increase pulse_analysis_index by 1
+                self.pulse_analysis_index[dev_id] += 1
+                # if all thresholds have been gone through, end pulse analysis
+                if self.pulse_analysis_index[dev_id] >= len(self.pulse_analysis_thresholds):
+                    self.pulse_analysis_stop(dev_id, dev)
     
     # triggered when saving is toggled on/off
     def save_changed(self):
@@ -2502,13 +2529,14 @@ class MainWindow(QMainWindow):
             serial_number = device_param.child('Serial number').value()
             # compile filename and add to pulse_analysis_filenames dictionary
             if osx_mode:
-                filename = '/' + timestamp_file + '_pulse_analysis_' + serial_number + '_' + device_name + '.csv'
+                filename = filepath + '/' + timestamp_file + '_pulse_analysis_' + serial_number + '_' + device_name + '.csv'
             else:
-                filename = '\\' + timestamp_file + '_pulse_analysis_' + serial_number + '_' + device_name + '.csv'
+                filename = filepath + '\\' + timestamp_file + '_pulse_analysis_' + serial_number + '_' + device_name + '.csv'
             self.pulse_analysis_filenames[device_id] = filename
-            with open(filepath + filename ,"w",encoding='UTF-8') as file:
+            with open(filename, 'w', newline='\n', encoding='UTF-8') as file:
                 # write info row (serial number and original threshold)
-                file.write(serial_number + ' original threshold: ' + str(original_threshold) + ' mV\n')
+                file.write(serial_number + ' original threshold: ' + str(original_threshold) + ' mV')
+                file.write('\n') # create new line
                 # write header
                 file.write('Threshold (mV),Number of pulses,Dead time (µs),Pulse duration (ns)')
 
