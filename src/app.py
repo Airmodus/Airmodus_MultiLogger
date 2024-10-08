@@ -2504,7 +2504,8 @@ class MainWindow(QMainWindow):
             self.pulse_analysis_index[device_id] = 0
             # update pulse analysis status
             self.device_widgets[device_id].pulse_quality.update_pa_status(True)
-            # TODO disable command input
+            # disable command input
+            self.device_widgets[device_id].set_tab.command_widget.disable_command_input()
 
             # get original threshold value from latest_settings
             # value should stay intact during pulse analysis, settings are not updated
@@ -2565,7 +2566,9 @@ class MainWindow(QMainWindow):
             self.pulse_analysis_filenames.pop(device_id)
 
         # TODO add analysis here
-        # TODO enable command input
+
+        # enable command input
+        self.device_widgets[device_id].set_tab.command_widget.enable_command_input()
         # update pulse analysis status
         self.device_widgets[device_id].pulse_quality.update_pa_status(False)
 
@@ -4031,6 +4034,14 @@ class CommandWidget(QWidget):
     def update_text_box(self, text):
         time_stamp = dt.now().strftime("%d.%m.%Y %H:%M:%S - ") # get time stamp
         self.text_box.append(time_stamp + text) # append text box with time stamp and text
+    
+    def disable_command_input(self):
+        self.command_input.setReadOnly(True)
+        self.command_input.setPlaceholderText("Command input disabled")
+    
+    def enable_command_input(self):
+        self.command_input.setReadOnly(False)
+        self.command_input.setPlaceholderText("Enter command")
 
 # used in CPCSetTab and PSMSetTab
 class SetWidget(QWidget):
