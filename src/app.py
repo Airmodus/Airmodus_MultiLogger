@@ -4380,8 +4380,13 @@ class PulseQuality(QWidget):
         pa_viewbox = pa_plot.getViewBox()
         pa_plot.setDownsampling(mode='peak')
         pa_plot.setClipToView(True)
+        pa_plot.showGrid(x=True, y=True, alpha=0.5)
+        # set fixed plot scaling
+        pa_viewbox.setRange(xRange=[0, 600], yRange=[0, 1500], padding=0.1)
+        pa_viewbox.setMouseEnabled(x=False, y=False) # disable mouse interaction
+        pa_plot.hideButtons() # remove autorange button
         # create analysis plot and values list
-        self.analysis_points = pa_plot.plot(pen=None, symbol='o', symbolPen=None, symbolSize=12, symbolBrush=(255, 255, 255))
+        self.analysis_points = pa_plot.plot(pen=None, symbol='o', symbolPen=(0, 0, 0), symbolSize=10, symbolBrush=(255, 255, 255))
         self.analysis_values = [] # list for storing analysis values as tuples (x = duration, y = threshold)
         # set up axis labels and styles
         y_axis = pa_plot.getAxis('left')
@@ -4421,12 +4426,12 @@ class PulseQuality(QWidget):
 
         # TESTING
 
-        # # TODO remove after testing
-        # self.add_analysis_point(1, 1)
-        # self.add_analysis_point(2, 2)
-        # self.add_analysis_point(3, 4)
-        # self.add_analysis_point(4, 8)
-        # self.add_analysis_point(5, 16)
+        # TODO remove after testing
+        self.add_analysis_point(500, 150)
+        self.add_analysis_point(300, 500)
+        self.add_analysis_point(200, 800)
+        self.add_analysis_point(120, 1150)
+        self.add_analysis_point(100, 1500)
 
         # import numpy as np
         # # create test data arrays and plot them
