@@ -1380,7 +1380,7 @@ class MainWindow(QMainWindow):
                             dead_time = self.latest_data[dev_id][1]
                             number_of_pulses = self.latest_data[dev_id][2]
                             if number_of_pulses == 0:
-                                pulse_duration = 0 # if number of pulses is 0, set pulse duration to 0
+                                pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
                             else:
                                 # pulse duration = dead time * 1000 (micro to nano) / number of pulses
                                 pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
@@ -1416,7 +1416,7 @@ class MainWindow(QMainWindow):
                                     if check_value > 50 and check_value < 5000:
                                         # calculate pulse duration
                                         if self.latest_data[dev_id][2] == 0:
-                                            pulse_duration = 0 # if number of pulses is 0, set pulse duration to 0
+                                            pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
                                         else:
                                             # pulse duration = dead time * 1000 (micro to nano) / number of pulses
                                             pulse_duration = round(self.latest_data[dev_id][1] * 1000 / self.latest_data[dev_id][2], 2)
@@ -1925,7 +1925,7 @@ class MainWindow(QMainWindow):
                     dead_time = self.latest_data[dev_id][1]
                     number_of_pulses = self.latest_data[dev_id][2]
                     if number_of_pulses == 0:
-                        pulse_duration = 0 # if number of pulses is 0, set pulse duration to 0
+                        pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
                     else:
                         # pulse duration = dead time * 1000 (micro to nano) / number of pulses
                         pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
@@ -4385,7 +4385,7 @@ class PulseQuality(QWidget):
         self.analysis_values = [] # list for storing analysis values as tuples (x = duration, y = threshold)
         # set up axis labels and styles
         y_axis = pa_plot.getAxis('left')
-        y_axis.setLabel('Threshold value', color='w')
+        y_axis.setLabel('Threshold', units='mV', color='w')
         y_axis.enableAutoSIPrefix(False)
         self.set_axis_style(y_axis, 'w')
         x_axis = pa_plot.getAxis('bottom')
@@ -4408,11 +4408,11 @@ class PulseQuality(QWidget):
         self.analysis_status.setWordWrap(True)
         pa_options.addWidget(self.analysis_status, 1, 1)
         # current threshold
-        pa_options.addWidget(QLabel("Current threshold", objectName="label"), 2, 0)
+        pa_options.addWidget(QLabel("Current threshold (mV)", objectName="label"), 2, 0)
         self.current_threshold = QLabel("", objectName="value-label")
         pa_options.addWidget(self.current_threshold, 2, 1)
         # original threshold
-        pa_options.addWidget(QLabel("Original threshold", objectName="label"), 3, 0)
+        pa_options.addWidget(QLabel("Original threshold (mV)", objectName="label"), 3, 0)
         self.original_threshold = QLabel("", objectName="value-label")
         pa_options.addWidget(self.original_threshold, 3, 1)
 
@@ -4421,12 +4421,12 @@ class PulseQuality(QWidget):
 
         # TESTING
 
-        # TODO remove after testing
-        self.add_analysis_point(1, 1)
-        self.add_analysis_point(2, 2)
-        self.add_analysis_point(3, 4)
-        self.add_analysis_point(4, 8)
-        self.add_analysis_point(5, 16)
+        # # TODO remove after testing
+        # self.add_analysis_point(1, 1)
+        # self.add_analysis_point(2, 2)
+        # self.add_analysis_point(3, 4)
+        # self.add_analysis_point(4, 8)
+        # self.add_analysis_point(5, 16)
 
         # import numpy as np
         # # create test data arrays and plot them
