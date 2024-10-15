@@ -959,10 +959,11 @@ class MainWindow(QMainWindow):
                                     logging.exception(e)
 
                             # check if data is valid and store to latest_data dictionary
-                            if float(readings[0]) != 0: # if data is valid, not 0
+                            # readings length should be 3 (RH, T, P)
+                            if len(readings) == 3:
                                 # store data to latest_data
                                 self.latest_data[dev_id] = readings
-                            else: # if data is not valid, 0
+                            else: # if data is not valid
                                 # store nan values to latest_data
                                 self.latest_data[dev_id] = full(3, nan)
 
@@ -1017,7 +1018,8 @@ class MainWindow(QMainWindow):
                             #print("AFM readings:", readings)
 
                             # check if data is valid and store to latest_data dictionary
-                            if float(readings[2]) != 0: # if RH data is valid, not 0
+                            # readings length should be 5 (volumetric flow, standard flow, RH, T, P)
+                            if len(readings) == 5:
                                 self.latest_data[dev_id] = readings
                             else:
                                 self.latest_data[dev_id] = full(5, nan)
