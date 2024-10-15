@@ -803,9 +803,6 @@ class MainWindow(QMainWindow):
                                     print(traceback.format_exc())
                                     logging.exception(e)
                                 
-                                # TODO remove after testing
-                                print(dev.child('Device name').value(), "scan status:", scan_status)
-                                
                                 # compile and store psm data to latest data dictionary with device id as key
                                 self.latest_data[dev_id] = self.compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
                             
