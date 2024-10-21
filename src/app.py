@@ -593,7 +593,7 @@ class MainWindow(QMainWindow):
                     if dev_id in self.extra_data:
                         self.latest_data[dev_id] = self.extra_data.pop(dev_id)
                     else:
-                        self.latest_data[dev_id] = full(14, nan)
+                        self.latest_data[dev_id] = full(15, nan)
                     if str(dev_id)+":prnt" in self.extra_data:
                         prnt_list = self.extra_data.pop(str(dev_id)+":prnt")
                     else:
@@ -622,8 +622,13 @@ class MainWindow(QMainWindow):
                             if command == ":MEAS:ALL":
                                 status_hex = data[-1] # store status hex value
 
+                                # check if cabin pressure value is within valid range (0-200 kPa)
+                                if float(data[12]) < 0 or float(data[12]) > 200:
+                                    cabin_p_error = True
+                                else:
+                                    cabin_p_error = False
                                 # update widget error colors and store total errors
-                                total_errors = self.device_widgets[dev_id].update_errors(status_hex)
+                                total_errors = self.device_widgets[dev_id].update_errors(status_hex, cabin_p_error)
                                 
                                 # set error_status flag if total errors is not 0
                                 if total_errors != 0:
@@ -1249,8 +1254,8 @@ class MainWindow(QMainWindow):
                                     cpc_data[0], round(dilution_correction_factor, 3), # concentration,  dilution correction factor
                                     cpc_data[3], cpc_data[4], cpc_data[5], cpc_data[6],# T: saturator, condenser, optics, cabin
                                     cpc_data[8], cpc_data[9], cpc_data[7],# P: critical orifice, nozzle, absolute (inlet)
-                                    cpc_data[10], cpc_data[3], cpc_data[2],# liquid level, pulses, pulse duration
-                                    cpc_data[12], cpc_data[13] # number of errors, system status (hex)
+                                    cpc_data[11], cpc_data[3], cpc_data[2],# liquid level, pulses, pulse duration
+                                    cpc_data[13], cpc_data[14] # number of errors, system status (hex)
                                 ]
                                 # replace PSM's latest_data CPC placeholders with connected CPC data
                                 self.latest_data[psm_id][-16:-2] = connected_cpc_data # 14 values before status hex and note hex
@@ -1384,7 +1389,7 @@ class MainWindow(QMainWindow):
                                         pulse_duration = round(self.latest_data[dev_id][1] * 1000 / self.latest_data[dev_id][2], 2)
                                     # store pulse duration and pulse ratio values to plot_data
                                     self.plot_data[str(dev_id)+':pd'][-1] = pulse_duration
-                                    self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][11]
+                                    self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][12]
                                 else: # if concentration is outside range (invalid)
                                     # store nan values to plot_data
                                     self.plot_data[str(dev_id)+':pd'][-1] = nan
@@ -1721,7 +1726,7 @@ class MainWindow(QMainWindow):
                             #if len(file.readline()) == 0:
                                 if dev.child('Device type').value() == CPC: # CPC
                                     # TODO complete CPC headers, check if ok
-                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration (#/cc),Dead time (µs),Number of pulses,Saturator T (C),Condenser T (C),Optics T (C),Cabin T (C),Inlet P (kPa),Critical orifice P (kPa),Nozzle P (kPa),Liquid level,Pulse ratio,Total CPC errors,System status error')
+                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration (#/cc),Dead time (µs),Number of pulses,Saturator T (C),Condenser T (C),Optics T (C),Cabin T (C),Inlet P (kPa),Critical orifice P (kPa),Nozzle P (kPa),Cabin P (kPa),Liquid level,Pulse ratio,Total CPC errors,System status error')
                                 elif dev.child('Device type').value() == PSM: # PSM
                                     # TODO check if PSM headers are ok
                                     file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)')
@@ -1930,7 +1935,7 @@ class MainWindow(QMainWindow):
         cpc_data = [ # TODO nominal flow concentration
             meas[0], meas[2], meas[1], # concentration, dead time, number of pulses during average
             meas[5], meas[7], meas[6], meas[8], # T: saturator, condenser, optics, cabin
-            meas[9], meas[10], meas[11], # P: inlet, critical orifice, nozzle
+            meas[9], meas[10], meas[11], meas[12], # P: inlet, critical orifice, nozzle, cabin
             int(meas[14]), pulse_ratio, # liquid level, pulse ratio
             total_errors, status_hex # total number of errors, hexadecimal system status
             # TODO add OPC voltage level when added to firmware
@@ -3216,12 +3221,19 @@ class CPCWidget(QTabWidget):
         ]
 
     # convert CPC status hex to binary and update error label colors
-    def update_errors(self, status_hex):
+    def update_errors(self, status_hex, cabin_p_error):
         status_bin = bin(int(status_hex, 16)) # convert hex to int and int to binary
         status_bin = status_bin[2:].zfill(9) # remove 0b from string and fill with 0s to make 9 digits
         total_errors = status_bin.count("1") # count number of 1s in status_bin
         for i in range(9): # iterate through all 9 digits, index 0-8
             self.cpc_status_widgets[i].change_color(status_bin[i]) # change color of error label according to status_bin digit
+        if cabin_p_error:
+            # TODO update cabin pressure error label
+            #self.status_tab.pres_cabin.change_color(1)
+            total_errors += 1
+        else:
+            #self.status_tab.pres_cabin.change_color(0)
+            pass
         
         return total_errors # return total number of errors
     
@@ -3281,6 +3293,8 @@ class CPCWidget(QTabWidget):
         self.status_tab.pres_inlet.change_value(str(current_list[7]) + " kPa")
         self.status_tab.pres_nozzle.change_value(str(current_list[9]) + " kPa")
         self.status_tab.pres_critical_orifice.change_value(str(current_list[8]) + " kPa")
+        # TODO add cabin pressure update (index 10)
+        # self.status_tab.pres_cabin.change_value(str(current_list[10]) + " kPa")
         # update misc values
         if current_list[10] == 0:
             self.status_tab.liquid_level.change_value("LOW")
