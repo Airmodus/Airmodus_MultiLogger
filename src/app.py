@@ -3227,13 +3227,12 @@ class CPCWidget(QTabWidget):
         total_errors = status_bin.count("1") # count number of 1s in status_bin
         for i in range(9): # iterate through all 9 digits, index 0-8
             self.cpc_status_widgets[i].change_color(status_bin[i]) # change color of error label according to status_bin digit
+        # update cabin pressure label color according to error status
         if cabin_p_error:
-            # TODO update cabin pressure error label
-            #self.status_tab.pres_cabin.change_color(1)
+            self.status_tab.pres_cabin.change_color(1)
             total_errors += 1
         else:
-            #self.status_tab.pres_cabin.change_color(0)
-            pass
+            self.status_tab.pres_cabin.change_color(0)
         
         return total_errors # return total number of errors
     
@@ -3293,14 +3292,13 @@ class CPCWidget(QTabWidget):
         self.status_tab.pres_inlet.change_value(str(current_list[7]) + " kPa")
         self.status_tab.pres_nozzle.change_value(str(current_list[9]) + " kPa")
         self.status_tab.pres_critical_orifice.change_value(str(current_list[8]) + " kPa")
-        # TODO add cabin pressure update (index 10)
-        # self.status_tab.pres_cabin.change_value(str(current_list[10]) + " kPa")
+        self.status_tab.pres_cabin.change_value(str(current_list[10]) + " kPa")
         # update misc values
-        if current_list[10] == 0:
+        if current_list[11] == 0:
             self.status_tab.liquid_level.change_value("LOW")
-        elif current_list[10] == 1:
+        elif current_list[11] == 1:
             self.status_tab.liquid_level.change_value("OK")
-        elif current_list[10] == 2:
+        elif current_list[11] == 2:
             self.status_tab.liquid_level.change_value("OVERFILL")
         self.status_tab.temp_cabin.change_value(str(current_list[6]) + " °C")
 
@@ -4055,27 +4053,29 @@ class CPCStatusTab(QWidget):
 
         # temperature indicators
         self.temp_optics = IndicatorWidget("Optics temperature") # create optics temperature indicator
-        layout.addWidget(self.temp_optics, 1, 0)
+        layout.addWidget(self.temp_optics, 0, 0)
         self.temp_saturator = IndicatorWidget("Saturator temperature") # create saturator temperature indicator
-        layout.addWidget(self.temp_saturator, 2, 0)
+        layout.addWidget(self.temp_saturator, 1, 0)
         self.temp_condenser = IndicatorWidget("Condenser temperature") # create condenser temperature indicator
-        layout.addWidget(self.temp_condenser, 3, 0)
+        layout.addWidget(self.temp_condenser, 2, 0)
+        self.temp_cabin = IndicatorWidget("Cabin temperature") # create cabin temp indicator
+        layout.addWidget(self.temp_cabin, 3, 0)
 
         # pressure indicators
         self.pres_inlet = IndicatorWidget("Inlet pressure") # create inlet pressure indicator
-        layout.addWidget(self.pres_inlet, 1, 1)
+        layout.addWidget(self.pres_inlet, 0, 1)
         self.pres_nozzle = IndicatorWidget("Nozzle pressure") # create nozzle pressure indicator
-        layout.addWidget(self.pres_nozzle, 2, 1)
+        layout.addWidget(self.pres_nozzle, 1, 1)
         self.pres_critical_orifice = IndicatorWidget("Critical orifice pressure") # create nozzle pressure indicator
-        layout.addWidget(self.pres_critical_orifice, 3, 1)
+        layout.addWidget(self.pres_critical_orifice, 2, 1)
+        self.pres_cabin = IndicatorWidget("Cabin pressure") # create cabin pressure indicator
+        layout.addWidget(self.pres_cabin, 3, 1)
 
         # misc indicators
         self.laser_power = IndicatorWidget("Laser power") # create laser power indicator
-        layout.addWidget(self.laser_power, 1, 2)
+        layout.addWidget(self.laser_power, 0, 2, 2, 1)
         self.liquid_level = IndicatorWidget("Liquid level") # create liquid level indicator
-        layout.addWidget(self.liquid_level, 2, 2)
-        self.temp_cabin = IndicatorWidget("Cabin temperature") # create cabin temp indicator
-        layout.addWidget(self.temp_cabin, 3, 2)
+        layout.addWidget(self.liquid_level, 2, 2, 2, 1)
 
         self.setLayout(layout)
 
