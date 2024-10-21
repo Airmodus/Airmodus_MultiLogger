@@ -35,6 +35,16 @@ TSI_CPC = 8
 AFM = 9
 Example_device = -1
 
+# CPC self test error descriptions
+CPC_ERRORS = (
+    "RESERVED FOR FUTURE USE", "ERROR_SELFTEST_FLASH_ID", "ERROR_SELFTEST_TEMP_GROWTH_TUBE", "ERROR_SELFTEST_TEMP_SATURATOR", "RESERVED FOR FUTURE USE",
+    "ERROR_SELFTEST_TEMP_BOARD", "ERROR_SELFTEST_LIQUID_SENSOR", "ERROR_SELFTEST_PRESSURE_ABS", "ERROR_SELFTEST_PRESSURE_MIX1", "ERROR_SELFTEST_PRESSURE_MIX2",
+    "ERROR_SELFTEST_TEMP_PREHEATER", "ERROR_SELFTEST_VOLTAGE_3V3", "ERROR_SELFTEST_VOLTAGE_5V", "ERROR_SELFTEST_VOLTAGE_12V", "ERROR_SELFTEST_VOLTAGE_REF_NTC",
+    "ERROR_SELFTEST_VOLTAGE_REF_PRES", "ERROR_SELFTEST_VOLTAGE_REF_DAC", "ERROR_SELFTEST_TEMP_INLET", "ERROR_SELFTEST_DRAIN_LIQUID_SENSOR",
+    "ERROR_SELFTEST_FAN1", "ERROR_SELFTEST_FAN2", "ERROR_SELFTEST_FAN3", "ERROR_SELFTEST_RTC", "ERROR_SELFTEST_DAC1", "ERROR_SELFTEST_DAC2",
+    "ERROR_SELFTEST_TEMP_DRAIN", "ERROR_SELFTEST_MFC_SATURATOR", "ERROR_SELFTEST_MFC_EXCESS"
+)
+
 warnings.filterwarnings("ignore", message='Mean of empty slice')
 warnings.filterwarnings("ignore", message='All-NaN slice encountered')
 
@@ -677,9 +687,10 @@ class MainWindow(QMainWindow):
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
                                 # print error indices
                                 for i in range(28): # loop through binary digits
-                                    bit_index = 27 - i # this should match the indices or errors in manual
+                                    bit_index = 27 - i # this should match the indices of errors in manual
                                     if status_bin[i] == "1":
                                         self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(bit_index))
+                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + CPC_ERRORS[bit_index])
                             
                             elif command == "*IDN":
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
