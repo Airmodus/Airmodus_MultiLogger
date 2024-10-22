@@ -35,8 +35,17 @@ TSI_CPC = 8
 AFM = 9
 Example_device = -1
 
-# CPC self test error descriptions
+# self test error descriptions
 CPC_ERRORS = (
+    "RESERVED FOR FUTURE USE", "ERROR_SELFTEST_FLASH_ID", "ERROR_SELFTEST_TEMP_OPTICS", "ERROR_SELFTEST_TEMP_SATURATOR", "ERROR_SELFTEST_TEMP_CONDENSER",
+    "ERROR_SELFTEST_TEMP_BOARD", "ERROR_SELFTEST_LIQUID_SENSOR", "ERROR_SELFTEST_PRESSURE_INLET", "ERROR_SELFTEST_PRESSURE_NOZZLE", "ERROR_SELFTEST_PRESSURE_CRITICAL",
+    "ERROR_SELFTEST_DISPLAY", "ERROR_SELFTEST_VOLTAGE_3V3", "ERROR_SELFTEST_VOLTAGE_5V", "ERROR_SELFTEST_VOLTAGE_12V", "ERROR_SELFTEST_VOLTAGE_REF_NTC",
+    "ERROR_SELFTEST_VOLTAGE_REF_PRES", "ERROR_SELFTEST_VOLTAGE_REF_DAC", "ERROR_SELFTEST_VOLTAGE_OPC_DC", "ERROR_SELFTEST_VOLTAGE_LASER",
+    "ERROR_SELFTEST_FAN1", "ERROR_SELFTEST_FAN2", "ERROR_SELFTEST_FAN3", "ERROR_SELFTEST_PRESSURE_CAB", "ERROR_SELFTEST_RTC",
+    "ERROR_SELFTEST_DAC1", "ERROR_SELFTEST_DAC2", "ERROR_SELFTEST_ANALOG_OUT", "ERROR_SELFTEST_ANALOG_OUT2", "ERROR_SELFTEST_PRESSURE_WREM",
+)
+
+PSM_ERRORS = (
     "RESERVED FOR FUTURE USE", "ERROR_SELFTEST_FLASH_ID", "ERROR_SELFTEST_TEMP_GROWTH_TUBE", "ERROR_SELFTEST_TEMP_SATURATOR", "RESERVED FOR FUTURE USE",
     "ERROR_SELFTEST_TEMP_BOARD", "ERROR_SELFTEST_LIQUID_SENSOR", "ERROR_SELFTEST_PRESSURE_ABS", "ERROR_SELFTEST_PRESSURE_MIX1", "ERROR_SELFTEST_PRESSURE_MIX2",
     "ERROR_SELFTEST_TEMP_PREHEATER", "ERROR_SELFTEST_VOLTAGE_3V3", "ERROR_SELFTEST_VOLTAGE_5V", "ERROR_SELFTEST_VOLTAGE_12V", "ERROR_SELFTEST_VOLTAGE_REF_NTC",
@@ -682,14 +691,13 @@ class MainWindow(QMainWindow):
                             
                             elif command == ":STAT:SELF:LOG":
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
-                                # TODO make sure largest error index in firmware is 28
                                 status_bin = bin(int(data[0], 16)) # convert hex to int and int to binary
-                                status_bin = status_bin[2:].zfill(28) # remove 0b from string and fill with 0s to make 28 digits
+                                status_bin = status_bin[2:].zfill(29) # remove 0b from string and fill with 0s to make 29 digits
                                 # print self test error binary
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
                                 # print error indices
-                                for i in range(28): # loop through binary digits
-                                    bit_index = 27 - i # this should match the indices of errors in manual
+                                for i in range(29): # loop through binary digits
+                                    bit_index = 28 - i # this should match the indices of errors in manual
                                     if status_bin[i] == "1":
                                         self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(bit_index))
                                         self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + CPC_ERRORS[bit_index])
