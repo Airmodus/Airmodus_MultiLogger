@@ -426,6 +426,8 @@ class MainWindow(QMainWindow):
         # connect main_plot's viewboxes' sigXRangeChanged signals to x_range_changed function
         for viewbox in self.main_plot.viewboxes.values():
             viewbox.sigXRangeChanged.connect(self.x_range_changed)
+        # connect main_plot's auto range button click to auto_range_clicked function
+        self.main_plot.plot.autoBtn.clicked.connect(self.auto_range_clicked)
 
         # list com ports at startup
         self.list_com_ports()
@@ -2316,15 +2318,21 @@ class MainWindow(QMainWindow):
         if self.params.child("Plot settings").child('Autoscale Y').value():
             viewbox.enableAutoRange(axis='y')
             viewbox.setAutoVisible(y=True)
-        """ # if Follow is on
-        if self.params.child('Plot settings').child('Follow').value():
-            # detect if view is dragged and turn Follow off if it is
-            viewbox_range = viewbox.viewRange()
-            # if x axis range differs from follow window size OR x axis max value differs from self.current_time
-            if viewbox_range[0][1]-viewbox_range[0][0] != self.params.child('Plot settings').child('Time window (s)').value() or viewbox_range[0][1] != self.current_time:
-                # if active widget is main plot
-                if QApplication.focusWidget() == self.main_plot:
-                    self.params.child('Plot settings').child('Follow').setValue(False) # turn follow parameter off """
+    
+    # called when main plot's auto range button is clicked
+    def auto_range_clicked(self):
+        # disable follow
+        self.params.child("Plot settings").child('Follow').setValue(False)
+        # set autorange on for individual plots
+        for dev in self.params.child('Device settings').children():
+            dev_id = dev.child('DevID').value()
+            dev_type = dev.child('Device type').value()
+            if dev_type == Electrometer:
+                for plot in self.device_widgets[dev_id].plot_tab.plots:
+                    plot.enableAutoRange()
+            else:
+                self.device_widgets[dev_id].plot_tab.plot.enableAutoRange()
+            
     
     # set the 'Plot to main' selection of all RHTP devices to the same value
     # called when 'Plot to main' selection of any RHTP device is changed
@@ -2877,6 +2885,9 @@ class MainPlot(GraphicsLayoutWidget):
         # call updateViews function to set viewboxes to same size
         self.updateViews()
 
+        # connect plot's auto range button to set_auto_range function
+        self.plot.autoBtn.clicked.connect(self.set_auto_range)
+
         # hide axes and disable SI scaling by default
         for key in self.axes:
             self.axes[key].hide()
@@ -2898,6 +2909,11 @@ class MainPlot(GraphicsLayoutWidget):
                 viewbox.setGeometry(self.plot.vb.sceneBoundingRect())
                 # update linked axes
                 viewbox.linkedViewChanged(self.plot.vb, viewbox.XAxis)
+    
+    # set auto range on for all viewboxes
+    def set_auto_range(self):
+        for viewbox in self.viewboxes.values():
+            viewbox.enableAutoRange()
     
     def set_axis_style(self, axis, color):
         axis.setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
