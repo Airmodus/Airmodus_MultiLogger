@@ -47,11 +47,11 @@ CPC_ERRORS = (
 
 PSM_ERRORS = (
     "RESERVED FOR FUTURE USE", "ERROR_SELFTEST_FLASH_ID", "ERROR_SELFTEST_TEMP_GROWTH_TUBE", "ERROR_SELFTEST_TEMP_SATURATOR", "RESERVED FOR FUTURE USE",
-    "ERROR_SELFTEST_TEMP_BOARD", "ERROR_SELFTEST_LIQUID_SENSOR", "ERROR_SELFTEST_PRESSURE_ABS", "ERROR_SELFTEST_PRESSURE_MIX1", "ERROR_SELFTEST_PRESSURE_MIX2",
+    "ERROR_SELFTEST_TEMP_BOARD", "ERROR_SELFTEST_LIQUID_SENSOR", "ERROR_SELFTEST_PRESSURE_ABS", "ERROR_SELFTEST_PRESSURE_ABSSAT", "ERROR_SELFTEST_PRESSURE_SATDRY",
     "ERROR_SELFTEST_TEMP_PREHEATER", "ERROR_SELFTEST_VOLTAGE_3V3", "ERROR_SELFTEST_VOLTAGE_5V", "ERROR_SELFTEST_VOLTAGE_12V", "ERROR_SELFTEST_VOLTAGE_REF_NTC",
     "ERROR_SELFTEST_VOLTAGE_REF_PRES", "ERROR_SELFTEST_VOLTAGE_REF_DAC", "ERROR_SELFTEST_TEMP_INLET", "ERROR_SELFTEST_DRAIN_LIQUID_SENSOR",
     "ERROR_SELFTEST_FAN1", "ERROR_SELFTEST_FAN2", "ERROR_SELFTEST_FAN3", "ERROR_SELFTEST_RTC", "ERROR_SELFTEST_DAC1", "ERROR_SELFTEST_DAC2",
-    "ERROR_SELFTEST_TEMP_DRAIN", "ERROR_SELFTEST_MFC_SATURATOR", "ERROR_SELFTEST_MFC_EXCESS"
+    "ERROR_SELFTEST_TEMP_DRAIN", "ERROR_SELFTEST_MFC_SATURATOR", "ERROR_SELFTEST_MFC_HEATER", "ERROR_SELFTEST_PRESSURE_CRIT", "ERROR_SELFTEST_MFC_VACUUM"
 )
 
 warnings.filterwarnings("ignore", message='Mean of empty slice')
@@ -841,6 +841,23 @@ class MainWindow(QMainWindow):
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 # set settings_fetched flag to True
                                 settings_fetched = True
+                            
+                            elif command == ":STAT:SELF:LOG":
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                status_bin = bin(int(data[0], 16)) # convert hex to int and int to binary
+                                status_bin = status_bin[2:].zfill(30) # remove 0b from string and fill with 0s to make 30 digits
+                                # print self test error binary
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
+                                # print error indices
+                                for i in range(30): # loop through binary digits
+                                    bit_index = 29 - i # this should match the indices of errors in manual
+                                    if status_bin[i] == "1":
+                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(bit_index))
+                                        # if error is MFC_HEATER / MFC_EXCESS, check device type
+                                        if bit_index == 27 and dev.child('Device type').value() == PSM:
+                                            self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + "ERROR_SELFTEST_MFC_EXCESS")
+                                        else:
+                                            self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + PSM_ERRORS[bit_index])
                             
                             elif command == "*IDN":
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
