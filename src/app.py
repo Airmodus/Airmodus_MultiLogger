@@ -1292,7 +1292,7 @@ class MainWindow(QMainWindow):
                                     cpc_data[0], round(dilution_correction_factor, 3), # concentration,  dilution correction factor
                                     cpc_data[3], cpc_data[4], cpc_data[5], cpc_data[6],# T: saturator, condenser, optics, cabin
                                     cpc_data[8], cpc_data[9], cpc_data[7],# P: critical orifice, nozzle, absolute (inlet)
-                                    cpc_data[11], cpc_data[3], cpc_data[2],# liquid level, pulses, pulse duration
+                                    cpc_data[11], cpc_data[2], cpc_data[1],# liquid level, pulses, pulse duration
                                     cpc_data[13], cpc_data[14] # number of errors, system status (hex)
                                 ]
                                 # replace PSM's latest_data CPC placeholders with connected CPC data
