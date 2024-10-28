@@ -703,6 +703,15 @@ class MainWindow(QMainWindow):
                                     if status_bin[i] == "1":
                                         self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(bit_index))
                                         self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + CPC_ERRORS[bit_index])
+
+                            elif command == ":SELF:ERR":
+                                try:
+                                    self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                    error_code = int(data[0])
+                                    print("self test error: " + CPC_ERRORS[error_code])
+                                except Exception as e:
+                                    print(traceback.format_exc())
+                                    logging.exception(e)
                             
                             elif command == "*IDN":
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
@@ -862,6 +871,19 @@ class MainWindow(QMainWindow):
                                             self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + "ERROR_SELFTEST_MFC_EXCESS")
                                         else:
                                             self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + PSM_ERRORS[bit_index])
+                            
+                            elif command == ":SELF:ERR":
+                                try:
+                                    self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                    error_code = int(data[0])
+                                    # if error is MFC_HEATER / MFC_EXCESS, check device type
+                                    if error_code == 27 and dev.child('Device type').value() == PSM:
+                                        print("self test error: " + "ERROR_SELFTEST_MFC_EXCESS")
+                                    else:
+                                        print("self test error: " + PSM_ERRORS[int(error_code)])
+                                except Exception as e:
+                                    print(traceback.format_exc())
+                                    logging.exception(e)
                             
                             elif command == "*IDN":
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
