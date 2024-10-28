@@ -643,6 +643,8 @@ class MainWindow(QMainWindow):
                             if command == ":MEAS:ALL":
                                 status_hex = data[-1] # store status hex value
 
+                                print(data)
+
                                 # check if cabin pressure value is within valid range (0-200 kPa)
                                 if float(data[12]) < 0 or float(data[12]) > 200:
                                     cabin_p_error = True
@@ -813,12 +815,14 @@ class MainWindow(QMainWindow):
                                 try:
                                     if dev.child('Firmware version').value() != "":
                                         firmware_version = dev.child('Firmware version').value().split(".")
-                                        # Retrofit: version >= 0.5.4
+                                        # Retrofit: version >= 
+                                        # TODO add correct version check when scan status is added to firmware
                                         if dev.child('Device type').value() == PSM:
-                                            if int(firmware_version[1]) > 5:
-                                                scan_status = data[15]
-                                            elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 4:
-                                                scan_status = data[15]
+                                            # if int(firmware_version[1]) > 5:
+                                            #     scan_status = data[15]
+                                            # elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 4:
+                                            #     scan_status = data[15]
+                                            pass
                                         # PSM 2.0: version >= 0.6.8
                                         elif dev.child('Device type').value() == PSM2:
                                             if int(firmware_version[1]) > 6:
