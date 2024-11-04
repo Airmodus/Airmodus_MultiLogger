@@ -2569,7 +2569,11 @@ class MainWindow(QMainWindow):
         if device_id in self.pulse_analysis_filenames:
             self.pulse_analysis_filenames.pop(device_id)
 
-        # TODO add analysis here
+        # TODO plot gaussian fit and calculate nRMSE
+        # analysis values are stored as listed tuples (pulse duration, threshold value)
+        analysis_values = self.device_widgets[device_id].pulse_quality.analysis_values
+        pulse_durations = [x[0] for x in analysis_values]
+        thresholds = [x[1] for x in analysis_values]
 
         # enable command input
         self.device_widgets[device_id].set_tab.command_widget.enable_command_input()
@@ -4381,10 +4385,6 @@ class PulseQuality(QWidget):
         pa_plot.setDownsampling(mode='peak')
         pa_plot.setClipToView(True)
         pa_plot.showGrid(x=True, y=True, alpha=0.5)
-        # set fixed plot scaling
-        pa_viewbox.setRange(xRange=[0, 600], yRange=[0, 1500], padding=0.1)
-        pa_viewbox.setMouseEnabled(x=False, y=False) # disable mouse interaction
-        pa_plot.hideButtons() # remove autorange button
         # create analysis plot and values list
         self.analysis_points = pa_plot.plot(pen=None, symbol='o', symbolPen=(0, 0, 0), symbolSize=10, symbolBrush=(255, 255, 255))
         self.analysis_values = [] # list for storing analysis values as tuples (x = duration, y = threshold)
@@ -4397,6 +4397,10 @@ class PulseQuality(QWidget):
         x_axis.setLabel('Pulse duration', units='ns', color='w')
         x_axis.enableAutoSIPrefix(False)
         self.set_axis_style(x_axis, 'w')
+        # set fixed plot scaling
+        pa_viewbox.setRange(xRange=[0, 600], yRange=[0, 1500], padding=0.1)
+        pa_viewbox.setMouseEnabled(x=False, y=False) # disable mouse interaction
+        pa_plot.hideButtons() # remove autorange button
 
         # pulse analysis options layout
         pa_options = QGridLayout()
