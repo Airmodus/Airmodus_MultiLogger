@@ -3291,20 +3291,23 @@ class CPCWidget(QTabWidget):
 
         # create list of widget references for updating gui with cpc system status
         self.cpc_status_widgets = [
-            self.status_tab.pres_critical_orifice, self.status_tab.temp_cabin,
-            self.status_tab.liquid_level, self.status_tab.laser_power,
-            self.status_tab.pres_nozzle, self.status_tab.pres_inlet,
-            self.status_tab.temp_condenser, self.status_tab.temp_saturator,
-            self.status_tab.temp_optics
+            self.status_tab.temp_optics, self.status_tab.temp_saturator,
+            self.status_tab.temp_condenser, self.status_tab.pres_inlet,
+            self.status_tab.pres_nozzle, self.status_tab.laser_power,
+            self.status_tab.liquid_level, self.status_tab.temp_cabin,
+            self.status_tab.pres_critical_orifice
         ]
 
     # convert CPC status hex to binary and update error label colors
     def update_errors(self, status_hex, cabin_p_error):
+        widget_amount = len(self.cpc_status_widgets) # get amount of widgets
         status_bin = bin(int(status_hex, 16)) # convert hex to int and int to binary
-        status_bin = status_bin[2:].zfill(9) # remove 0b from string and fill with 0s to make 9 digits
+        status_bin = status_bin[2:].zfill(widget_amount) # remove 0b from string and fill with 0s to make 9 digits
         total_errors = status_bin.count("1") # count number of 1s in status_bin
-        for i in range(9): # iterate through all 9 digits, index 0-8
-            self.cpc_status_widgets[i].change_color(status_bin[i]) # change color of error label according to status_bin digit
+        inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
+        for i in range(widget_amount): # iterate through all status widgets
+            # change color of error label according to error bit
+            self.cpc_status_widgets[i].change_color(inverted_status_bin[i])
         # update cabin pressure label color according to error status
         if cabin_p_error:
             self.status_tab.pres_cabin.change_color(1)
