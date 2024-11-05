@@ -643,8 +643,6 @@ class MainWindow(QMainWindow):
                             if command == ":MEAS:ALL":
                                 status_hex = data[-1] # store status hex value
 
-                                print(data)
-
                                 # check if cabin pressure value is within valid range (0-200 kPa)
                                 if float(data[12]) < 0 or float(data[12]) > 200:
                                     cabin_p_error = True
@@ -814,8 +812,8 @@ class MainWindow(QMainWindow):
                                     logging.exception(e)
                                 # note hex handling
                                 note_hex = data[-1]
-                                # update widget liquid states with note hex, get liquid sets in return
-                                liquid_sets = self.device_widgets[dev_id].update_notes(note_hex)
+                                # update widget liquid states with note hex
+                                self.device_widgets[dev_id].update_notes(note_hex)
                                 # store polynomial correction value as float to dictionary
                                 self.latest_poly_correction[dev_id] = float(data[14])
 
@@ -3302,7 +3300,7 @@ class CPCWidget(QTabWidget):
     def update_errors(self, status_hex, cabin_p_error):
         widget_amount = len(self.cpc_status_widgets) # get amount of widgets
         status_bin = bin(int(status_hex, 16)) # convert hex to int and int to binary
-        status_bin = status_bin[2:].zfill(widget_amount) # remove 0b from string and fill with 0s to make 9 digits
+        status_bin = status_bin[2:].zfill(widget_amount) # remove 0b from string and fill with 0s
         total_errors = status_bin.count("1") # count number of 1s in status_bin
         inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
         for i in range(widget_amount): # iterate through all status widgets
@@ -3403,19 +3401,18 @@ class PSMWidget(QTabWidget):
         self.plot_tab = SinglePlot(device_type=PSM)
         self.addTab(self.plot_tab, "PSM plot")
 
-        # TODO check PSM 2.0 compatibility
         # create list of PSM status widgets, used in update_errors
-        # TODO reverse to correct order, change update_errors
-        self.psm_status_widgets = [ # reverse order for binary
-            "mfc_temp", self.status_tab.pressure_critical_orifice,
-            self.status_tab.temp_drainage, self.status_tab.temp_cabin, "drain_level",
-            self.status_tab.flow_excess, self.status_tab.pressure_inlet, "mix2_press", "mix1_press",
-            self.status_tab.temp_inlet, self.status_tab.temp_heater, self.status_tab.flow_saturator,
-            self.status_tab.temp_saturator, self.status_tab.temp_growth_tube
+        self.psm_status_widgets = [
+            self.status_tab.temp_growth_tube, self.status_tab.temp_saturator,
+            self.status_tab.flow_saturator, self.status_tab.temp_heater,
+            self.status_tab.temp_inlet, "mix1_press", "mix2_press",
+            self.status_tab.pressure_inlet, self.status_tab.flow_excess,
+            "drain_level", self.status_tab.temp_cabin, self.status_tab.temp_drainage,
+            self.status_tab.pressure_critical_orifice, "mfc_temp"
         ]
         # if PSM 2.0, add vacuum flow widget to list
         if device_type == PSM2:
-            self.psm_status_widgets.insert(0, self.status_tab.flow_vacuum)
+            self.psm_status_widgets.append(self.status_tab.flow_vacuum)
 
     # convert PSM status hex to binary and update error label colors
     def update_errors(self, status_hex):
@@ -3423,39 +3420,38 @@ class PSMWidget(QTabWidget):
         status_bin = bin(int(status_hex, 16)) # convert hex to int and int to binary
         status_bin = status_bin[2:].zfill(widget_amount) # remove 0b from string and fill with 0s to length of widget_amount
         total_errors = status_bin.count("1") # count number of 1s in status_bin
-        for i in range(widget_amount): # iterate through all digits
+        inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
+        for i in range(widget_amount): # iterate through all status widgets
             if type(self.psm_status_widgets[i]) != str: # filter placeholder strings
-                self.psm_status_widgets[i].change_color(status_bin[i]) # change color of error label according to status_bin digit
+                # change color of error label according to error bit
+                self.psm_status_widgets[i].change_color(inverted_status_bin[i])
         
         return total_errors # return total number of errors
     
-    # if hex changes, make sure zero fill and indices match new hex
+    # convert PSM notes hex to binary and update liquid mode settings
     def update_notes(self, note_hex):
-        # TODO PSM 2.0 should have same note_hex as PSM after its firmware is updated
+        note_length = 7 # if new note bits are added in firmware, change this value accordingly
         note_bin = bin(int(note_hex, 16)) # convert hex to int and int to binary
-        note_bin = note_bin[2:].zfill(7) # remove 0b from string and fill with 0s
+        note_bin = note_bin[2:].zfill(note_length) # remove 0b from string and fill with 0s
         total_notes = note_bin.count("1") # count number of 1s in note_bin
-        liquid_sets = note_bin[:3] # autofill, drying, drainage
-
+        inverted_note_bin = note_bin[::-1] # invert note_bin for liquid setting parsing
         # update liquid mode settings in GUI
         # 0 = autofill on, 1 = autofill off
-        if note_bin[1] == "0":
+        if inverted_note_bin[5] == "0":
             self.set_tab.autofill.update_state(1)
-        elif note_bin[1] == "1":
+        elif inverted_note_bin[5] == "1":
             self.set_tab.autofill.update_state(0)
         # 0 = drying off, 1 = drying on
-        self.set_tab.drying.update_state(int(note_bin[2]))
+        self.set_tab.drying.update_state(int(inverted_note_bin[4]))
         # 0 = drain on, 1 = drain off
-        if note_bin[3] == "0":
+        if inverted_note_bin[3] == "0":
             self.set_tab.drain.update_state(1)
-        elif note_bin[3] == "1":
+        elif inverted_note_bin[3] == "1":
             self.set_tab.drain.update_state(0)
         # 0 = saturator liquid level OK, 1 = saturator liquid level LOW
-        self.status_tab.liquid_saturator.change_color(note_bin[0])
+        self.status_tab.liquid_saturator.change_color(inverted_note_bin[6])
         # 0 = drain liquid level OK, 1 = drain liquid level HIGH
-        self.status_tab.liquid_drain.change_color(note_bin[6])
-
-        return liquid_sets # return liquid settings string
+        self.status_tab.liquid_drain.change_color(inverted_note_bin[0])
 
     def update_settings(self, settings):
         self.set_tab.set_growth_tube_temp.value_spinbox.setValue(float(settings[1]))
