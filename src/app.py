@@ -690,17 +690,18 @@ class MainWindow(QMainWindow):
                                     self.extra_data[str(dev_id)+":10hz"] = data
                             
                             elif command == ":STAT:SELF:LOG":
+                                error_length = len(CPC_ERRORS) # get amount of CPC errors
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 status_bin = bin(int(data[0], 16)) # convert hex to int and int to binary
-                                status_bin = status_bin[2:].zfill(29) # remove 0b from string and fill with 0s to make 29 digits
+                                status_bin = status_bin[2:].zfill(error_length) # remove 0b from string and fill with 0s
                                 # print self test error binary
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
+                                inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
                                 # print error indices
-                                for i in range(29): # loop through binary digits
-                                    bit_index = 28 - i # this should match the indices of errors in manual
-                                    if status_bin[i] == "1":
-                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(bit_index))
-                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + CPC_ERRORS[bit_index])
+                                for i in range(error_length): # loop through errors
+                                    if inverted_status_bin[i] == "1":
+                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(i))
+                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + CPC_ERRORS[i])
 
                             elif command == ":SELF:ERR":
                                 try:
@@ -854,21 +855,22 @@ class MainWindow(QMainWindow):
                                 settings_fetched = True
                             
                             elif command == ":STAT:SELF:LOG":
+                                error_length = len(PSM_ERRORS) # get amount of PSM errors
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 status_bin = bin(int(data[0], 16)) # convert hex to int and int to binary
-                                status_bin = status_bin[2:].zfill(30) # remove 0b from string and fill with 0s to make 30 digits
+                                status_bin = status_bin[2:].zfill(error_length) # remove 0b from string and fill with 0s
                                 # print self test error binary
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
+                                inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
                                 # print error indices
-                                for i in range(30): # loop through binary digits
-                                    bit_index = 29 - i # this should match the indices of errors in manual
-                                    if status_bin[i] == "1":
-                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(bit_index))
+                                for i in range(error_length): # loop through binary digits
+                                    if inverted_status_bin[i] == "1":
+                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(i))
                                         # if error is MFC_HEATER / MFC_EXCESS, check device type
-                                        if bit_index == 27 and dev.child('Device type').value() == PSM:
+                                        if i == 27 and dev.child('Device type').value() == PSM: # Retrofit has different error at index 27
                                             self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + "ERROR_SELFTEST_MFC_EXCESS")
                                         else:
-                                            self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + PSM_ERRORS[bit_index])
+                                            self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + PSM_ERRORS[i])
                             
                             elif command == ":SELF:ERR":
                                 try:
