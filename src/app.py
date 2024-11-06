@@ -588,16 +588,24 @@ class MainWindow(QMainWindow):
                     if device_type in [CPC, PSM, PSM2, CO2_sensor, RHTP, AFM]: # CPC, PSM, CO2, RHTP, AFM
                         # if Serial number is empty, send IDN inquiry with delay
                         if dev.child('Serial number').value() == "":
-                            QTimer.singleShot(400, lambda: dev.child('Connection').value().connection.write(b'*IDN?\n'))
+                            self.idn_inquiry(dev.child('Connection').value().connection)
                         # if Serial number has been acquired, check if Firmware version is empty
                         elif device_type in [PSM, PSM2]:
                             # if Firmware version is empty, send firmware version inquiry with delay
                             if dev.child('Firmware version').value() == "":
-                                QTimer.singleShot(400, lambda: dev.child('Connection').value().connection.write(b':SYST:VER\n'))
+                                self.firmware_inquiry(dev.child('Connection').value().connection)
                         
                 except Exception as e:
                     print(traceback.format_exc())
                     logging.exception(e)
+
+    # independent functions for delayed sends prevent serial connections getting mixed up in iteration
+    # send IDN inquiry with delay
+    def idn_inquiry(self, connection):
+        QTimer.singleShot(400, lambda: connection.write(b'*IDN?\n'))
+    # send firmware inquiry with delay
+    def firmware_inquiry(self, connection):
+        QTimer.singleShot(400, lambda: connection.write(b':SYST:VER\n'))
     
     # read and compile data
     def readIndata(self):
@@ -2175,7 +2183,7 @@ class MainWindow(QMainWindow):
                         # open port
                         serial_connection = Serial(str(port[0]), 115200, timeout=0.2)
                         # inquire device type - delay makes sure ESP32 init is done
-                        QTimer.singleShot(300, lambda: serial_connection.write(b'*IDN?\n'))
+                        self.idn_inquiry(serial_connection)
                         # add serial_connection to new_ports dictionary, port address : serial object
                         # new_ports dictionary is sent to update_com_ports after delay
                         new_ports[port[0]] = serial_connection
@@ -2190,7 +2198,7 @@ class MainWindow(QMainWindow):
 
         # trigger update_com_ports with delay
         # reads responses from opened ports and prints devices to GUI
-        QTimer.singleShot(600, lambda: self.update_com_ports(new_ports, com_port_list))
+        QTimer.singleShot(800, lambda: self.update_com_ports(new_ports, com_port_list)) # delay increased from 600 to 800
         # return list of port addresses
         return com_port_list
     
