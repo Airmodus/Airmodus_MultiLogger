@@ -79,8 +79,6 @@ class SerialDeviceConnection():
         self.serial_port = "NaN"
         self.timeout = 0.2
         self.baud_rate = 115200
-        # store comport name currently in use
-        self.port_in_use = "NaN"
         
     def set_port(self, serial_port):
         self.serial_port = serial_port
@@ -95,7 +93,6 @@ class SerialDeviceConnection():
         except: # if fails (i.e. port has not been open) continue normally
             pass
         self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout) #, rtscts=True)
-        self.port_in_use = self.serial_port
         print("Connected to %s" % self.serial_port)
     
     # close serial connection
@@ -107,6 +104,15 @@ class SerialDeviceConnection():
             #print("Connection closed")
         except:
             pass
+    
+    # close old connection and open new connection
+    def change_port(self, serial_port):
+        # close current connection
+        self.close()
+        # set new port
+        self.set_port(serial_port)
+        # connect to new port
+        self.connect()
     
     def send_message(self, message):
         # add line termination and convert to bytes
@@ -152,22 +158,6 @@ class SerialDeviceConnection():
         message = message + str(value) # add value to message
         #print("send_set_val -", message) # print message for debugging
         self.send_set(message) # send message using send_message()
-    
-    # --- parameter saving ---
-
-    def to_dict(self):
-        return {
-            'serial_port': self.serial_port,
-            'timeout': self.timeout,
-            'port_in_use': self.port_in_use,
-            #'port_list': self.port_list
-        }
-    
-    def from_dict(self, data):
-        self.serial_port = data.get('serial_port', "NaN")
-        self.timeout = data.get('timeout', 1)
-        self.port_in_use = data.get('port_in_use', "NaN")
-        #self.port_list = data.get('port_list', [])
 
 # ScalableGroup for creating a menu where to set up new COM devices
 class ScalableGroup(parameterTypes.GroupParameter):
@@ -300,37 +290,6 @@ params = [
 
 # Create tree of Parameter objects
 p = Parameter.create(name='params', type='group', children=params)
-
-## COM PORT CHANGING - This structure detects any changes in the parameter tree
-# and should close the old serial port and open a new one if com port addresses have changed
-# TODO move to SerialDeviceConnection class, connect COM port change in device_added
-def COMchange(param, changes):
-    for param, change, data in changes:
-        path = p.childPath(param) # get path of the changed parameter
-        if path is not None: # if path exists, join it to a string
-            childName = '.'.join(path)
-        else: # if path does not exist, use the name of the parameter
-            childName = param.name()
-        if 'COM port' in childName:
-            names = childName.split('.') # split the name into a list
-            try: # Close the old connection if open
-                if p.child(names[0]).child(names[1]).child('Connection').value().connection.is_open == True:
-                    p.child(names[0]).child(names[1]).child('Connection').value().close()
-            except:
-                pass
-            finally: # try to set connection settings and connect
-                try:
-                    if osx_mode:
-                        p.child(names[0]).child(names[1]).child('Connection').value().set_port(str(data))
-                    else:
-                        p.child(names[0]).child(names[1]).child('Connection').value().set_port('COM'+str(data))
-                    p.child(names[0]).child(names[1]).child('Connection').value().connect()
-                except Exception as e: # print exception if opening fails
-                    #print("COMchange - error:", e)
-                    pass
-
-# connect changes in the parameter tree to the COM change function
-p.sigTreeStateChanged.connect(COMchange)
 
 # main program
 class MainWindow(QMainWindow):
@@ -2295,8 +2254,8 @@ class MainWindow(QMainWindow):
             else:
                 # Check if the parameter value is an instance of SerialDeviceConnection
                 if isinstance(param.value(), SerialDeviceConnection):
-                    # Use the to_dict method for serialization
-                    result[param.name()] = param.value().to_dict()
+                    # store parameter value as None
+                    result[param.name()] = None
                 else:
                     result[param.name()] = param.value()
         return result
@@ -2334,10 +2293,9 @@ class MainWindow(QMainWindow):
             if param.hasChildren():
                 self.load_parameters_recursive(param.children(), values.get(param.name(), {}))
             else:
-                # Check if the parameter value is a dictionary (indicating a complex object)
-                if isinstance(values.get(param.name()), dict):
-                    # skip the parameter
-                    # 'Connection' parameter (SerialDeviceConnection) was created when the device was added
+                if param.name() == 'Connection':
+                    # skip 'Connection' parameter (SerialDeviceConnection)
+                    # SerialDeviceConnection was created when the device was added (load_devices)
                     pass
                 # Check if parameter name is CO flow
                 elif param.name() == 'CO flow':
@@ -2578,6 +2536,8 @@ class MainWindow(QMainWindow):
             device_param = child # store device parameter
             device_type = child.child("Device type").value() # store device type
             device_id = child.child("DevID").value() # store device ID
+            device_port = child.child("COM port") # store COM port parameter
+            connection = device_param.child('Connection').value() # store connection class
 
             # connect serial number change to reset_device_filenames function
             device_param.child("Serial number").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
@@ -2585,13 +2545,16 @@ class MainWindow(QMainWindow):
             device_param.child("Device name").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
             # connect device name change to update_tab_name function
             device_param.child("Device name").sigValueChanged.connect(lambda: self.update_tab_name(device_id, device_param.child("Device name").value()))
+            # connect COM port change to SerialDeviceConnection's change_port function
+            if osx_mode:
+                device_port.sigValueChanged.connect(lambda: connection.change_port(str(device_port.value())))
+            else:
+                device_port.sigValueChanged.connect(lambda: connection.change_port('COM'+str(device_port.value())))
 
             # create new widget according to device type
             if device_type == CPC: # if CPC
                 # create CPC widget instance
                 widget = CPCWidget(device_param)
-                # store connection for readability
-                connection = device_param.child('Connection').value()
                 # connect Set tab buttons to send_set function
                 widget.set_tab.drain.clicked.connect(lambda: connection.send_set(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
                 widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
@@ -2623,8 +2586,6 @@ class MainWindow(QMainWindow):
                 widget = PSMWidget(device_param, device_type)
                 # add to psm_settings_updates dictionary, set to True
                 self.psm_settings_updates[device_id] = True
-                # store connection for readability
-                connection = device_param.child('Connection').value()
                 # connect Measure tab buttons to send_set function
                 widget.measure_tab.scan.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_scan()))
                 widget.measure_tab.step.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_step()))
@@ -2720,8 +2681,6 @@ class MainWindow(QMainWindow):
             
             if device_type == eDiluter: # if eDiluter
                 widget = eDiluterWidget(device_param) # create eDiluter widget instance
-                # store connection for readability
-                connection = device_param.child('Connection').value()
                 # connect set_tab's mode buttons to send_set function
                 widget.set_tab.init.clicked.connect(lambda: connection.send_set("do set app.measurement.state INIT"))
                 widget.set_tab.warmup.clicked.connect(lambda: connection.send_set("do set app.measurement.state WARMUP"))
@@ -2739,8 +2698,6 @@ class MainWindow(QMainWindow):
             if device_type == TSI_CPC: # if TSI CPC
                 # create TSI widget instance
                 widget = TSIWidget(device_param)
-                # store connection for readability
-                connection = device_param.child('Connection').value()
                 # add baud rate parameter
                 device_param.addChild({'name': 'Baud rate', 'type': 'int', 'value': 115200})
                 # connect baud rate parameter to connection's set_baud_rate function
