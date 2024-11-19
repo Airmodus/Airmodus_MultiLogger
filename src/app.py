@@ -172,16 +172,27 @@ class ScalableGroup(parameterTypes.GroupParameter):
         # update cpc_dict when device is removed
         self.sigChildRemoved.connect(self.update_cpc_dict)
 
-    def addNew(self, device_name): # device_name is the name of the added device type
+    def addNew(self, device_type): # device_type is the name of the added device type
         # device_value is used to set the default value for the Device type parameter below
-        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_name]
+        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_type]
         # if OSX mode is on, set COM port type as string to allow complex port addresses
         if osx_mode:
             port_type = 'str'
         else:
             port_type = 'int'
+        # set device name according to device type
+        device_name = device_type
+        # if device name exists, add number to the end of the name
+        if device_name in [child.name() for child in self.children()]:
+            name_number = 1
+            name_set = False
+            while not name_set:
+                name_number += 1
+                if device_name + " (%d)" % (name_number) not in [child.name() for child in self.children()]:
+                    device_name = device_name + " (%d)" % (name_number)
+                    name_set = True
         # New types of devices should be added in the "Device type" list and given unique id number
-        self.addChild({'name': device_name + " (ID %d)" % (self.n_devices), 'removable': True, 'type': 'group', 'children': [
+        self.addChild({'name': device_name, 'removable': True, 'type': 'group', 'children': [
                 dict(name="Device name", type='str', value=device_name+" (ID %d)" % (self.n_devices), renamable=True),
                 dict(name="COM port", type=port_type),
                 dict(name="Serial number", type='str', value="", readonly=True),
@@ -192,7 +203,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 dict(name = "DevID", type='int', value=self.n_devices,readonly = True, visible = False),
                 dict(name = "Plot to main", type='bool', value=True),
                 ]})
-        
+
         self.n_devices += 1 # increase device counter
 
         # if added device is CPC, update cpc_dict
