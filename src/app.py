@@ -1479,8 +1479,12 @@ class MainWindow(QMainWindow):
                         # add latest T1 value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][3]
                 if dev.child('Device type').value() == -1: # Example device
-                    # add latest value to time_counter index of plot_data
-                    self.plot_data[dev_id][self.time_counter] = round(random.random() * 100 + 150, 2)
+                    # generate random value for plotting and logging
+                    random_value = round(random.random() * 100, 2) # 0-100
+                    # add random value to time_counter index of plot_data
+                    self.plot_data[dev_id][self.time_counter] = random_value
+                    # add random value to latest_data as list object
+                    self.latest_data[dev_id] = [random_value]
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -1805,6 +1809,8 @@ class MainWindow(QMainWindow):
                                     file.write('YYYY.MM.DD hh:mm:ss,Flow (lpm),Standard flow (slpm),RH (%),T (C),P (Pa)')
                                 elif dev.child('Device type').value() == eDiluter: # eDiluter
                                     file.write('YYYY.MM.DD hh:mm:ss,Status,P1,P2,T1,T2,T3,T4,T5,T6,DF1,DF2,DFTot')
+                                elif dev.child('Device type').value() == Example_device:
+                                    file.write('YYYY.MM.DD hh:mm:ss,Random value (0-100)')
                                 else:
                                     file.write('YYYY.MM.DD hh:mm:ss,value1,value2,value3')
                             
