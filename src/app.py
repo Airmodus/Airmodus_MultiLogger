@@ -165,7 +165,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         #opts['type'] = 'action'
         opts['addText'] = "Add new device"
         # opts for choosing device type when adding new device
-        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "AFM", "TSI CPC", "Example device"] #  "eDiluter",
+        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "AFM", "eDiluter", "TSI CPC", "Example device"]
         parameterTypes.GroupParameter.__init__(self, **opts)
         self.n_devices = 0
         self.cpc_dict = {'None': 'None'}
