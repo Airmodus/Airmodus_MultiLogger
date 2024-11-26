@@ -3629,7 +3629,7 @@ class PSMMeasureTab(QWidget):
         self.scan = StartButton("Scan")
         layout.addWidget(self.scan, 0, 0)
         self.set_minimum_flow = SetWidget("Minimum flow", " lpm")
-        self.set_minimum_flow.value_spinbox.setValue(0.05)
+        self.set_minimum_flow.value_spinbox.setValue(0.15)
         layout.addWidget(self.set_minimum_flow, 1, 0)
         self.set_max_flow = SetWidget("Maximum flow", " lpm")
         self.set_max_flow.value_spinbox.setValue(1.9)
