@@ -1845,10 +1845,10 @@ class MainWindow(QMainWindow):
                                     if dev.child('Device type').value() == CPC: # CPC
                                         file.write('YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau,Command input')
                                     elif dev.child('Device type').value() == PSM: # PSM
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
                                     elif dev.child('Device type').value() == PSM2: # PSM2
                                         # TODO: check if correct
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
                                 
                                 # reset local update_par flag
                                 update_par = 0
@@ -1896,10 +1896,12 @@ class MainWindow(QMainWindow):
                                                     break
                                             # if CPC is connected Airmodus CPC, write connected CPC settings
                                             if cpc_device.child('Connected').value() and cpc_device.child('Device type').value() == CPC:
+                                                cpc_idn = cpc_device.child('Serial number').value()
                                                 cpc_settings = self.latest_settings[cpc_id]
                                                 file.write(',') # separate PSM and CPC settings with comma
                                                 # compile connected CPC settings
                                                 connected_cpc_settings = [
+                                                    cpc_idn, # connected CPC serial number (IDN)
                                                     cpc_settings[6], cpc_settings[11], cpc_settings[9], # autofill, drain, water removal
                                                     cpc_settings[3], cpc_settings[4], cpc_settings[5], # T set: saturator, condenser, optics
                                                     cpc_settings[2], cpc_settings[0] # inlet flow rate (measured), aveaging time
@@ -1909,10 +1911,10 @@ class MainWindow(QMainWindow):
                                                 file.write(write_data)
                                             
                                             else: # if CPC is not connected or not Airmodus CPC, write nan values
-                                                file.write(',nan,nan,nan,nan,nan,nan,nan,nan')
+                                                file.write(',nan,nan,nan,nan,nan,nan,nan,nan,nan')
                                         
                                         else: # if no connected CPC selected, write nan values
-                                            file.write(',nan,nan,nan,nan,nan,nan,nan,nan')
+                                            file.write(',nan,nan,nan,nan,nan,nan,nan,nan,nan')
                                         
                                     # check if device is in latest_command dictionary
                                     if dev_id in self.latest_command:
