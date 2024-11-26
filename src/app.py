@@ -21,7 +21,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.8.2"
+version_number = "0.9.0"
 
 # Define instrument types
 CPC = 1
@@ -172,17 +172,29 @@ class ScalableGroup(parameterTypes.GroupParameter):
         # update cpc_dict when device is removed
         self.sigChildRemoved.connect(self.update_cpc_dict)
 
-    def addNew(self, device_name): # device_name is the name of the added device type
+    def addNew(self, device_type, device_name=None): # device_type is the name of the added device type
         # device_value is used to set the default value for the Device type parameter below
-        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_name]
+        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_type]
         # if OSX mode is on, set COM port type as string to allow complex port addresses
         if osx_mode:
             port_type = 'str'
         else:
             port_type = 'int'
+        # if device_name argument is not given, set device name according to device type
+        if device_name == None:
+            device_name = device_type
+        # if device name is in use, add number to the end of the name
+        if device_name in [child.name() for child in self.children()]:
+            name_number = 1
+            name_set = False
+            while not name_set:
+                name_number += 1
+                if device_name + " (%d)" % (name_number) not in [child.name() for child in self.children()]:
+                    device_name = device_name + " (%d)" % (name_number)
+                    name_set = True
         # New types of devices should be added in the "Device type" list and given unique id number
-        self.addChild({'name': device_name + " (ID %d)" % (self.n_devices), 'removable': True, 'type': 'group', 'children': [
-                dict(name="Device name", type='str', value=device_name+" (ID %d)" % (self.n_devices), renamable=True),
+        self.addChild({'name': device_name, 'removable': True, 'type': 'group', 'children': [
+                dict(name="Device nickname", type='str', value="", renamable=True),
                 dict(name="COM port", type=port_type),
                 dict(name="Serial number", type='str', value="", readonly=True),
                 #dict(name="Baud rate", type='int', value=115200, visible=False),
@@ -192,7 +204,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 dict(name = "DevID", type='int', value=self.n_devices,readonly = True, visible = False),
                 dict(name = "Plot to main", type='bool', value=True),
                 ]})
-        
+
         self.n_devices += 1 # increase device counter
 
         # if added device is CPC, update cpc_dict
@@ -238,7 +250,11 @@ class ScalableGroup(parameterTypes.GroupParameter):
         # add device name to cpc_dict if device is CPC
         for device in self.children():
             if device.child('Device type').value() in [CPC, TSI_CPC]:
-                self.cpc_dict[device.name()] = device.child('DevID').value()
+                # check if device has a nickname
+                if device.child('Device nickname').value() != "":
+                    self.cpc_dict[device.child('Device nickname').value()] = device.child('DevID').value()
+                else: # if no nickname, use device parameter name (device type and serial number)
+                    self.cpc_dict[device.name()] = device.child('DevID').value()
         # update Connected CPC parameter for all PSM devices
         for device in self.children():
             if device.child('Device type').value() in [PSM, PSM2]:
@@ -266,7 +282,7 @@ params = [
     {'name': 'Measurement status', 'type': 'group', 'children': [
         {'name': 'Data settings', 'type': 'group', 'children': [
             {'name': 'File path', 'type': 'str', 'value': main_path},
-            {'name': 'File tag', 'type': 'str', 'value': "", 'tip': "Datafile format: YYYYMMDD_HHMMSS_(Serial number)_(Device name)_(File tag).dat"},
+            {'name': 'File tag', 'type': 'str', 'value': "", 'tip': "File name: YYYYMMDD_HHMMSS_(Serial number)_(Device type)_(Device nickname)_(File tag).dat"},
             {'name': 'Save data', 'type': 'bool', 'value': False},
             {'name': 'Generate daily files', 'type': 'bool', 'value': True, 'tip': "If on, new files are started at midnight."},
             {'name': 'Resume on startup', 'type': 'bool', 'value': False, 'tip': "Option to resume the last settings on startup."},
@@ -345,6 +361,8 @@ class MainWindow(QMainWindow):
         self.par_updates = {} # contains .par update flags: 1 = update, 0 = no update
         self.psm_settings_updates = {} # contains PSM settings update flags: 1 = update, 0 = no update
         self.device_errors = {} # contains device error flags: 0 = ok, 1 = errors
+        # dictionary of device names matching device type
+        self.device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', Electrometer: 'Electrometer', CO2_sensor: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', eDiluter: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', Example_device: 'Example device'}
 
         # initialize GUI
         # create and set central widget (requirement of QMainWindow)
@@ -686,6 +704,8 @@ class MainWindow(QMainWindow):
                                 serial_number = serial_number.strip("\r")
                                 if dev.child('Serial number').value() != serial_number:
                                     dev.child('Serial number').setValue(serial_number)
+                                    # update PSM 'Connected CPC' list
+                                    self.params.child('Device settings').update_cpc_dict()
 
                             else: # print these to command widget text box
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
@@ -1673,14 +1693,19 @@ class MainWindow(QMainWindow):
                         if dev_id not in self.dat_filenames:
                             # format timestamp for filename
                             timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
-                            # get device name from device settings
-                            device_name = dev.child('Device name').value()
-                            # TODO format device name to remove spaces and special characters
                             # get serial number from device settings
                             serial_number = dev.child('Serial number').value()
                             # if serial number is not empty, add underscore to beginning
                             if serial_number != "":
                                 serial_number = '_' + serial_number
+                            # get device type from device settings
+                            device_type = dev.child('Device type').value() # device type number
+                            device_type_name = self.device_names[device_type] # device type name
+                            # get device nickname from device settings
+                            device_nickname = dev.child('Device nickname').value()
+                            # if nickname is not empty, add underscore to beginning
+                            if device_nickname != "":
+                                device_nickname = '_' + device_nickname
                             # get file tag from data settings
                             file_tag = self.params.child('Measurement status').child('Data settings').child('File tag').value()
                             # if file tag is not empty, add underscore to beginning
@@ -1688,9 +1713,9 @@ class MainWindow(QMainWindow):
                                 file_tag = '_' + file_tag
                             # compile filename and add to dat_filenames
                             if osx_mode:
-                                filename = '/' + timestamp_file + serial_number + '_' + device_name + file_tag + '.dat'
+                                filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.dat'
                             else:
-                                filename = '\\' + timestamp_file + serial_number + '_' + device_name + file_tag + '.dat'
+                                filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.dat'
                             self.dat_filenames[dev_id] = filename
                             with open(self.filePath + filename ,"w",encoding='UTF-8'):
                                 pass
@@ -1698,9 +1723,9 @@ class MainWindow(QMainWindow):
                             # if CPC or PSM, create .par file and add filename to par_filenames
                             if dev.child('Device type').value() in [CPC, PSM, PSM2]:
                                 if osx_mode:
-                                    filename = '/' + timestamp_file + serial_number + '_' + device_name + file_tag + '.par'
+                                    filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.par'
                                 else:
-                                    filename = '\\' + timestamp_file + serial_number + '_' + device_name + file_tag + '.par'
+                                    filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.par'
                                 self.par_filenames[dev_id] = filename
                                 with open(self.filePath + filename ,"w",encoding='UTF-8'):
                                     pass
@@ -1712,13 +1737,19 @@ class MainWindow(QMainWindow):
                             if dev_id not in self.ten_hz_filenames:
                                 # format timestamp for filename
                                 timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
-                                # get device name from device settings
-                                device_name = dev.child('Device name').value()
                                 # get serial number from device settings
                                 serial_number = dev.child('Serial number').value()
                                 # if serial number is not empty, add underscore to beginning
                                 if serial_number != "":
                                     serial_number = '_' + serial_number
+                                # get device type from device settings
+                                device_type = dev.child('Device type').value() # device type number
+                                device_type_name = self.device_names[device_type] # device type name
+                                # get device nickname from device settings
+                                device_nickname = dev.child('Device nickname').value()
+                                # if nickname is not empty, add underscore to beginning
+                                if device_nickname != "":
+                                    device_nickname = '_' + device_nickname
                                 # get file tag from data settings
                                 file_tag = self.params.child('Measurement status').child('Data settings').child('File tag').value()
                                 # if file tag is not empty, add underscore to beginning
@@ -1726,9 +1757,9 @@ class MainWindow(QMainWindow):
                                     file_tag = '_' + file_tag
                                 # compile filename and add to ten_hz_filenames
                                 if osx_mode:
-                                    filename = '/' + timestamp_file + serial_number + '_' + device_name + '_10hz' + file_tag + '.csv'
+                                    filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
                                 else:
-                                    filename = '\\' + timestamp_file + serial_number + '_' + device_name + '_10hz' + file_tag + '.csv'
+                                    filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
                                 self.ten_hz_filenames[dev_id] = filename
                                 # create file and write header
                                 with open(self.filePath + filename ,"w",encoding='UTF-8') as file:
@@ -2273,8 +2304,6 @@ class MainWindow(QMainWindow):
     def load_devices(self, device_settings):
         # remove all devices from the parameter tree
         self.params.child('Device settings').clearChildren()
-        # dictionary of device names matching device type
-        device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', Electrometer: 'Electrometer', CO2_sensor: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', eDiluter: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', Example_device: 'Example device'}
         try:
             # go through each device in the device settings
             for dev_name, dev_values in device_settings.items():
@@ -2284,7 +2313,7 @@ class MainWindow(QMainWindow):
                 # set n_devices to current dev_id
                 self.params.child('Device settings').n_devices = dev_id
                 # add device to the parameter tree
-                self.params.child('Device settings').addNew(device_names[dev_type])
+                self.params.child('Device settings').addNew(self.device_names[dev_type], device_name=dev_name)
         except AttributeError:
             pass
             
@@ -2389,21 +2418,26 @@ class MainWindow(QMainWindow):
             dev_id = dev.child('DevID').value()
             # if device is in curve_dict
             if dev_id in self.curve_dict:
+                # check if device has a nickname
+                if dev.child('Device nickname').value() != "":
+                    device_name = dev.child('Device nickname').value()
+                else: # if no nickname, use device parameter name (device type and serial number)
+                    device_name = dev.name()
                 # RHTP or AFM
                 if dev.child('Device type').value() in [RHTP, AFM]:
                     # if Plot to main is enabled
                     if dev.child('Plot to main').value() != None:
                         # add curve to legend with device name and current value of chosen parameter
                         if dev.child('Plot to main').value() == "RH":
-                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':rh'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':rh'][self.time_counter])
                         elif dev.child('Plot to main').value() == "T":
-                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':t'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':t'][self.time_counter])
                         elif dev.child('Plot to main').value() == "P":
-                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':p'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':p'][self.time_counter])
                         elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Flow":
-                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id) + ':f'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id) + ':f'][self.time_counter])
                         elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Standard flow":
-                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id) + ':sf'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id) + ':sf'][self.time_counter])
                         self.main_plot.legend.addItem(self.curve_dict[dev_id], legend_string)
                     else: # if disabled
                         # remove curve from legend
@@ -2414,13 +2448,13 @@ class MainWindow(QMainWindow):
                     # compile legend string - device name and current value
                     # if CPC, round value to 2 decimals
                     if dev.child('Device type').value() in [CPC, TSI_CPC]:
-                        legend_string = dev.child('Device name').value() + ": " + str(round(self.plot_data[str(dev_id)][self.time_counter], 2))
+                        legend_string = device_name + ": " + str(round(self.plot_data[str(dev_id)][self.time_counter], 2))
                     # if Electrometer, get Voltage 2 value
                     elif dev.child('Device type').value() == Electrometer:
-                        legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':2'][self.time_counter])
+                        legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':2'][self.time_counter])
                     # other devices
                     else:
-                        legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[dev_id][self.time_counter])
+                        legend_string = device_name + ": " + str(self.plot_data[dev_id][self.time_counter])
                     # add curve to legend with legend string
                     self.main_plot.legend.addItem(self.curve_dict[dev_id], legend_string)
                 else: # if False
@@ -2523,10 +2557,30 @@ class MainWindow(QMainWindow):
                 print(traceback.format_exc())
                 logging.exception(e)
     
-    # update device tab name according to device name
-    def update_tab_name(self, device_id, device_name):
+    # rename device parameter according to device type and serial number
+    def rename_device(self, device):
+        # combine device type name and serial number into device name
+        device_type = device.child('Device type').value() # device type number
+        device_type_name = self.device_names[device_type] # device type name
+        serial_number = device.child('Serial number').value() # serial number
+        device_name = device_type_name + " " + serial_number
+        # set device name
+        device.setName(device_name)
+        # update tab name
+        self.rename_tab(device)
+
+    # update device tab name according to device parameter name or nickname
+    def rename_tab(self, device):
+        # get tab index of device widget
+        device_id = device.child('DevID').value()
         device_widget = self.device_widgets[device_id]
         tab_index = self.device_tabs.indexOf(device_widget)
+        # check if device has a nickname
+        if device.child('Device nickname').value() != "":
+            device_name = device.child('Device nickname').value()
+        else: # if no nickname, use device parameter name (device type and serial number)
+            device_name = device.name()
+        # update tab name
         self.device_tabs.setTabText(tab_index, device_name)
 
     # triggered when a new device is added to the parameter tree
@@ -2541,10 +2595,14 @@ class MainWindow(QMainWindow):
 
             # connect serial number change to reset_device_filenames function
             device_param.child("Serial number").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
-            # connect device name change to reset_device_filenames function
-            device_param.child("Device name").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
-            # connect device name change to update_tab_name function
-            device_param.child("Device name").sigValueChanged.connect(lambda: self.update_tab_name(device_id, device_param.child("Device name").value()))
+            # connect device nickname change to reset_device_filenames function
+            device_param.child("Device nickname").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
+            # connect device nickname change to rename_tab function
+            device_param.child("Device nickname").sigValueChanged.connect(lambda: self.rename_tab(device_param))
+            # connect device serial number change to rename_device function
+            device_param.child("Serial number").sigValueChanged.connect(lambda: self.rename_device(device_param))
+            # connect device serial number change to reset_device_filenames function
+            device_param.child("Serial number").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
             # connect COM port change to SerialDeviceConnection's change_port function
             if osx_mode:
                 device_port.sigValueChanged.connect(lambda: connection.change_port(str(device_port.value())))
@@ -2580,6 +2638,8 @@ class MainWindow(QMainWindow):
                 # connect Pulse quality tab options to pulse_quality_update function
                 widget.pulse_quality.history_time_select.currentIndexChanged.connect(lambda: self.pulse_quality_update(device_id))
                 widget.pulse_quality.average_time_select.currentIndexChanged.connect(lambda: self.pulse_quality_update(device_id))
+                # connect device nickname change to ScalableGroup's update_cpc_dict function
+                device_param.child("Device nickname").sigValueChanged.connect(param.update_cpc_dict)
 
             if device_type in [PSM, PSM2]: # if PSM TODO optimize structure, remove repetition
                 # create PSM widget instance
@@ -2702,6 +2762,8 @@ class MainWindow(QMainWindow):
                 device_param.addChild({'name': 'Baud rate', 'type': 'int', 'value': 115200})
                 # connect baud rate parameter to connection's set_baud_rate function
                 device_param.child('Baud rate').sigValueChanged.connect(lambda: connection.set_baud_rate(device_param.child('Baud rate').value()))
+                # connect device nickname change to ScalableGroup's update_cpc_dict function
+                device_param.child("Device nickname").sigValueChanged.connect(param.update_cpc_dict)
             
             if device_type == Example_device: # if Example device
                 widget = ExampleDeviceWidget(device_param) # create Example device widget instance
