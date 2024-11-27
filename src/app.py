@@ -21,7 +21,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.9.0"
+version_number = "0.9.1"
 
 # Define instrument types
 CPC = 1
@@ -165,7 +165,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         #opts['type'] = 'action'
         opts['addText'] = "Add new device"
         # opts for choosing device type when adding new device
-        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "AFM", "TSI CPC", "Example device"] #  "eDiluter",
+        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "AFM", "eDiluter", "TSI CPC", "Example device"]
         parameterTypes.GroupParameter.__init__(self, **opts)
         self.n_devices = 0
         self.cpc_dict = {'None': 'None'}
@@ -1479,8 +1479,12 @@ class MainWindow(QMainWindow):
                         # add latest T1 value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][3]
                 if dev.child('Device type').value() == -1: # Example device
-                    # add latest value to time_counter index of plot_data
-                    self.plot_data[dev_id][self.time_counter] = round(random.random() * 100 + 150, 2)
+                    # generate random value for plotting and logging
+                    random_value = round(random.random() * 100, 2) # 0-100
+                    # add random value to time_counter index of plot_data
+                    self.plot_data[dev_id][self.time_counter] = random_value
+                    # add random value to latest_data as list object
+                    self.latest_data[dev_id] = [random_value]
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -1805,6 +1809,8 @@ class MainWindow(QMainWindow):
                                     file.write('YYYY.MM.DD hh:mm:ss,Flow (lpm),Standard flow (slpm),RH (%),T (C),P (Pa)')
                                 elif dev.child('Device type').value() == eDiluter: # eDiluter
                                     file.write('YYYY.MM.DD hh:mm:ss,Status,P1,P2,T1,T2,T3,T4,T5,T6,DF1,DF2,DFTot')
+                                elif dev.child('Device type').value() == Example_device:
+                                    file.write('YYYY.MM.DD hh:mm:ss,Random value (0-100)')
                                 else:
                                     file.write('YYYY.MM.DD hh:mm:ss,value1,value2,value3')
                             
@@ -1839,10 +1845,10 @@ class MainWindow(QMainWindow):
                                     if dev.child('Device type').value() == CPC: # CPC
                                         file.write('YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau,Command input')
                                     elif dev.child('Device type').value() == PSM: # PSM
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
                                     elif dev.child('Device type').value() == PSM2: # PSM2
                                         # TODO: check if correct
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
                                 
                                 # reset local update_par flag
                                 update_par = 0
@@ -1890,10 +1896,12 @@ class MainWindow(QMainWindow):
                                                     break
                                             # if CPC is connected Airmodus CPC, write connected CPC settings
                                             if cpc_device.child('Connected').value() and cpc_device.child('Device type').value() == CPC:
+                                                cpc_idn = cpc_device.child('Serial number').value()
                                                 cpc_settings = self.latest_settings[cpc_id]
                                                 file.write(',') # separate PSM and CPC settings with comma
                                                 # compile connected CPC settings
                                                 connected_cpc_settings = [
+                                                    cpc_idn, # connected CPC serial number (IDN)
                                                     cpc_settings[6], cpc_settings[11], cpc_settings[9], # autofill, drain, water removal
                                                     cpc_settings[3], cpc_settings[4], cpc_settings[5], # T set: saturator, condenser, optics
                                                     cpc_settings[2], cpc_settings[0] # inlet flow rate (measured), aveaging time
@@ -1903,10 +1911,10 @@ class MainWindow(QMainWindow):
                                                 file.write(write_data)
                                             
                                             else: # if CPC is not connected or not Airmodus CPC, write nan values
-                                                file.write(',nan,nan,nan,nan,nan,nan,nan,nan')
+                                                file.write(',nan,nan,nan,nan,nan,nan,nan,nan,nan')
                                         
                                         else: # if no connected CPC selected, write nan values
-                                            file.write(',nan,nan,nan,nan,nan,nan,nan,nan')
+                                            file.write(',nan,nan,nan,nan,nan,nan,nan,nan,nan')
                                         
                                     # check if device is in latest_command dictionary
                                     if dev_id in self.latest_command:
@@ -3629,7 +3637,7 @@ class PSMMeasureTab(QWidget):
         self.scan = StartButton("Scan")
         layout.addWidget(self.scan, 0, 0)
         self.set_minimum_flow = SetWidget("Minimum flow", " lpm")
-        self.set_minimum_flow.value_spinbox.setValue(0.05)
+        self.set_minimum_flow.value_spinbox.setValue(0.15)
         layout.addWidget(self.set_minimum_flow, 1, 0)
         self.set_max_flow = SetWidget("Maximum flow", " lpm")
         self.set_max_flow.value_spinbox.setValue(1.9)
