@@ -111,8 +111,11 @@ class SerialDeviceConnection():
         self.close()
         # set new port
         self.set_port(serial_port)
-        # connect to new port
-        self.connect()
+        try:
+            # connect to new port
+            self.connect()
+        except Exception as e:
+            print("change_port:", e)
     
     def send_message(self, message):
         # add line termination and convert to bytes
@@ -361,6 +364,7 @@ class MainWindow(QMainWindow):
         self.par_updates = {} # contains .par update flags: 1 = update, 0 = no update
         self.psm_settings_updates = {} # contains PSM settings update flags: 1 = update, 0 = no update
         self.device_errors = {} # contains device error flags: 0 = ok, 1 = errors
+        self.idn_inquiry_devices = [] # contains IDs of devices that need IDN inquiry
         # dictionary of device names matching device type
         self.device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', Electrometer: 'Electrometer', CO2_sensor: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', eDiluter: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', Example_device: 'Example device'}
 
@@ -519,10 +523,17 @@ class MainWindow(QMainWindow):
                 #print("connection_test - error:", e)
                 pass
             
-            finally: # set the connection state according to connected value
-                dev.child('Connected').setValue(connected) # "Connected" parameter
-                if self.first_connection == 0:
-                    self.first_connection = connected
+            # add device to IDN inquiry list whenever connection is made ('Connected' changes from False to True)
+            # this ensures serial number is up to date if device changes
+            if dev.child('Device type').value() in [CPC, PSM, PSM2, CO2_sensor, RHTP, AFM]:
+                if connected and dev.child('Connected').value() == False:
+                    if dev.child('DevID').value() not in self.idn_inquiry_devices:
+                        self.idn_inquiry_devices.append(dev.child('DevID').value())
+            
+            # set the connection state according to connected value
+            dev.child('Connected').setValue(connected)
+            if self.first_connection == 0:
+                self.first_connection = connected
     
     # send read commands to connected serial devices
     def get_dev_data(self):
@@ -563,8 +574,8 @@ class MainWindow(QMainWindow):
                     # RHTP, eDiluter and AFM push data automatically
 
                     if device_type in [CPC, PSM, PSM2, CO2_sensor, RHTP, AFM]: # CPC, PSM, CO2, RHTP, AFM
-                        # if Serial number is empty, send IDN inquiry with delay
-                        if dev.child('Serial number').value() == "":
+                        # if device is in IDN inquiry list, send IDN inquiry with delay
+                        if dev.child('DevID').value() in self.idn_inquiry_devices:
                             self.idn_inquiry(dev.child('Connection').value().connection)
                         # if Serial number has been acquired, check if Firmware version is empty
                         elif device_type in [PSM, PSM2]:
@@ -702,10 +713,14 @@ class MainWindow(QMainWindow):
                                 serial_number = data[0]
                                 serial_number = serial_number.strip("\n")
                                 serial_number = serial_number.strip("\r")
+                                # check if serial number has changed
                                 if dev.child('Serial number').value() != serial_number:
                                     dev.child('Serial number').setValue(serial_number)
                                     # update PSM 'Connected CPC' list
                                     self.params.child('Device settings').update_cpc_dict()
+                                # remove device from IDN inquiry list
+                                if dev_id in self.idn_inquiry_devices:
+                                    self.idn_inquiry_devices.remove(dev_id)
 
                             else: # print these to command widget text box
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
@@ -877,8 +892,12 @@ class MainWindow(QMainWindow):
                                 serial_number = data[0]
                                 serial_number = serial_number.strip("\n")
                                 serial_number = serial_number.strip("\r")
+                                # check if serial number has changed
                                 if dev.child('Serial number').value() != serial_number:
                                     dev.child('Serial number').setValue(serial_number)
+                                # remove device from IDN inquiry list
+                                if dev_id in self.idn_inquiry_devices:
+                                    self.idn_inquiry_devices.remove(dev_id)
                             
                             elif command == "Firmware":
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
@@ -934,8 +953,8 @@ class MainWindow(QMainWindow):
 
                 if dev.child('Device type').value() == CO2_sensor: # CO2 sensor TODO make CO2 process similar to RHTP?
                     try:
-                        # if Serial number is empty, look for *IDN
-                        if dev.child('Serial number').value() == "":
+                        # if device is in IDN inquiry list, look for *IDN
+                        if dev_id in self.idn_inquiry_devices:
                             # read all data from buffer
                             messages = dev.child('Connection').value().connection.read_all().decode().split("\r\n")
                             # go through messages
@@ -947,7 +966,12 @@ class MainWindow(QMainWindow):
                                         serial_number = message.split(" ", 1)[1] # separate serial number from message
                                         serial_number = serial_number.strip("\n")
                                         serial_number = serial_number.strip("\r")
-                                        dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
+                                        # check if serial number has changed
+                                        if dev.child('Serial number').value() != serial_number:
+                                            dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
+                                        # remove device from IDN inquiry list
+                                        if dev_id in self.idn_inquiry_devices:
+                                            self.idn_inquiry_devices.remove(dev_id)
                             # store nan values to latest_data
                             self.latest_data[dev_id] = full(3, nan)
 
@@ -969,8 +993,8 @@ class MainWindow(QMainWindow):
                 
                 if dev.child('Device type').value() == RHTP: # RHTP
                     try:
-                        # if Serial number is empty, look for *IDN
-                        if dev.child('Serial number').value() == "":
+                        # if device is in IDN inquiry list, look for *IDN
+                        if dev_id in self.idn_inquiry_devices:
                             # read all data from buffer
                             messages = dev.child('Connection').value().connection.read_all().decode().split("\r\n")
                             # go through messages
@@ -982,7 +1006,12 @@ class MainWindow(QMainWindow):
                                         serial_number = message.split(" ", 1)[1] # separate serial number from message
                                         serial_number = serial_number.strip("\n")
                                         serial_number = serial_number.strip("\r")
-                                        dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
+                                        # check if serial number has changed
+                                        if dev.child('Serial number').value() != serial_number:
+                                            dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
+                                        # remove device from IDN inquiry list
+                                        if dev_id in self.idn_inquiry_devices:
+                                            self.idn_inquiry_devices.remove(dev_id)
                             # store nan values to latest_data
                             self.latest_data[dev_id] = full(3, nan)
                         
@@ -1027,8 +1056,8 @@ class MainWindow(QMainWindow):
                 
                 if dev.child('Device type').value() == AFM: # AFM
                     try:
-                        # if Serial number is empty, look for *IDN
-                        if dev.child('Serial number').value() == "":
+                        # if device is in IDN inquiry list, look for *IDN
+                        if dev_id in self.idn_inquiry_devices:
                             # read all data from buffer
                             messages = dev.child('Connection').value().connection.read_all().decode().split("\r\n")
                             # go through messages
@@ -1040,7 +1069,12 @@ class MainWindow(QMainWindow):
                                         serial_number = message.split(" ", 1)[1]
                                         serial_number = serial_number.strip("\n")
                                         serial_number = serial_number.strip("\r")
-                                        dev.child('Serial number').setValue(serial_number)
+                                        # check if serial number has changed
+                                        if dev.child('Serial number').value() != serial_number:
+                                            dev.child('Serial number').setValue(serial_number)
+                                        # remove device from IDN inquiry list
+                                        if dev_id in self.idn_inquiry_devices:
+                                            self.idn_inquiry_devices.remove(dev_id)
                             # store nan values to latest_data
                             self.latest_data[dev_id] = full(5, nan)
                         
@@ -2333,6 +2367,9 @@ class MainWindow(QMainWindow):
                 if param.name() == 'Connection':
                     # skip 'Connection' parameter (SerialDeviceConnection)
                     # SerialDeviceConnection was created when the device was added (load_devices)
+                    pass
+                elif param.name() == 'Connected':
+                    # skip 'Connected' parameter, this is checked in connection_test()
                     pass
                 # Check if parameter name is CO flow
                 elif param.name() == 'CO flow':
