@@ -12,6 +12,7 @@ import warnings
 from numpy import full, nan, array, polyval, array_equal, roll, nanmean, isnan
 from serial import Serial
 from serial.tools import list_ports
+from serial.serialutil import SerialException
 from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QGridLayout, QLabel, QWidget,
@@ -2187,14 +2188,14 @@ class MainWindow(QMainWindow):
     def set_inquiry_flag(self):
         self.inquiry_flag = True
         self.inquiry_time = time()
+        self.com_descriptions = {} # reset com descriptions
     
     def list_com_ports(self):
         # get list of available ports as serial objects
         ports = list_ports.comports()
         # check if ports list has changed from stored ports
         # if ports != self.current_ports: # if ports have changed, set flag for a specific time
-        #     self.inquiry_flag = True # set inquiry flag to True
-        #     self.inquiry_time = time() # store inquiry start timestamp for calculating timeout
+        #     self.set_inquiry_flag()
         # self.current_ports = ports # store current ports for comparison
         com_port_list = [] # list of port addresses
         new_ports = {} # dictionary for new ports, ports are added after *IDN? send
@@ -2219,9 +2220,27 @@ class MainWindow(QMainWindow):
                         # add serial_connection to new_ports dictionary, port address : serial object
                         # new_ports dictionary is sent to update_com_ports after delay
                         new_ports[port[0]] = serial_connection
+                    # if port cannot be opened, look for serial number in device parameters
+                    except SerialException:
+                        for dev in self.params.child('Device settings').children():
+                            if osx_mode:
+                                if port[0] == dev.child('COM port').value():
+                                    # set description according to device's serial number parameter
+                                    self.com_descriptions[port[0]] = dev.child('Serial number').value()
+                            else:
+                                if port[0] == 'COM' + str(dev.child('COM port').value()):
+                                    # set description according to device's serial number parameter
+                                    self.com_descriptions[port[0]] = dev.child('Serial number').value()
                     except Exception as e:
                         print(traceback.format_exc())
                         logging.exception(e)
+        # remove port descriptions for physically disconnected devices
+        remove_ports = []
+        for port in self.com_descriptions.keys():
+            if port not in com_port_list:
+                remove_ports.append(port)
+        for port in remove_ports:
+            self.com_descriptions.pop(port)
         # if inquiry flag is True, check timeout
         if self.inquiry_flag == True:
             # if inquiry has timed out - if current time is bigger than inquiry_time + timeout (seconds)
