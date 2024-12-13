@@ -39,3 +39,4 @@ To start MultiLogger, navigate to the repository's `src` folder and run `app.py`
 - traceback
 - json
 - warnings
+- sys
