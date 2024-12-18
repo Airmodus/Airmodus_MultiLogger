@@ -12,6 +12,7 @@ import warnings
 from numpy import full, nan, array, polyval, array_equal, roll, nanmean, isnan, linspace
 from serial import Serial
 from serial.tools import list_ports
+from serial.serialutil import SerialException
 from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QGridLayout, QLabel, QWidget,
@@ -34,6 +35,25 @@ PSM2 = 7
 TSI_CPC = 8
 AFM = 9
 Example_device = -1
+
+# self test error descriptions
+CPC_ERRORS = (
+    "RESERVED FOR FUTURE USE", "ERROR_SELFTEST_FLASH_ID", "ERROR_SELFTEST_TEMP_OPTICS", "ERROR_SELFTEST_TEMP_SATURATOR", "ERROR_SELFTEST_TEMP_CONDENSER",
+    "ERROR_SELFTEST_TEMP_BOARD", "ERROR_SELFTEST_LIQUID_SENSOR", "ERROR_SELFTEST_PRESSURE_INLET", "ERROR_SELFTEST_PRESSURE_NOZZLE", "ERROR_SELFTEST_PRESSURE_CRITICAL",
+    "ERROR_SELFTEST_DISPLAY", "ERROR_SELFTEST_VOLTAGE_3V3", "ERROR_SELFTEST_VOLTAGE_5V", "ERROR_SELFTEST_VOLTAGE_12V", "ERROR_SELFTEST_VOLTAGE_REF_NTC",
+    "ERROR_SELFTEST_VOLTAGE_REF_PRES", "ERROR_SELFTEST_VOLTAGE_REF_DAC", "ERROR_SELFTEST_VOLTAGE_OPC_DC", "ERROR_SELFTEST_VOLTAGE_LASER",
+    "ERROR_SELFTEST_FAN1", "ERROR_SELFTEST_FAN2", "ERROR_SELFTEST_FAN3", "ERROR_SELFTEST_PRESSURE_CAB", "ERROR_SELFTEST_RTC",
+    "ERROR_SELFTEST_DAC1", "ERROR_SELFTEST_DAC2", "ERROR_SELFTEST_ANALOG_OUT", "ERROR_SELFTEST_ANALOG_OUT2", "ERROR_SELFTEST_PRESSURE_WREM",
+)
+
+PSM_ERRORS = (
+    "RESERVED FOR FUTURE USE", "ERROR_SELFTEST_FLASH_ID", "ERROR_SELFTEST_TEMP_GROWTH_TUBE", "ERROR_SELFTEST_TEMP_SATURATOR", "RESERVED FOR FUTURE USE",
+    "ERROR_SELFTEST_TEMP_BOARD", "ERROR_SELFTEST_LIQUID_SENSOR", "ERROR_SELFTEST_PRESSURE_ABS", "ERROR_SELFTEST_PRESSURE_ABSSAT", "ERROR_SELFTEST_PRESSURE_SATDRY",
+    "ERROR_SELFTEST_TEMP_PREHEATER", "ERROR_SELFTEST_VOLTAGE_3V3", "ERROR_SELFTEST_VOLTAGE_5V", "ERROR_SELFTEST_VOLTAGE_12V", "ERROR_SELFTEST_VOLTAGE_REF_NTC",
+    "ERROR_SELFTEST_VOLTAGE_REF_PRES", "ERROR_SELFTEST_VOLTAGE_REF_DAC", "ERROR_SELFTEST_TEMP_INLET", "ERROR_SELFTEST_DRAIN_LIQUID_SENSOR",
+    "ERROR_SELFTEST_FAN1", "ERROR_SELFTEST_FAN2", "ERROR_SELFTEST_FAN3", "ERROR_SELFTEST_RTC", "ERROR_SELFTEST_DAC1", "ERROR_SELFTEST_DAC2",
+    "ERROR_SELFTEST_TEMP_DRAIN", "ERROR_SELFTEST_MFC_SATURATOR", "ERROR_SELFTEST_MFC_HEATER", "ERROR_SELFTEST_PRESSURE_CRIT", "ERROR_SELFTEST_MFC_VACUUM"
+)
 
 warnings.filterwarnings("ignore", message='Mean of empty slice')
 warnings.filterwarnings("ignore", message='All-NaN slice encountered')
@@ -60,8 +80,6 @@ class SerialDeviceConnection():
         self.serial_port = "NaN"
         self.timeout = 0.2
         self.baud_rate = 115200
-        # store comport name currently in use
-        self.port_in_use = "NaN"
         
     def set_port(self, serial_port):
         self.serial_port = serial_port
@@ -76,7 +94,6 @@ class SerialDeviceConnection():
         except: # if fails (i.e. port has not been open) continue normally
             pass
         self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout) #, rtscts=True)
-        self.port_in_use = self.serial_port
         print("Connected to %s" % self.serial_port)
     
     # close serial connection
@@ -88,6 +105,18 @@ class SerialDeviceConnection():
             #print("Connection closed")
         except:
             pass
+    
+    # close old connection and open new connection
+    def change_port(self, serial_port):
+        # close current connection
+        self.close()
+        # set new port
+        self.set_port(serial_port)
+        try:
+            # connect to new port
+            self.connect()
+        except Exception as e:
+            print("change_port:", e)
     
     def send_message(self, message):
         # add line termination and convert to bytes
@@ -138,22 +167,6 @@ class SerialDeviceConnection():
         message = message + str(value) # add value to message
         #print("send_set_val -", message) # print message for debugging
         self.send_set(message) # send message using send_message()
-    
-    # --- parameter saving ---
-
-    def to_dict(self):
-        return {
-            'serial_port': self.serial_port,
-            'timeout': self.timeout,
-            'port_in_use': self.port_in_use,
-            #'port_list': self.port_list
-        }
-    
-    def from_dict(self, data):
-        self.serial_port = data.get('serial_port', "NaN")
-        self.timeout = data.get('timeout', 1)
-        self.port_in_use = data.get('port_in_use', "NaN")
-        #self.port_list = data.get('port_list', [])
 
 # ScalableGroup for creating a menu where to set up new COM devices
 class ScalableGroup(parameterTypes.GroupParameter):
@@ -161,24 +174,36 @@ class ScalableGroup(parameterTypes.GroupParameter):
         #opts['type'] = 'action'
         opts['addText'] = "Add new device"
         # opts for choosing device type when adding new device
-        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "AFM", "TSI CPC", "Example device"] #  "eDiluter",
+        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "AFM", "eDiluter", "TSI CPC", "Example device"]
         parameterTypes.GroupParameter.__init__(self, **opts)
         self.n_devices = 0
         self.cpc_dict = {'None': 'None'}
         # update cpc_dict when device is removed
         self.sigChildRemoved.connect(self.update_cpc_dict)
 
-    def addNew(self, device_name): # device_name is the name of the added device type
+    def addNew(self, device_type, device_name=None): # device_type is the name of the added device type
         # device_value is used to set the default value for the Device type parameter below
-        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_name]
+        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_type]
         # if OSX mode is on, set COM port type as string to allow complex port addresses
         if osx_mode:
             port_type = 'str'
         else:
             port_type = 'int'
+        # if device_name argument is not given, set device name according to device type
+        if device_name == None:
+            device_name = device_type
+        # if device name is in use, add number to the end of the name
+        if device_name in [child.name() for child in self.children()]:
+            name_number = 1
+            name_set = False
+            while not name_set:
+                name_number += 1
+                if device_name + " (%d)" % (name_number) not in [child.name() for child in self.children()]:
+                    device_name = device_name + " (%d)" % (name_number)
+                    name_set = True
         # New types of devices should be added in the "Device type" list and given unique id number
-        self.addChild({'name': device_name + " (ID %d)" % (self.n_devices), 'removable': True, 'type': 'group', 'children': [
-                dict(name="Device name", type='str', value=device_name+" (ID %d)" % (self.n_devices), renamable=True),
+        self.addChild({'name': device_name, 'removable': True, 'type': 'group', 'children': [
+                dict(name="Device nickname", type='str', value="", renamable=True),
                 dict(name="COM port", type=port_type),
                 dict(name="Serial number", type='str', value="", readonly=True),
                 #dict(name="Baud rate", type='int', value=115200, visible=False),
@@ -188,7 +213,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 dict(name = "DevID", type='int', value=self.n_devices,readonly = True, visible = False),
                 dict(name = "Plot to main", type='bool', value=True),
                 ]})
-        
+
         self.n_devices += 1 # increase device counter
 
         # if added device is CPC, update cpc_dict
@@ -234,7 +259,11 @@ class ScalableGroup(parameterTypes.GroupParameter):
         # add device name to cpc_dict if device is CPC
         for device in self.children():
             if device.child('Device type').value() in [CPC, TSI_CPC]:
-                self.cpc_dict[device.name()] = device.child('DevID').value()
+                # check if device has a nickname
+                if device.child('Device nickname').value() != "":
+                    self.cpc_dict[device.child('Device nickname').value()] = device.child('DevID').value()
+                else: # if no nickname, use device parameter name (device type and serial number)
+                    self.cpc_dict[device.name()] = device.child('DevID').value()
         # update Connected CPC parameter for all PSM devices
         for device in self.children():
             if device.child('Device type').value() in [PSM, PSM2]:
@@ -262,7 +291,7 @@ params = [
     {'name': 'Measurement status', 'type': 'group', 'children': [
         {'name': 'Data settings', 'type': 'group', 'children': [
             {'name': 'File path', 'type': 'str', 'value': main_path},
-            {'name': 'File tag', 'type': 'str', 'value': "", 'tip': "Datafile format: YYYYMMDD_HHMMSS_(Serial number)_(Device name)_(File tag).dat"},
+            {'name': 'File tag', 'type': 'str', 'value': "", 'tip': "File name: YYYYMMDD_HHMMSS_(Serial number)_(Device type)_(Device nickname)_(File tag).dat"},
             {'name': 'Save data', 'type': 'bool', 'value': False},
             {'name': 'Generate daily files', 'type': 'bool', 'value': True, 'tip': "If on, new files are started at midnight."},
             {'name': 'Resume on startup', 'type': 'bool', 'value': False, 'tip': "Option to resume the last settings on startup."},
@@ -286,37 +315,6 @@ params = [
 
 # Create tree of Parameter objects
 p = Parameter.create(name='params', type='group', children=params)
-
-## COM PORT CHANGING - This structure detects any changes in the parameter tree
-# and should close the old serial port and open a new one if com port addresses have changed
-# TODO move to SerialDeviceConnection class, connect COM port change in device_added
-def COMchange(param, changes):
-    for param, change, data in changes:
-        path = p.childPath(param) # get path of the changed parameter
-        if path is not None: # if path exists, join it to a string
-            childName = '.'.join(path)
-        else: # if path does not exist, use the name of the parameter
-            childName = param.name()
-        if 'COM port' in childName:
-            names = childName.split('.') # split the name into a list
-            try: # Close the old connection if open
-                if p.child(names[0]).child(names[1]).child('Connection').value().connection.is_open == True:
-                    p.child(names[0]).child(names[1]).child('Connection').value().close()
-            except:
-                pass
-            finally: # try to set connection settings and connect
-                try:
-                    if osx_mode:
-                        p.child(names[0]).child(names[1]).child('Connection').value().set_port(str(data))
-                    else:
-                        p.child(names[0]).child(names[1]).child('Connection').value().set_port('COM'+str(data))
-                    p.child(names[0]).child(names[1]).child('Connection').value().connect()
-                except Exception as e: # print exception if opening fails
-                    #print("COMchange - error:", e)
-                    pass
-
-# connect changes in the parameter tree to the COM change function
-p.sigTreeStateChanged.connect(COMchange)
 
 # main program
 class MainWindow(QMainWindow):
@@ -376,6 +374,9 @@ class MainWindow(QMainWindow):
         self.par_updates = {} # contains .par update flags: 1 = update, 0 = no update
         self.psm_settings_updates = {} # contains PSM settings update flags: 1 = update, 0 = no update
         self.device_errors = {} # contains device error flags: 0 = ok, 1 = errors
+        self.idn_inquiry_devices = [] # contains IDs of devices that need IDN inquiry
+        # dictionary of device names matching device type
+        self.device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', Electrometer: 'Electrometer', CO2_sensor: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', eDiluter: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', Example_device: 'Example device'}
 
         # initialize GUI
         # create and set central widget (requirement of QMainWindow)
@@ -425,6 +426,8 @@ class MainWindow(QMainWindow):
         # connect main_plot's viewboxes' sigXRangeChanged signals to x_range_changed function
         for viewbox in self.main_plot.viewboxes.values():
             viewbox.sigXRangeChanged.connect(self.x_range_changed)
+        # connect main_plot's auto range button click to auto_range_clicked function
+        self.main_plot.plot.autoBtn.clicked.connect(self.auto_range_clicked)
 
         # list com ports at startup
         self.list_com_ports()
@@ -530,10 +533,17 @@ class MainWindow(QMainWindow):
                 #print("connection_test - error:", e)
                 pass
             
-            finally: # set the connection state according to connected value
-                dev.child('Connected').setValue(connected) # "Connected" parameter
-                if self.first_connection == 0:
-                    self.first_connection = connected
+            # add device to IDN inquiry list whenever connection is made ('Connected' changes from False to True)
+            # this ensures serial number is up to date if device changes
+            if dev.child('Device type').value() in [CPC, PSM, PSM2, CO2_sensor, RHTP, AFM]:
+                if connected and dev.child('Connected').value() == False:
+                    if dev.child('DevID').value() not in self.idn_inquiry_devices:
+                        self.idn_inquiry_devices.append(dev.child('DevID').value())
+            
+            # set the connection state according to connected value
+            dev.child('Connected').setValue(connected)
+            if self.first_connection == 0:
+                self.first_connection = connected
     
     # send read commands to connected serial devices
     def get_dev_data(self):
@@ -579,18 +589,26 @@ class MainWindow(QMainWindow):
                     # RHTP, eDiluter and AFM push data automatically
 
                     if device_type in [CPC, PSM, PSM2, CO2_sensor, RHTP, AFM]: # CPC, PSM, CO2, RHTP, AFM
-                        # if Serial number is empty, send IDN inquiry with delay
-                        if dev.child('Serial number').value() == "":
-                            QTimer.singleShot(400, lambda: dev.child('Connection').value().connection.write(b'*IDN?\n'))
+                        # if device is in IDN inquiry list, send IDN inquiry with delay
+                        if dev.child('DevID').value() in self.idn_inquiry_devices:
+                            self.idn_inquiry(dev.child('Connection').value().connection)
                         # if Serial number has been acquired, check if Firmware version is empty
                         elif device_type in [PSM, PSM2]:
                             # if Firmware version is empty, send firmware version inquiry with delay
                             if dev.child('Firmware version').value() == "":
-                                QTimer.singleShot(400, lambda: dev.child('Connection').value().connection.write(b':SYST:VER\n'))
+                                self.firmware_inquiry(dev.child('Connection').value().connection)
                         
                 except Exception as e:
                     print(traceback.format_exc())
                     logging.exception(e)
+
+    # independent functions for delayed sends prevent serial connections getting mixed up in iteration
+    # send IDN inquiry with delay
+    def idn_inquiry(self, connection):
+        QTimer.singleShot(400, lambda: connection.write(b'*IDN?\n'))
+    # send firmware inquiry with delay
+    def firmware_inquiry(self, connection):
+        QTimer.singleShot(400, lambda: connection.write(b':SYST:VER\n'))
     
     # read and compile data
     def readIndata(self):
@@ -607,7 +625,7 @@ class MainWindow(QMainWindow):
                     if dev_id in self.extra_data:
                         self.latest_data[dev_id] = self.extra_data.pop(dev_id)
                     else:
-                        self.latest_data[dev_id] = full(14, nan)
+                        self.latest_data[dev_id] = full(15, nan)
                     if str(dev_id)+":prnt" in self.extra_data:
                         prnt_list = self.extra_data.pop(str(dev_id)+":prnt")
                     else:
@@ -636,8 +654,13 @@ class MainWindow(QMainWindow):
                             if command == ":MEAS:ALL":
                                 status_hex = data[-1] # store status hex value
 
+                                # check if cabin pressure value is within valid range (0-200 kPa)
+                                if float(data[12]) < 0 or float(data[12]) > 200:
+                                    cabin_p_error = True
+                                else:
+                                    cabin_p_error = False
                                 # update widget error colors and store total errors
-                                total_errors = self.device_widgets[dev_id].update_errors(status_hex)
+                                total_errors = self.device_widgets[dev_id].update_errors(status_hex, cabin_p_error)
                                 
                                 # set error_status flag if total errors is not 0
                                 if total_errors != 0:
@@ -678,25 +701,41 @@ class MainWindow(QMainWindow):
                                     self.extra_data[str(dev_id)+":10hz"] = data
                             
                             elif command == ":STAT:SELF:LOG":
+                                error_length = len(CPC_ERRORS) # get amount of CPC errors
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
-                                # TODO make sure largest error index in firmware is 28
                                 status_bin = bin(int(data[0], 16)) # convert hex to int and int to binary
-                                status_bin = status_bin[2:].zfill(28) # remove 0b from string and fill with 0s to make 28 digits
+                                status_bin = status_bin[2:].zfill(error_length) # remove 0b from string and fill with 0s
                                 # print self test error binary
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
+                                inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
                                 # print error indices
-                                for i in range(28): # loop through binary digits
-                                    bit_index = 27 - i # this should match the indices or errors in manual
-                                    if status_bin[i] == "1":
-                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(bit_index))
+                                for i in range(error_length): # loop through errors
+                                    if inverted_status_bin[i] == "1":
+                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(i))
+                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + CPC_ERRORS[i])
+
+                            elif command == ":SELF:ERR":
+                                try:
+                                    self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                    error_code = int(data[0])
+                                    print("self test error: " + CPC_ERRORS[error_code])
+                                except Exception as e:
+                                    print(traceback.format_exc())
+                                    logging.exception(e)
                             
                             elif command == "*IDN":
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 serial_number = data[0]
                                 serial_number = serial_number.strip("\n")
                                 serial_number = serial_number.strip("\r")
+                                # check if serial number has changed
                                 if dev.child('Serial number').value() != serial_number:
                                     dev.child('Serial number').setValue(serial_number)
+                                    # update PSM 'Connected CPC' list
+                                    self.params.child('Device settings').update_cpc_dict()
+                                # remove device from IDN inquiry list
+                                if dev_id in self.idn_inquiry_devices:
+                                    self.idn_inquiry_devices.remove(dev_id)
 
                             else: # print these to command widget text box
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
@@ -796,8 +835,8 @@ class MainWindow(QMainWindow):
                                     logging.exception(e)
                                 # note hex handling
                                 note_hex = data[-1]
-                                # update widget liquid states with note hex, get liquid sets in return
-                                liquid_sets = self.device_widgets[dev_id].update_notes(note_hex)
+                                # update widget liquid states with note hex
+                                self.device_widgets[dev_id].update_notes(note_hex)
                                 # store polynomial correction value as float to dictionary
                                 self.latest_poly_correction[dev_id] = float(data[14])
 
@@ -806,12 +845,14 @@ class MainWindow(QMainWindow):
                                 try:
                                     if dev.child('Firmware version').value() != "":
                                         firmware_version = dev.child('Firmware version').value().split(".")
-                                        # Retrofit: version >= 0.5.4
+                                        # Retrofit: version >= 
+                                        # TODO add correct version check when scan status is added to firmware
                                         if dev.child('Device type').value() == PSM:
-                                            if int(firmware_version[1]) > 5:
-                                                scan_status = data[15]
-                                            elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 4:
-                                                scan_status = data[15]
+                                            # if int(firmware_version[1]) > 5:
+                                            #     scan_status = data[15]
+                                            # elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 4:
+                                            #     scan_status = data[15]
+                                            pass
                                         # PSM 2.0: version >= 0.6.8
                                         elif dev.child('Device type').value() == PSM2:
                                             if int(firmware_version[1]) > 6:
@@ -821,9 +862,6 @@ class MainWindow(QMainWindow):
                                 except Exception as e:
                                     print(traceback.format_exc())
                                     logging.exception(e)
-                                
-                                # TODO remove after testing
-                                print(dev.child('Device name').value(), "scan status:", scan_status)
                                 
                                 # compile and store psm data to latest data dictionary with device id as key
                                 self.latest_data[dev_id] = self.compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
@@ -838,13 +876,48 @@ class MainWindow(QMainWindow):
                                 # set settings_fetched flag to True
                                 settings_fetched = True
                             
+                            elif command == ":STAT:SELF:LOG":
+                                error_length = len(PSM_ERRORS) # get amount of PSM errors
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                status_bin = bin(int(data[0], 16)) # convert hex to int and int to binary
+                                status_bin = status_bin[2:].zfill(error_length) # remove 0b from string and fill with 0s
+                                # print self test error binary
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
+                                inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
+                                # print error indices
+                                for i in range(error_length): # loop through binary digits
+                                    if inverted_status_bin[i] == "1":
+                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(i))
+                                        # if error is MFC_HEATER / MFC_EXCESS, check device type
+                                        if i == 27 and dev.child('Device type').value() == PSM: # Retrofit has different error at index 27
+                                            self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + "ERROR_SELFTEST_MFC_EXCESS")
+                                        else:
+                                            self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + PSM_ERRORS[i])
+                            
+                            elif command == ":SELF:ERR":
+                                try:
+                                    self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                    error_code = int(data[0])
+                                    # if error is MFC_HEATER / MFC_EXCESS, check device type
+                                    if error_code == 27 and dev.child('Device type').value() == PSM:
+                                        print("self test error: " + "ERROR_SELFTEST_MFC_EXCESS")
+                                    else:
+                                        print("self test error: " + PSM_ERRORS[int(error_code)])
+                                except Exception as e:
+                                    print(traceback.format_exc())
+                                    logging.exception(e)
+                            
                             elif command == "*IDN":
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 serial_number = data[0]
                                 serial_number = serial_number.strip("\n")
                                 serial_number = serial_number.strip("\r")
+                                # check if serial number has changed
                                 if dev.child('Serial number').value() != serial_number:
                                     dev.child('Serial number').setValue(serial_number)
+                                # remove device from IDN inquiry list
+                                if dev_id in self.idn_inquiry_devices:
+                                    self.idn_inquiry_devices.remove(dev_id)
                             
                             elif command == "Firmware":
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
@@ -900,8 +973,8 @@ class MainWindow(QMainWindow):
 
                 if dev.child('Device type').value() == CO2_sensor: # CO2 sensor TODO make CO2 process similar to RHTP?
                     try:
-                        # if Serial number is empty, look for *IDN
-                        if dev.child('Serial number').value() == "":
+                        # if device is in IDN inquiry list, look for *IDN
+                        if dev_id in self.idn_inquiry_devices:
                             # read all data from buffer
                             messages = dev.child('Connection').value().connection.read_all().decode().split("\r\n")
                             # go through messages
@@ -913,7 +986,12 @@ class MainWindow(QMainWindow):
                                         serial_number = message.split(" ", 1)[1] # separate serial number from message
                                         serial_number = serial_number.strip("\n")
                                         serial_number = serial_number.strip("\r")
-                                        dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
+                                        # check if serial number has changed
+                                        if dev.child('Serial number').value() != serial_number:
+                                            dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
+                                        # remove device from IDN inquiry list
+                                        if dev_id in self.idn_inquiry_devices:
+                                            self.idn_inquiry_devices.remove(dev_id)
                             # store nan values to latest_data
                             self.latest_data[dev_id] = full(3, nan)
 
@@ -935,8 +1013,8 @@ class MainWindow(QMainWindow):
                 
                 if dev.child('Device type').value() == RHTP: # RHTP
                     try:
-                        # if Serial number is empty, look for *IDN
-                        if dev.child('Serial number').value() == "":
+                        # if device is in IDN inquiry list, look for *IDN
+                        if dev_id in self.idn_inquiry_devices:
                             # read all data from buffer
                             messages = dev.child('Connection').value().connection.read_all().decode().split("\r\n")
                             # go through messages
@@ -948,7 +1026,12 @@ class MainWindow(QMainWindow):
                                         serial_number = message.split(" ", 1)[1] # separate serial number from message
                                         serial_number = serial_number.strip("\n")
                                         serial_number = serial_number.strip("\r")
-                                        dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
+                                        # check if serial number has changed
+                                        if dev.child('Serial number').value() != serial_number:
+                                            dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
+                                        # remove device from IDN inquiry list
+                                        if dev_id in self.idn_inquiry_devices:
+                                            self.idn_inquiry_devices.remove(dev_id)
                             # store nan values to latest_data
                             self.latest_data[dev_id] = full(3, nan)
                         
@@ -978,10 +1061,11 @@ class MainWindow(QMainWindow):
                                     logging.exception(e)
 
                             # check if data is valid and store to latest_data dictionary
-                            if float(readings[0]) != 0: # if data is valid, not 0
+                            # readings length should be 3 (RH, T, P)
+                            if len(readings) == 3:
                                 # store data to latest_data
                                 self.latest_data[dev_id] = readings
-                            else: # if data is not valid, 0
+                            else: # if data is not valid
                                 # store nan values to latest_data
                                 self.latest_data[dev_id] = full(3, nan)
 
@@ -992,8 +1076,8 @@ class MainWindow(QMainWindow):
                 
                 if dev.child('Device type').value() == AFM: # AFM
                     try:
-                        # if Serial number is empty, look for *IDN
-                        if dev.child('Serial number').value() == "":
+                        # if device is in IDN inquiry list, look for *IDN
+                        if dev_id in self.idn_inquiry_devices:
                             # read all data from buffer
                             messages = dev.child('Connection').value().connection.read_all().decode().split("\r\n")
                             # go through messages
@@ -1005,7 +1089,12 @@ class MainWindow(QMainWindow):
                                         serial_number = message.split(" ", 1)[1]
                                         serial_number = serial_number.strip("\n")
                                         serial_number = serial_number.strip("\r")
-                                        dev.child('Serial number').setValue(serial_number)
+                                        # check if serial number has changed
+                                        if dev.child('Serial number').value() != serial_number:
+                                            dev.child('Serial number').setValue(serial_number)
+                                        # remove device from IDN inquiry list
+                                        if dev_id in self.idn_inquiry_devices:
+                                            self.idn_inquiry_devices.remove(dev_id)
                             # store nan values to latest_data
                             self.latest_data[dev_id] = full(5, nan)
                         
@@ -1036,7 +1125,8 @@ class MainWindow(QMainWindow):
                             #print("AFM readings:", readings)
 
                             # check if data is valid and store to latest_data dictionary
-                            if float(readings[2]) != 0: # if RH data is valid, not 0
+                            # readings length should be 5 (volumetric flow, standard flow, RH, T, P)
+                            if len(readings) == 5:
                                 self.latest_data[dev_id] = readings
                             else:
                                 self.latest_data[dev_id] = full(5, nan)
@@ -1269,8 +1359,8 @@ class MainWindow(QMainWindow):
                                     cpc_data[0], round(dilution_correction_factor, 3), # concentration,  dilution correction factor
                                     cpc_data[3], cpc_data[4], cpc_data[5], cpc_data[6],# T: saturator, condenser, optics, cabin
                                     cpc_data[8], cpc_data[9], cpc_data[7],# P: critical orifice, nozzle, absolute (inlet)
-                                    cpc_data[10], cpc_data[3], cpc_data[2],# liquid level, pulses, pulse duration
-                                    cpc_data[12], cpc_data[13] # number of errors, system status (hex)
+                                    cpc_data[11], cpc_data[2], cpc_data[1],# liquid level, pulses, pulse duration
+                                    cpc_data[13], cpc_data[14] # number of errors, system status (hex)
                                 ]
                                 # replace PSM's latest_data CPC placeholders with connected CPC data
                                 self.latest_data[psm_id][-16:-2] = connected_cpc_data # 14 values before status hex and note hex
@@ -1468,8 +1558,12 @@ class MainWindow(QMainWindow):
                         # add latest T1 value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][3]
                 if dev.child('Device type').value() == -1: # Example device
-                    # add latest value to time_counter index of plot_data
-                    self.plot_data[dev_id][self.time_counter] = round(random.random() * 100 + 150, 2)
+                    # generate random value for plotting and logging
+                    random_value = round(random.random() * 100, 2) # 0-100
+                    # add random value to time_counter index of plot_data
+                    self.plot_data[dev_id][self.time_counter] = random_value
+                    # add random value to latest_data as list object
+                    self.latest_data[dev_id] = [random_value]
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -1685,14 +1779,19 @@ class MainWindow(QMainWindow):
                         if dev_id not in self.dat_filenames:
                             # format timestamp for filename
                             timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
-                            # get device name from device settings
-                            device_name = dev.child('Device name').value()
-                            # TODO format device name to remove spaces and special characters
                             # get serial number from device settings
                             serial_number = dev.child('Serial number').value()
                             # if serial number is not empty, add underscore to beginning
                             if serial_number != "":
                                 serial_number = '_' + serial_number
+                            # get device type from device settings
+                            device_type = dev.child('Device type').value() # device type number
+                            device_type_name = self.device_names[device_type] # device type name
+                            # get device nickname from device settings
+                            device_nickname = dev.child('Device nickname').value()
+                            # if nickname is not empty, add underscore to beginning
+                            if device_nickname != "":
+                                device_nickname = '_' + device_nickname
                             # get file tag from data settings
                             file_tag = self.params.child('Measurement status').child('Data settings').child('File tag').value()
                             # if file tag is not empty, add underscore to beginning
@@ -1700,9 +1799,9 @@ class MainWindow(QMainWindow):
                                 file_tag = '_' + file_tag
                             # compile filename and add to dat_filenames
                             if osx_mode:
-                                filename = '/' + timestamp_file + serial_number + '_' + device_name + file_tag + '.dat'
+                                filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.dat'
                             else:
-                                filename = '\\' + timestamp_file + serial_number + '_' + device_name + file_tag + '.dat'
+                                filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.dat'
                             self.dat_filenames[dev_id] = filename
                             with open(self.filePath + filename ,"w",encoding='UTF-8'):
                                 pass
@@ -1710,9 +1809,9 @@ class MainWindow(QMainWindow):
                             # if CPC or PSM, create .par file and add filename to par_filenames
                             if dev.child('Device type').value() in [CPC, PSM, PSM2]:
                                 if osx_mode:
-                                    filename = '/' + timestamp_file + serial_number + '_' + device_name + file_tag + '.par'
+                                    filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.par'
                                 else:
-                                    filename = '\\' + timestamp_file + serial_number + '_' + device_name + file_tag + '.par'
+                                    filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.par'
                                 self.par_filenames[dev_id] = filename
                                 with open(self.filePath + filename ,"w",encoding='UTF-8'):
                                     pass
@@ -1724,13 +1823,19 @@ class MainWindow(QMainWindow):
                             if dev_id not in self.ten_hz_filenames:
                                 # format timestamp for filename
                                 timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
-                                # get device name from device settings
-                                device_name = dev.child('Device name').value()
                                 # get serial number from device settings
                                 serial_number = dev.child('Serial number').value()
                                 # if serial number is not empty, add underscore to beginning
                                 if serial_number != "":
                                     serial_number = '_' + serial_number
+                                # get device type from device settings
+                                device_type = dev.child('Device type').value() # device type number
+                                device_type_name = self.device_names[device_type] # device type name
+                                # get device nickname from device settings
+                                device_nickname = dev.child('Device nickname').value()
+                                # if nickname is not empty, add underscore to beginning
+                                if device_nickname != "":
+                                    device_nickname = '_' + device_nickname
                                 # get file tag from data settings
                                 file_tag = self.params.child('Measurement status').child('Data settings').child('File tag').value()
                                 # if file tag is not empty, add underscore to beginning
@@ -1738,9 +1843,9 @@ class MainWindow(QMainWindow):
                                     file_tag = '_' + file_tag
                                 # compile filename and add to ten_hz_filenames
                                 if osx_mode:
-                                    filename = '/' + timestamp_file + serial_number + '_' + device_name + '_10hz' + file_tag + '.csv'
+                                    filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
                                 else:
-                                    filename = '\\' + timestamp_file + serial_number + '_' + device_name + '_10hz' + file_tag + '.csv'
+                                    filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
                                 self.ten_hz_filenames[dev_id] = filename
                                 # create file and write header
                                 with open(self.filePath + filename ,"w",encoding='UTF-8') as file:
@@ -1769,7 +1874,7 @@ class MainWindow(QMainWindow):
                             #if len(file.readline()) == 0:
                                 if dev.child('Device type').value() == CPC: # CPC
                                     # TODO complete CPC headers, check if ok
-                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration (#/cc),Dead time (µs),Number of pulses,Saturator T (C),Condenser T (C),Optics T (C),Cabin T (C),Inlet P (kPa),Critical orifice P (kPa),Nozzle P (kPa),Liquid level,Pulse ratio,Total CPC errors,System status error')
+                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration (#/cc),Dead time (µs),Number of pulses,Saturator T (C),Condenser T (C),Optics T (C),Cabin T (C),Inlet P (kPa),Critical orifice P (kPa),Nozzle P (kPa),Cabin P (kPa),Liquid level,Pulse ratio,Total CPC errors,System status error')
                                 elif dev.child('Device type').value() == PSM: # PSM
                                     # TODO check if PSM headers are ok
                                     file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)')
@@ -1786,6 +1891,8 @@ class MainWindow(QMainWindow):
                                     file.write('YYYY.MM.DD hh:mm:ss,Flow (lpm),Standard flow (slpm),RH (%),T (C),P (Pa)')
                                 elif dev.child('Device type').value() == eDiluter: # eDiluter
                                     file.write('YYYY.MM.DD hh:mm:ss,Status,P1,P2,T1,T2,T3,T4,T5,T6,DF1,DF2,DFTot')
+                                elif dev.child('Device type').value() == Example_device:
+                                    file.write('YYYY.MM.DD hh:mm:ss,Random value (0-100)')
                                 else:
                                     file.write('YYYY.MM.DD hh:mm:ss,value1,value2,value3')
                             
@@ -1820,10 +1927,10 @@ class MainWindow(QMainWindow):
                                     if dev.child('Device type').value() == CPC: # CPC
                                         file.write('YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau,Command input')
                                     elif dev.child('Device type').value() == PSM: # PSM
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
                                     elif dev.child('Device type').value() == PSM2: # PSM2
                                         # TODO: check if correct
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
                                 
                                 # reset local update_par flag
                                 update_par = 0
@@ -1871,10 +1978,12 @@ class MainWindow(QMainWindow):
                                                     break
                                             # if CPC is connected Airmodus CPC, write connected CPC settings
                                             if cpc_device.child('Connected').value() and cpc_device.child('Device type').value() == CPC:
+                                                cpc_idn = cpc_device.child('Serial number').value()
                                                 cpc_settings = self.latest_settings[cpc_id]
                                                 file.write(',') # separate PSM and CPC settings with comma
                                                 # compile connected CPC settings
                                                 connected_cpc_settings = [
+                                                    cpc_idn, # connected CPC serial number (IDN)
                                                     cpc_settings[6], cpc_settings[11], cpc_settings[9], # autofill, drain, water removal
                                                     cpc_settings[3], cpc_settings[4], cpc_settings[5], # T set: saturator, condenser, optics
                                                     cpc_settings[2], cpc_settings[0] # inlet flow rate (measured), aveaging time
@@ -1884,10 +1993,10 @@ class MainWindow(QMainWindow):
                                                 file.write(write_data)
                                             
                                             else: # if CPC is not connected or not Airmodus CPC, write nan values
-                                                file.write(',nan,nan,nan,nan,nan,nan,nan,nan')
+                                                file.write(',nan,nan,nan,nan,nan,nan,nan,nan,nan')
                                         
                                         else: # if no connected CPC selected, write nan values
-                                            file.write(',nan,nan,nan,nan,nan,nan,nan,nan')
+                                            file.write(',nan,nan,nan,nan,nan,nan,nan,nan,nan')
                                         
                                     # check if device is in latest_command dictionary
                                     if dev_id in self.latest_command:
@@ -2011,7 +2120,7 @@ class MainWindow(QMainWindow):
         cpc_data = [ # TODO nominal flow concentration
             meas[0], meas[2], meas[1], # concentration, dead time, number of pulses during average
             meas[5], meas[7], meas[6], meas[8], # T: saturator, condenser, optics, cabin
-            meas[9], meas[10], meas[11], # P: inlet, critical orifice, nozzle
+            meas[9], meas[10], meas[11], meas[12], # P: inlet, critical orifice, nozzle, cabin
             int(meas[14]), pulse_ratio, # liquid level, pulse ratio
             total_errors, status_hex # total number of errors, hexadecimal system status
             # TODO add OPC voltage level when added to firmware
@@ -2159,14 +2268,14 @@ class MainWindow(QMainWindow):
     def set_inquiry_flag(self):
         self.inquiry_flag = True
         self.inquiry_time = time()
+        self.com_descriptions = {} # reset com descriptions
     
     def list_com_ports(self):
         # get list of available ports as serial objects
         ports = list_ports.comports()
         # check if ports list has changed from stored ports
         # if ports != self.current_ports: # if ports have changed, set flag for a specific time
-        #     self.inquiry_flag = True # set inquiry flag to True
-        #     self.inquiry_time = time() # store inquiry start timestamp for calculating timeout
+        #     self.set_inquiry_flag()
         # self.current_ports = ports # store current ports for comparison
         com_port_list = [] # list of port addresses
         new_ports = {} # dictionary for new ports, ports are added after *IDN? send
@@ -2187,13 +2296,31 @@ class MainWindow(QMainWindow):
                         # open port
                         serial_connection = Serial(str(port[0]), 115200, timeout=0.2)
                         # inquire device type - delay makes sure ESP32 init is done
-                        QTimer.singleShot(300, lambda: serial_connection.write(b'*IDN?\n'))
+                        self.idn_inquiry(serial_connection)
                         # add serial_connection to new_ports dictionary, port address : serial object
                         # new_ports dictionary is sent to update_com_ports after delay
                         new_ports[port[0]] = serial_connection
+                    # if port cannot be opened, look for serial number in device parameters
+                    except SerialException:
+                        for dev in self.params.child('Device settings').children():
+                            if osx_mode:
+                                if port[0] == dev.child('COM port').value():
+                                    # set description according to device's serial number parameter
+                                    self.com_descriptions[port[0]] = dev.child('Serial number').value()
+                            else:
+                                if port[0] == 'COM' + str(dev.child('COM port').value()):
+                                    # set description according to device's serial number parameter
+                                    self.com_descriptions[port[0]] = dev.child('Serial number').value()
                     except Exception as e:
                         print(traceback.format_exc())
                         logging.exception(e)
+        # remove port descriptions for physically disconnected devices
+        remove_ports = []
+        for port in self.com_descriptions.keys():
+            if port not in com_port_list:
+                remove_ports.append(port)
+        for port in remove_ports:
+            self.com_descriptions.pop(port)
         # if inquiry flag is True, check timeout
         if self.inquiry_flag == True:
             # if inquiry has timed out - if current time is bigger than inquiry_time + timeout (seconds)
@@ -2202,7 +2329,7 @@ class MainWindow(QMainWindow):
 
         # trigger update_com_ports with delay
         # reads responses from opened ports and prints devices to GUI
-        QTimer.singleShot(600, lambda: self.update_com_ports(new_ports, com_port_list))
+        QTimer.singleShot(800, lambda: self.update_com_ports(new_ports, com_port_list)) # delay increased from 600 to 800
         # return list of port addresses
         return com_port_list
     
@@ -2299,8 +2426,8 @@ class MainWindow(QMainWindow):
             else:
                 # Check if the parameter value is an instance of SerialDeviceConnection
                 if isinstance(param.value(), SerialDeviceConnection):
-                    # Use the to_dict method for serialization
-                    result[param.name()] = param.value().to_dict()
+                    # store parameter value as None
+                    result[param.name()] = None
                 else:
                     result[param.name()] = param.value()
         return result
@@ -2318,8 +2445,6 @@ class MainWindow(QMainWindow):
     def load_devices(self, device_settings):
         # remove all devices from the parameter tree
         self.params.child('Device settings').clearChildren()
-        # dictionary of device names matching device type
-        device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', Electrometer: 'Electrometer', CO2_sensor: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', eDiluter: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', Example_device: 'Example device'}
         try:
             # go through each device in the device settings
             for dev_name, dev_values in device_settings.items():
@@ -2329,7 +2454,7 @@ class MainWindow(QMainWindow):
                 # set n_devices to current dev_id
                 self.params.child('Device settings').n_devices = dev_id
                 # add device to the parameter tree
-                self.params.child('Device settings').addNew(device_names[dev_type])
+                self.params.child('Device settings').addNew(self.device_names[dev_type], device_name=dev_name)
         except AttributeError:
             pass
             
@@ -2338,10 +2463,12 @@ class MainWindow(QMainWindow):
             if param.hasChildren():
                 self.load_parameters_recursive(param.children(), values.get(param.name(), {}))
             else:
-                # Check if the parameter value is a dictionary (indicating a complex object)
-                if isinstance(values.get(param.name()), dict):
-                    # skip the parameter
-                    # 'Connection' parameter (SerialDeviceConnection) was created when the device was added
+                if param.name() == 'Connection':
+                    # skip 'Connection' parameter (SerialDeviceConnection)
+                    # SerialDeviceConnection was created when the device was added (load_devices)
+                    pass
+                elif param.name() == 'Connected':
+                    # skip 'Connected' parameter, this is checked in connection_test()
                     pass
                 # Check if parameter name is CO flow
                 elif param.name() == 'CO flow':
@@ -2381,15 +2508,21 @@ class MainWindow(QMainWindow):
         if self.params.child("Plot settings").child('Autoscale Y').value():
             viewbox.enableAutoRange(axis='y')
             viewbox.setAutoVisible(y=True)
-        """ # if Follow is on
-        if self.params.child('Plot settings').child('Follow').value():
-            # detect if view is dragged and turn Follow off if it is
-            viewbox_range = viewbox.viewRange()
-            # if x axis range differs from follow window size OR x axis max value differs from self.current_time
-            if viewbox_range[0][1]-viewbox_range[0][0] != self.params.child('Plot settings').child('Time window (s)').value() or viewbox_range[0][1] != self.current_time:
-                # if active widget is main plot
-                if QApplication.focusWidget() == self.main_plot:
-                    self.params.child('Plot settings').child('Follow').setValue(False) # turn follow parameter off """
+    
+    # called when main plot's auto range button is clicked
+    def auto_range_clicked(self):
+        # disable follow
+        self.params.child("Plot settings").child('Follow').setValue(False)
+        # set autorange on for individual plots
+        for dev in self.params.child('Device settings').children():
+            dev_id = dev.child('DevID').value()
+            dev_type = dev.child('Device type').value()
+            if dev_type == Electrometer:
+                for plot in self.device_widgets[dev_id].plot_tab.plots:
+                    plot.enableAutoRange()
+            else:
+                self.device_widgets[dev_id].plot_tab.plot.enableAutoRange()
+            
     
     # set the 'Plot to main' selection of all RHTP devices to the same value
     # called when 'Plot to main' selection of any RHTP device is changed
@@ -2429,21 +2562,26 @@ class MainWindow(QMainWindow):
             dev_id = dev.child('DevID').value()
             # if device is in curve_dict
             if dev_id in self.curve_dict:
+                # check if device has a nickname
+                if dev.child('Device nickname').value() != "":
+                    device_name = dev.child('Device nickname').value()
+                else: # if no nickname, use device parameter name (device type and serial number)
+                    device_name = dev.name()
                 # RHTP or AFM
                 if dev.child('Device type').value() in [RHTP, AFM]:
                     # if Plot to main is enabled
                     if dev.child('Plot to main').value() != None:
                         # add curve to legend with device name and current value of chosen parameter
                         if dev.child('Plot to main').value() == "RH":
-                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':rh'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':rh'][self.time_counter])
                         elif dev.child('Plot to main').value() == "T":
-                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':t'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':t'][self.time_counter])
                         elif dev.child('Plot to main').value() == "P":
-                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':p'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':p'][self.time_counter])
                         elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Flow":
-                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id) + ':f'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id) + ':f'][self.time_counter])
                         elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Standard flow":
-                            legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id) + ':sf'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id) + ':sf'][self.time_counter])
                         self.main_plot.legend.addItem(self.curve_dict[dev_id], legend_string)
                     else: # if disabled
                         # remove curve from legend
@@ -2454,13 +2592,13 @@ class MainWindow(QMainWindow):
                     # compile legend string - device name and current value
                     # if CPC, round value to 2 decimals
                     if dev.child('Device type').value() in [CPC, TSI_CPC]:
-                        legend_string = dev.child('Device name').value() + ": " + str(round(self.plot_data[str(dev_id)][self.time_counter], 2))
+                        legend_string = device_name + ": " + str(round(self.plot_data[str(dev_id)][self.time_counter], 2))
                     # if Electrometer, get Voltage 2 value
                     elif dev.child('Device type').value() == Electrometer:
-                        legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[str(dev_id)+':2'][self.time_counter])
+                        legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':2'][self.time_counter])
                     # other devices
                     else:
-                        legend_string = dev.child('Device name').value() + ": " + str(self.plot_data[dev_id][self.time_counter])
+                        legend_string = device_name + ": " + str(self.plot_data[dev_id][self.time_counter])
                     # add curve to legend with legend string
                     self.main_plot.legend.addItem(self.curve_dict[dev_id], legend_string)
                 else: # if False
@@ -2644,10 +2782,30 @@ class MainWindow(QMainWindow):
                 print(traceback.format_exc())
                 logging.exception(e)
     
-    # update device tab name according to device name
-    def update_tab_name(self, device_id, device_name):
+    # rename device parameter according to device type and serial number
+    def rename_device(self, device):
+        # combine device type name and serial number into device name
+        device_type = device.child('Device type').value() # device type number
+        device_type_name = self.device_names[device_type] # device type name
+        serial_number = device.child('Serial number').value() # serial number
+        device_name = device_type_name + " " + serial_number
+        # set device name
+        device.setName(device_name)
+        # update tab name
+        self.rename_tab(device)
+
+    # update device tab name according to device parameter name or nickname
+    def rename_tab(self, device):
+        # get tab index of device widget
+        device_id = device.child('DevID').value()
         device_widget = self.device_widgets[device_id]
         tab_index = self.device_tabs.indexOf(device_widget)
+        # check if device has a nickname
+        if device.child('Device nickname').value() != "":
+            device_name = device.child('Device nickname').value()
+        else: # if no nickname, use device parameter name (device type and serial number)
+            device_name = device.name()
+        # update tab name
         self.device_tabs.setTabText(tab_index, device_name)
 
     # triggered when a new device is added to the parameter tree
@@ -2657,20 +2815,29 @@ class MainWindow(QMainWindow):
             device_param = child # store device parameter
             device_type = child.child("Device type").value() # store device type
             device_id = child.child("DevID").value() # store device ID
+            device_port = child.child("COM port") # store COM port parameter
+            connection = device_param.child('Connection').value() # store connection class
 
             # connect serial number change to reset_device_filenames function
             device_param.child("Serial number").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
-            # connect device name change to reset_device_filenames function
-            device_param.child("Device name").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
-            # connect device name change to update_tab_name function
-            device_param.child("Device name").sigValueChanged.connect(lambda: self.update_tab_name(device_id, device_param.child("Device name").value()))
+            # connect device nickname change to reset_device_filenames function
+            device_param.child("Device nickname").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
+            # connect device nickname change to rename_tab function
+            device_param.child("Device nickname").sigValueChanged.connect(lambda: self.rename_tab(device_param))
+            # connect device serial number change to rename_device function
+            device_param.child("Serial number").sigValueChanged.connect(lambda: self.rename_device(device_param))
+            # connect device serial number change to reset_device_filenames function
+            device_param.child("Serial number").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
+            # connect COM port change to SerialDeviceConnection's change_port function
+            if osx_mode:
+                device_port.sigValueChanged.connect(lambda: connection.change_port(str(device_port.value())))
+            else:
+                device_port.sigValueChanged.connect(lambda: connection.change_port('COM'+str(device_port.value())))
 
             # create new widget according to device type
             if device_type == CPC: # if CPC
                 # create CPC widget instance
                 widget = CPCWidget(device_param)
-                # store connection for readability
-                connection = device_param.child('Connection').value()
                 # connect Set tab buttons to send_set function
                 widget.set_tab.drain.clicked.connect(lambda: connection.send_set(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
                 widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
@@ -2698,14 +2865,14 @@ class MainWindow(QMainWindow):
                 widget.pulse_quality.average_time_select.currentIndexChanged.connect(lambda: self.pulse_quality_update(device_id))
                 # connect pulse analysis start button to pulse_analysis_start function
                 widget.pulse_quality.start_analysis.clicked.connect(lambda: self.pulse_analysis_start(device_id, device_param))
+                # connect device nickname change to ScalableGroup's update_cpc_dict function
+                device_param.child("Device nickname").sigValueChanged.connect(param.update_cpc_dict)
 
             if device_type in [PSM, PSM2]: # if PSM TODO optimize structure, remove repetition
                 # create PSM widget instance
                 widget = PSMWidget(device_param, device_type)
                 # add to psm_settings_updates dictionary, set to True
                 self.psm_settings_updates[device_id] = True
-                # store connection for readability
-                connection = device_param.child('Connection').value()
                 # connect Measure tab buttons to send_set function
                 widget.measure_tab.scan.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_scan()))
                 widget.measure_tab.step.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_step()))
@@ -2801,8 +2968,6 @@ class MainWindow(QMainWindow):
             
             if device_type == eDiluter: # if eDiluter
                 widget = eDiluterWidget(device_param) # create eDiluter widget instance
-                # store connection for readability
-                connection = device_param.child('Connection').value()
                 # connect set_tab's mode buttons to send_set function
                 widget.set_tab.init.clicked.connect(lambda: connection.send_set("do set app.measurement.state INIT"))
                 widget.set_tab.warmup.clicked.connect(lambda: connection.send_set("do set app.measurement.state WARMUP"))
@@ -2820,12 +2985,12 @@ class MainWindow(QMainWindow):
             if device_type == TSI_CPC: # if TSI CPC
                 # create TSI widget instance
                 widget = TSIWidget(device_param)
-                # store connection for readability
-                connection = device_param.child('Connection').value()
                 # add baud rate parameter
                 device_param.addChild({'name': 'Baud rate', 'type': 'int', 'value': 115200})
                 # connect baud rate parameter to connection's set_baud_rate function
                 device_param.child('Baud rate').sigValueChanged.connect(lambda: connection.set_baud_rate(device_param.child('Baud rate').value()))
+                # connect device nickname change to ScalableGroup's update_cpc_dict function
+                device_param.child("Device nickname").sigValueChanged.connect(param.update_cpc_dict)
             
             if device_type == Example_device: # if Example device
                 widget = ExampleDeviceWidget(device_param) # create Example device widget instance
@@ -3025,6 +3190,9 @@ class MainPlot(GraphicsLayoutWidget):
         # call updateViews function to set viewboxes to same size
         self.updateViews()
 
+        # connect plot's auto range button to set_auto_range function
+        self.plot.autoBtn.clicked.connect(self.set_auto_range)
+
         # hide axes and disable SI scaling by default
         for key in self.axes:
             self.axes[key].hide()
@@ -3046,6 +3214,11 @@ class MainPlot(GraphicsLayoutWidget):
                 viewbox.setGeometry(self.plot.vb.sceneBoundingRect())
                 # update linked axes
                 viewbox.linkedViewChanged(self.plot.vb, viewbox.XAxis)
+    
+    # set auto range on for all viewboxes
+    def set_auto_range(self):
+        for viewbox in self.viewboxes.values():
+            viewbox.enableAutoRange()
     
     def set_axis_style(self, axis, color):
         axis.setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
@@ -3372,20 +3545,29 @@ class CPCWidget(QTabWidget):
 
         # create list of widget references for updating gui with cpc system status
         self.cpc_status_widgets = [
-            self.status_tab.pres_critical_orifice, self.status_tab.temp_cabin,
-            self.status_tab.liquid_level, self.status_tab.laser_power,
-            self.status_tab.pres_nozzle, self.status_tab.pres_inlet,
-            self.status_tab.temp_condenser, self.status_tab.temp_saturator,
-            self.status_tab.temp_optics
+            self.status_tab.temp_optics, self.status_tab.temp_saturator,
+            self.status_tab.temp_condenser, self.status_tab.pres_inlet,
+            self.status_tab.pres_nozzle, self.status_tab.laser_power,
+            self.status_tab.liquid_level, self.status_tab.temp_cabin,
+            self.status_tab.pres_critical_orifice
         ]
 
     # convert CPC status hex to binary and update error label colors
-    def update_errors(self, status_hex):
+    def update_errors(self, status_hex, cabin_p_error):
+        widget_amount = len(self.cpc_status_widgets) # get amount of widgets
         status_bin = bin(int(status_hex, 16)) # convert hex to int and int to binary
-        status_bin = status_bin[2:].zfill(9) # remove 0b from string and fill with 0s to make 9 digits
+        status_bin = status_bin[2:].zfill(widget_amount) # remove 0b from string and fill with 0s
         total_errors = status_bin.count("1") # count number of 1s in status_bin
-        for i in range(9): # iterate through all 9 digits, index 0-8
-            self.cpc_status_widgets[i].change_color(status_bin[i]) # change color of error label according to status_bin digit
+        inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
+        for i in range(widget_amount): # iterate through all status widgets
+            # change color of error label according to error bit
+            self.cpc_status_widgets[i].change_color(inverted_status_bin[i])
+        # update cabin pressure label color according to error status
+        if cabin_p_error:
+            self.status_tab.pres_cabin.change_color(1)
+            total_errors += 1
+        else:
+            self.status_tab.pres_cabin.change_color(0)
         
         return total_errors # return total number of errors
     
@@ -3445,12 +3627,13 @@ class CPCWidget(QTabWidget):
         self.status_tab.pres_inlet.change_value(str(current_list[7]) + " kPa")
         self.status_tab.pres_nozzle.change_value(str(current_list[9]) + " kPa")
         self.status_tab.pres_critical_orifice.change_value(str(current_list[8]) + " kPa")
+        self.status_tab.pres_cabin.change_value(str(current_list[10]) + " kPa")
         # update misc values
-        if current_list[10] == 0:
+        if current_list[11] == 0:
             self.status_tab.liquid_level.change_value("LOW")
-        elif current_list[10] == 1:
+        elif current_list[11] == 1:
             self.status_tab.liquid_level.change_value("OK")
-        elif current_list[10] == 2:
+        elif current_list[11] == 2:
             self.status_tab.liquid_level.change_value("OVERFILL")
         self.status_tab.temp_cabin.change_value(str(current_list[6]) + " °C")
 
@@ -3474,19 +3657,18 @@ class PSMWidget(QTabWidget):
         self.plot_tab = SinglePlot(device_type=PSM)
         self.addTab(self.plot_tab, "PSM plot")
 
-        # TODO check PSM 2.0 compatibility
         # create list of PSM status widgets, used in update_errors
-        # TODO reverse to correct order, change update_errors
-        self.psm_status_widgets = [ # reverse order for binary
-            "mfc_temp", self.status_tab.pressure_critical_orifice,
-            self.status_tab.temp_drainage, self.status_tab.temp_cabin, "drain_level",
-            self.status_tab.flow_excess, self.status_tab.pressure_inlet, "mix2_press", "mix1_press",
-            self.status_tab.temp_inlet, self.status_tab.temp_heater, self.status_tab.flow_saturator,
-            self.status_tab.temp_saturator, self.status_tab.temp_growth_tube
+        self.psm_status_widgets = [
+            self.status_tab.temp_growth_tube, self.status_tab.temp_saturator,
+            self.status_tab.flow_saturator, self.status_tab.temp_heater,
+            self.status_tab.temp_inlet, "mix1_press", "mix2_press",
+            self.status_tab.pressure_inlet, self.status_tab.flow_excess,
+            "drain_level", self.status_tab.temp_cabin, self.status_tab.temp_drainage,
+            self.status_tab.pressure_critical_orifice, "mfc_temp"
         ]
         # if PSM 2.0, add vacuum flow widget to list
         if device_type == PSM2:
-            self.psm_status_widgets.insert(0, self.status_tab.flow_vacuum)
+            self.psm_status_widgets.append(self.status_tab.flow_vacuum)
 
     # convert PSM status hex to binary and update error label colors
     def update_errors(self, status_hex):
@@ -3494,39 +3676,38 @@ class PSMWidget(QTabWidget):
         status_bin = bin(int(status_hex, 16)) # convert hex to int and int to binary
         status_bin = status_bin[2:].zfill(widget_amount) # remove 0b from string and fill with 0s to length of widget_amount
         total_errors = status_bin.count("1") # count number of 1s in status_bin
-        for i in range(widget_amount): # iterate through all digits
+        inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
+        for i in range(widget_amount): # iterate through all status widgets
             if type(self.psm_status_widgets[i]) != str: # filter placeholder strings
-                self.psm_status_widgets[i].change_color(status_bin[i]) # change color of error label according to status_bin digit
+                # change color of error label according to error bit
+                self.psm_status_widgets[i].change_color(inverted_status_bin[i])
         
         return total_errors # return total number of errors
     
-    # if hex changes, make sure zero fill and indices match new hex
+    # convert PSM notes hex to binary and update liquid mode settings
     def update_notes(self, note_hex):
-        # TODO PSM 2.0 should have same note_hex as PSM after its firmware is updated
+        note_length = 7 # if new note bits are added in firmware, change this value accordingly
         note_bin = bin(int(note_hex, 16)) # convert hex to int and int to binary
-        note_bin = note_bin[2:].zfill(7) # remove 0b from string and fill with 0s
+        note_bin = note_bin[2:].zfill(note_length) # remove 0b from string and fill with 0s
         total_notes = note_bin.count("1") # count number of 1s in note_bin
-        liquid_sets = note_bin[:3] # autofill, drying, drainage
-
+        inverted_note_bin = note_bin[::-1] # invert note_bin for liquid setting parsing
         # update liquid mode settings in GUI
         # 0 = autofill on, 1 = autofill off
-        if note_bin[1] == "0":
+        if inverted_note_bin[5] == "0":
             self.set_tab.autofill.update_state(1)
-        elif note_bin[1] == "1":
+        elif inverted_note_bin[5] == "1":
             self.set_tab.autofill.update_state(0)
         # 0 = drying off, 1 = drying on
-        self.set_tab.drying.update_state(int(note_bin[2]))
+        self.set_tab.drying.update_state(int(inverted_note_bin[4]))
         # 0 = drain on, 1 = drain off
-        if note_bin[3] == "0":
+        if inverted_note_bin[3] == "0":
             self.set_tab.drain.update_state(1)
-        elif note_bin[3] == "1":
+        elif inverted_note_bin[3] == "1":
             self.set_tab.drain.update_state(0)
         # 0 = saturator liquid level OK, 1 = saturator liquid level LOW
-        self.status_tab.liquid_saturator.change_color(note_bin[0])
+        self.status_tab.liquid_saturator.change_color(inverted_note_bin[6])
         # 0 = drain liquid level OK, 1 = drain liquid level HIGH
-        self.status_tab.liquid_drain.change_color(note_bin[6])
-
-        return liquid_sets # return liquid settings string
+        self.status_tab.liquid_drain.change_color(inverted_note_bin[0])
 
     def update_settings(self, settings):
         self.set_tab.set_growth_tube_temp.value_spinbox.setValue(float(settings[1]))
@@ -3675,7 +3856,7 @@ class PSMMeasureTab(QWidget):
         self.scan = StartButton("Scan")
         layout.addWidget(self.scan, 0, 0)
         self.set_minimum_flow = SetWidget("Minimum flow", " lpm")
-        self.set_minimum_flow.value_spinbox.setValue(0.05)
+        self.set_minimum_flow.value_spinbox.setValue(0.15)
         layout.addWidget(self.set_minimum_flow, 1, 0)
         self.set_max_flow = SetWidget("Maximum flow", " lpm")
         self.set_max_flow.value_spinbox.setValue(1.9)
@@ -4213,27 +4394,29 @@ class CPCStatusTab(QWidget):
 
         # temperature indicators
         self.temp_optics = IndicatorWidget("Optics temperature") # create optics temperature indicator
-        layout.addWidget(self.temp_optics, 1, 0)
+        layout.addWidget(self.temp_optics, 0, 0)
         self.temp_saturator = IndicatorWidget("Saturator temperature") # create saturator temperature indicator
-        layout.addWidget(self.temp_saturator, 2, 0)
+        layout.addWidget(self.temp_saturator, 1, 0)
         self.temp_condenser = IndicatorWidget("Condenser temperature") # create condenser temperature indicator
-        layout.addWidget(self.temp_condenser, 3, 0)
+        layout.addWidget(self.temp_condenser, 2, 0)
+        self.temp_cabin = IndicatorWidget("Cabin temperature") # create cabin temp indicator
+        layout.addWidget(self.temp_cabin, 3, 0)
 
         # pressure indicators
         self.pres_inlet = IndicatorWidget("Inlet pressure") # create inlet pressure indicator
-        layout.addWidget(self.pres_inlet, 1, 1)
+        layout.addWidget(self.pres_inlet, 0, 1)
         self.pres_nozzle = IndicatorWidget("Nozzle pressure") # create nozzle pressure indicator
-        layout.addWidget(self.pres_nozzle, 2, 1)
+        layout.addWidget(self.pres_nozzle, 1, 1)
         self.pres_critical_orifice = IndicatorWidget("Critical orifice pressure") # create nozzle pressure indicator
-        layout.addWidget(self.pres_critical_orifice, 3, 1)
+        layout.addWidget(self.pres_critical_orifice, 2, 1)
+        self.pres_cabin = IndicatorWidget("Cabin pressure") # create cabin pressure indicator
+        layout.addWidget(self.pres_cabin, 3, 1)
 
         # misc indicators
         self.laser_power = IndicatorWidget("Laser power") # create laser power indicator
-        layout.addWidget(self.laser_power, 1, 2)
+        layout.addWidget(self.laser_power, 0, 2, 2, 1)
         self.liquid_level = IndicatorWidget("Liquid level") # create liquid level indicator
-        layout.addWidget(self.liquid_level, 2, 2)
-        self.temp_cabin = IndicatorWidget("Cabin temperature") # create cabin temp indicator
-        layout.addWidget(self.temp_cabin, 3, 2)
+        layout.addWidget(self.liquid_level, 2, 2, 2, 1)
 
         self.setLayout(layout)
 
