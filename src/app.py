@@ -21,7 +21,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.8.0"
+version_number = "0.10.0"
 
 # Define instrument types
 CPC = 1
@@ -549,8 +549,9 @@ class MainWindow(QMainWindow):
                         # send multiple messages to device according to type
                         if device_type == CPC and dev.child('DevID').value() in self.pulse_analysis_index:
                             # if pulse analysis is in progress, send pulse analysis messages
-                            threshold = self.pulse_analysis_thresholds[self.pulse_analysis_index[dev.child('DevID').value()]]
-                            dev.child('Connection').value().send_pulse_analysis_messages(threshold)
+                            if self.pulse_analysis_index[dev.child('DevID').value()] is not None: # when index is None, analysis has reached its end
+                                threshold = self.pulse_analysis_thresholds[self.pulse_analysis_index[dev.child('DevID').value()]]
+                                dev.child('Connection').value().send_pulse_analysis_messages(threshold)
                         elif device_type == CPC and dev.child('10 hz').value() == True:
                             dev.child('Connection').value().send_multiple_messages(device_type, ten_hz=True)
                         else:
@@ -1376,20 +1377,26 @@ class MainWindow(QMainWindow):
                         
                         # if CPC is in pulse analysis mode, update pulse analysis plot data instead of normal plot data
                         if dev_id in self.pulse_analysis_index:
-                            # calculate current pulse duration
-                            dead_time = self.latest_data[dev_id][1]
-                            number_of_pulses = self.latest_data[dev_id][2]
-                            if number_of_pulses == 0:
-                                pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
-                            else:
-                                # pulse duration = dead time * 1000 (micro to nano) / number of pulses
-                                pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
-                            # get current threshold value with pulse_analysis_index
-                            threshold_value = self.pulse_analysis_thresholds[self.pulse_analysis_index[dev_id]]
-                            # TODO remove print after testing
-                            print(f"threshold: {threshold_value} pulse duration: {pulse_duration} dead time: {dead_time} number of pulses: {number_of_pulses}")
-                            # add analysis point to pulse quality widget
-                            self.device_widgets[dev_id].pulse_quality.add_analysis_point(pulse_duration, threshold_value)
+                            if self.pulse_analysis_index[dev_id] is not None: # when index is None, analysis has reached its end
+                                try:
+                                    # calculate current pulse duration
+                                    dead_time = self.latest_data[dev_id][1]
+                                    number_of_pulses = self.latest_data[dev_id][2]
+                                    if number_of_pulses == 0:
+                                        pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
+                                    else:
+                                        # pulse duration = dead time * 1000 (micro to nano) / number of pulses
+                                        pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
+                                    # get current threshold value with pulse_analysis_index
+                                    threshold_value = self.pulse_analysis_thresholds[self.pulse_analysis_index[dev_id]]
+                                    #print(f"threshold: {threshold_value} pulse duration: {pulse_duration} dead time: {dead_time} number of pulses: {number_of_pulses}")
+                                    # add analysis point to pulse quality widget
+                                    self.device_widgets[dev_id].pulse_quality.add_analysis_point(pulse_duration, threshold_value)
+                                except Exception as e:
+                                    print(traceback.format_exc())
+                                    logging.exception(e)
+                                    # stop pulse analysis if exception occurs
+                                    self.pulse_analysis_stop(dev_id, dev)
 
                         else:
                             psm_connection = False
@@ -1920,32 +1927,34 @@ class MainWindow(QMainWindow):
         for dev in self.params.child('Device settings').children():
             dev_id = dev.child('DevID').value()
             if dev_id in self.pulse_analysis_index:
-                try:
-                    # calculate current pulse duration
-                    dead_time = self.latest_data[dev_id][1]
-                    number_of_pulses = self.latest_data[dev_id][2]
-                    if number_of_pulses == 0:
-                        pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
-                    else:
-                        # pulse duration = dead time * 1000 (micro to nano) / number of pulses
-                        pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
-                    # get current threshold value with pulse_analysis_index
-                    threshold_value = self.pulse_analysis_thresholds[self.pulse_analysis_index[dev_id]]
-                    # get filename from dictionary (includes file path)
-                    filename = self.pulse_analysis_filenames[dev_id]
-                    # append file with new data
-                    with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
-                        file.write('\n') # create new line
-                        file.write(str(threshold_value) + ',' + str(number_of_pulses) + ',' + str(dead_time) + ',' + str(pulse_duration))
-                except Exception as e:
-                    print(traceback.format_exc())
-                    logging.exception(e)
-                
-                # increase pulse_analysis_index by 1
-                self.pulse_analysis_index[dev_id] += 1
-                # if all thresholds have been gone through, end pulse analysis
-                if self.pulse_analysis_index[dev_id] >= len(self.pulse_analysis_thresholds):
-                    self.pulse_analysis_stop(dev_id, dev)
+                if self.pulse_analysis_index[dev_id] is not None: # when index is None, analysis has reached its end
+                    try:
+                        # calculate current pulse duration
+                        dead_time = self.latest_data[dev_id][1]
+                        number_of_pulses = self.latest_data[dev_id][2]
+                        if number_of_pulses == 0:
+                            pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
+                        else:
+                            # pulse duration = dead time * 1000 (micro to nano) / number of pulses
+                            pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
+                        # get current threshold value with pulse_analysis_index
+                        threshold_value = self.pulse_analysis_thresholds[self.pulse_analysis_index[dev_id]]
+                        # get filename from dictionary (includes file path)
+                        filename = self.pulse_analysis_filenames[dev_id]
+                        # append file with new data
+                        with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
+                            file.write('\n') # create new line
+                            file.write(str(threshold_value) + ',' + str(number_of_pulses) + ',' + str(dead_time) + ',' + str(pulse_duration))
+                        # increase pulse_analysis_index by 1
+                        self.pulse_analysis_index[dev_id] += 1
+                        # if all thresholds have been gone through, end pulse analysis
+                        if self.pulse_analysis_index[dev_id] >= len(self.pulse_analysis_thresholds):
+                            self.pulse_analysis_stop(dev_id, dev)
+                    except Exception as e:
+                        print(traceback.format_exc())
+                        logging.exception(e)
+                        # stop pulse analysis if exception occurs
+                        self.pulse_analysis_stop(dev_id, dev)
     
     # triggered when saving is toggled on/off
     def save_changed(self):
@@ -2518,8 +2527,6 @@ class MainWindow(QMainWindow):
             if isnan(original_threshold):
                 self.pulse_analysis_stop(device_id, device_param)
                 return
-            # show original threshold value in pulse quality tab
-            self.device_widgets[device_id].pulse_quality.original_threshold.setText(str(original_threshold))
 
             # clear previous pulse analysis points
             self.device_widgets[device_id].pulse_quality.clear_analysis_points()
@@ -2529,14 +2536,13 @@ class MainWindow(QMainWindow):
             # timestamp
             timestamp = dt.fromtimestamp(self.current_time)
             timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
-            # device name and serial number
-            device_name = device_param.child('Device name').value()
+            # serial number
             serial_number = device_param.child('Serial number').value()
             # compile filename and add to pulse_analysis_filenames dictionary
             if osx_mode:
-                filename = filepath + '/' + timestamp_file + '_pulse_analysis_' + serial_number + '_' + device_name + '.csv'
+                filename = filepath + '/' + timestamp_file + '_pulse_analysis_' + serial_number + '.csv'
             else:
-                filename = filepath + '\\' + timestamp_file + '_pulse_analysis_' + serial_number + '_' + device_name + '.csv'
+                filename = filepath + '\\' + timestamp_file + '_pulse_analysis_' + serial_number + '.csv'
             self.pulse_analysis_filenames[device_id] = filename
             with open(filename, 'w', newline='\n', encoding='UTF-8') as file:
                 # write info row (serial number and original threshold)
@@ -2544,8 +2550,6 @@ class MainWindow(QMainWindow):
                 file.write('\n') # create new line
                 # write header
                 file.write('Threshold (mV),Number of pulses,Dead time (µs),Pulse duration (ns)')
-
-            print("Pulse analysis started")
         
         except Exception as e:
             print(traceback.format_exc())
@@ -2563,24 +2567,25 @@ class MainWindow(QMainWindow):
             logging.exception(e)
         # clear current threshold value
         self.device_widgets[device_id].pulse_quality.current_threshold.setText("")
-        # remove device id from pulse_analysis_index dictionary
-        self.pulse_analysis_index.pop(device_id)
+        # set pulse_analysis_index to None (signaling end of pulse analysis)
+        self.pulse_analysis_index[device_id] = None
+        # remove device id from pulse_analysis_index dictionary with delay
+        # delay ensures CPC has time to set original threshold before measurement continues
+        QTimer.singleShot(1000, lambda: self.pulse_analysis_index.pop(device_id))
         # remove device id from pulse_analysis_filenames dictionary
         if device_id in self.pulse_analysis_filenames:
             self.pulse_analysis_filenames.pop(device_id)
 
         # TODO plot gaussian fit and calculate nRMSE
         # analysis values are stored as listed tuples (pulse duration, threshold value)
-        analysis_values = self.device_widgets[device_id].pulse_quality.analysis_values
-        pulse_durations = [x[0] for x in analysis_values]
-        thresholds = [x[1] for x in analysis_values]
+        # analysis_values = self.device_widgets[device_id].pulse_quality.analysis_values
+        # pulse_durations = [x[0] for x in analysis_values]
+        # thresholds = [x[1] for x in analysis_values]
 
         # enable command input
         self.device_widgets[device_id].set_tab.command_widget.enable_command_input()
         # update pulse analysis status
         self.device_widgets[device_id].pulse_quality.update_pa_status(False)
-
-        print("Pulse analysis ended")
     
     # set device error status in dictionary
     def set_device_error(self, device_id, error):
@@ -4411,31 +4416,23 @@ class PulseQuality(QWidget):
         font.setPointSize(12) # set font size
         self.start_analysis.setFont(font) # apply font
         pa_options.addWidget(self.start_analysis, 0, 0, 1, 2)
-        # analysis status
-        pa_options.addWidget(QLabel("Analysis status", objectName="label"), 1, 0)
-        self.analysis_status = QLabel("", objectName="label")
-        self.analysis_status.setWordWrap(True)
-        pa_options.addWidget(self.analysis_status, 1, 1)
         # current threshold
-        pa_options.addWidget(QLabel("Current threshold (mV)", objectName="label"), 2, 0)
+        pa_options.addWidget(QLabel("Current threshold (mV)", objectName="label"), 1, 0)
         self.current_threshold = QLabel("", objectName="value-label")
-        pa_options.addWidget(self.current_threshold, 2, 1)
-        # original threshold
-        pa_options.addWidget(QLabel("Original threshold (mV)", objectName="label"), 3, 0)
-        self.original_threshold = QLabel("", objectName="value-label")
-        pa_options.addWidget(self.original_threshold, 3, 1)
+        pa_options.addWidget(self.current_threshold, 1, 1)
+        # dummy widget to balance layout
+        pa_options.addWidget(QWidget(), 2, 0, 2, 2)
 
         # update pulse analysis status
         self.update_pa_status(False)
 
         # TESTING
 
-        # TODO remove after testing
-        self.add_analysis_point(500, 150)
-        self.add_analysis_point(300, 500)
-        self.add_analysis_point(200, 800)
-        self.add_analysis_point(120, 1150)
-        self.add_analysis_point(100, 1500)
+        # self.add_analysis_point(500, 150)
+        # self.add_analysis_point(300, 500)
+        # self.add_analysis_point(200, 800)
+        # self.add_analysis_point(120, 1150)
+        # self.add_analysis_point(100, 1500)
 
         # import numpy as np
         # # create test data arrays and plot them
@@ -4474,18 +4471,20 @@ class PulseQuality(QWidget):
     
     def update_pa_status(self, flag):
         if flag:
-            self.analysis_status.setText("Analysis in progress...")
             self.start_analysis.setDisabled(True)
+            self.start_analysis.setText("Analysis in progress...")
         else:
-            self.analysis_status.setText("Ready to analyse")
             self.start_analysis.setDisabled(False)
+            self.start_analysis.setText("Start pulse analysis")
     
     def add_analysis_point(self, pulse_duration, threshold_value):
         # add analysis point to list of values as tuple
         self.analysis_values.append((pulse_duration, threshold_value))
+        # trim nan pulse durations from list
+        trimmed_values = [n for n in self.analysis_values if not isnan(n[0])]
         # update plot with new values
-        x_values = [n[0] for n in self.analysis_values]
-        y_values = [n[1] for n in self.analysis_values]
+        x_values = [n[0] for n in trimmed_values]
+        y_values = [n[1] for n in trimmed_values]
         self.analysis_points.setData(x_values, y_values)
         # update current threshold value
         self.current_threshold.setText(str(threshold_value))
