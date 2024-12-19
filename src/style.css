@@ -43,9 +43,6 @@ QComboBox#combo_box QListView {
     color: #e9e9e9;
     background-color: #444444;
 }
-
-/* Miikka */
-
 /* QTabWidget */
 QTabWidget {
     font-size: 18px;
@@ -108,7 +105,7 @@ QTabBar::tab:selected {
     color: #000000;
     background-color: #ffffff;
 }
-/* QPushButton with ID 'toggle_button' */
+/* QPushButton with ID 'button_widget' */
 #button_widget {
     color: #888888;
     background-color: gray;
@@ -132,4 +129,8 @@ ParameterTree {
 /* ParameterTree's children */
 ParameterTree * {
     background-color: #bebebe;
+}
+/* QMessageBox's children */
+QMessageBox * {
+    color: #e9e9e9;
 }
