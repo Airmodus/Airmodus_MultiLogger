@@ -1519,7 +1519,7 @@ class MainWindow(QMainWindow):
                                             pulse_duration = round(self.latest_data[dev_id][1] * 1000 / self.latest_data[dev_id][2], 2)
                                         # store pulse duration and pulse ratio values to plot_data
                                         self.plot_data[str(dev_id)+':pd'][-1] = pulse_duration
-                                        self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][11]
+                                        self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][12]
                                     else: # if concentration is outside range (invalid)
                                         # store nan values to plot_data
                                         self.plot_data[str(dev_id)+':pd'][-1] = nan
