@@ -1230,47 +1230,51 @@ class MainWindow(QMainWindow):
         # go through devices
         for dev in self.params.child('Device settings').children():
 
-            # if device is Airmodus CPC, set TAVG according to 10 hz parameter and check connection to PSM
-            if dev.child('Device type').value() == CPC:
-                # if 10 hz is on
-                if dev.child('10 hz').value() == True:
-                    # if device is connected
-                    if dev.child('Connected').value() == True:
-                        # if TAVG is not 0.1, set it to 0.1
-                        if self.latest_settings[dev.child('DevID').value()][0] != 0.1:
-                            dev.child('Connection').value().send_message(":SET:TAVG 0.1")
-                    # check if CPC is still connected to PSM with 10 hz on
-                    ten_hz_connected = False
-                    for psm in self.params.child('Device settings').children():
-                        if psm.child('Device type').value() in [PSM, PSM2]:
-                            if psm.child('Connected CPC').value() == dev.child('DevID').value():
-                                if psm.child('10 hz').value() == True:
-                                    ten_hz_connected = True
+            try:
+                # if device is Airmodus CPC, set TAVG according to 10 hz parameter and check connection to PSM
+                if dev.child('Device type').value() == CPC:
+                    # if 10 hz is on
+                    if dev.child('10 hz').value() == True:
+                        # if device is connected
+                        if dev.child('Connected').value() == True:
+                            # if TAVG is not 0.1, set it to 0.1
+                            if self.latest_settings[dev.child('DevID').value()][0] != 0.1:
+                                dev.child('Connection').value().send_message(":SET:TAVG 0.1")
+                        # check if CPC is still connected to PSM with 10 hz on
+                        ten_hz_connected = False
+                        for psm in self.params.child('Device settings').children():
+                            if psm.child('Device type').value() in [PSM, PSM2]:
+                                if psm.child('Connected CPC').value() == dev.child('DevID').value():
+                                    if psm.child('10 hz').value() == True:
+                                        ten_hz_connected = True
+                                        break
+                        # if CPC is not connected to PSM with 10 hz on, set 10 hz off
+                        if ten_hz_connected == False:
+                            dev.child('10 hz').setValue(False)
+                    # if 10 hz is off
+                    else:
+                        # if device is connected
+                        if dev.child('Connected').value() == True:
+                            # if TAVG is smaller than 1, set it to 1
+                            if self.latest_settings[dev.child('DevID').value()][0] < 1:
+                                dev.child('Connection').value().send_message(":SET:TAVG 1")
+                
+                # if device is PSM and 10 hz is on, check if connected CPC has 10 hz on
+                elif dev.child('Device type').value() in [PSM, PSM2]:
+                    if dev.child('10 hz').value() == True:
+                        # if a connected CPC exists
+                        if dev.child('Connected CPC').value() != 'None':
+                            for cpc in self.params.child('Device settings').children():
+                                if cpc.child('DevID').value() == dev.child('Connected CPC').value():
+                                    # check if connected CPC is Airmodus CPC
+                                    if cpc.child('Device type').value() == CPC:
+                                        # if connected CPC has 10 hz off, set it on
+                                        if cpc.child('10 hz').value() == False:
+                                            cpc.child('10 hz').setValue(True)
                                     break
-                    # if CPC is not connected to PSM with 10 hz on, set 10 hz off
-                    if ten_hz_connected == False:
-                        dev.child('10 hz').setValue(False)
-                # if 10 hz is off
-                else:
-                    # if device is connected
-                    if dev.child('Connected').value() == True:
-                        # if TAVG is smaller than 1, set it to 1
-                        if self.latest_settings[dev.child('DevID').value()][0] < 1:
-                            dev.child('Connection').value().send_message(":SET:TAVG 1")
-            
-            # if device is PSM and 10 hz is on, check if connected CPC has 10 hz on
-            elif dev.child('Device type').value() in [PSM, PSM2]:
-                if dev.child('10 hz').value() == True:
-                    # if a connected CPC exists
-                    if dev.child('Connected CPC').value() != 'None':
-                        for cpc in self.params.child('Device settings').children():
-                            if cpc.child('DevID').value() == dev.child('Connected CPC').value():
-                                # check if connected CPC is Airmodus CPC
-                                if cpc.child('Device type').value() == CPC:
-                                    # if connected CPC has 10 hz off, set it on
-                                    if cpc.child('10 hz').value() == False:
-                                        cpc.child('10 hz').setValue(True)
-                                break      
+            except Exception as e:
+                print(traceback.format_exc())
+                logging.exception(e)
     
     # update plot data lists
     def update_plot_data(self):
