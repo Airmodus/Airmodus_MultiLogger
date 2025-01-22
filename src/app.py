@@ -1013,6 +1013,9 @@ class MainWindow(QMainWindow):
                 
                 if dev.child('Device type').value() == RHTP: # RHTP
                     try:
+                        # start with nan list
+                        self.latest_data[dev_id] = full(3, nan)
+
                         # if device is in IDN inquiry list, look for *IDN
                         if dev_id in self.idn_inquiry_devices:
                             # read all data from buffer
@@ -1032,50 +1035,46 @@ class MainWindow(QMainWindow):
                                         # remove device from IDN inquiry list
                                         if dev_id in self.idn_inquiry_devices:
                                             self.idn_inquiry_devices.remove(dev_id)
-                            # store nan values to latest_data
-                            self.latest_data[dev_id] = full(3, nan)
                         
                         # if Serial number has been acquired, read data normally
                         else:
                             # read and decode a line of data
                             readings = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
                             # remove '\r\n' from end
-                            readings = readings[:-2]
+                            readings = readings.strip('\r\n')
                             # split data to list
                             readings = readings.split(", ")
 
-                            # check if there's an extra line's worth of data in buffer
-                            # TODO when extra lines occur, store them for next round using a dictionary, e.g. self.extra_data[dev.child('DevID').value()] = extra_line
-                            # - create check before first reading above: is there extra data stored in dictionary? if yes, use it and remove from dictionary
-                            # - consider valid data length in various scenarios: is it always the same (22)?
-                            # - create similar system for PSM data reading?
-                            if dev.child('Connection').value().connection.inWaiting() >= 22:
-                                buffer_length = dev.child('Connection').value().connection.inWaiting()
-                                try: # try to read next line
-                                    extra_line = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
-                                    # create log entry
-                                    logging.warning("readIndata - RHTP buffer: %i - RHTP extra line: %s", buffer_length, extra_line)
-                                    #print("readIndata - RHTP buffer:", buffer_length, "- RHTP extra line:", extra_line)
-                                except Exception as e:
-                                    print(traceback.format_exc())
-                                    logging.exception(e)
-
-                            # check if data is valid and store to latest_data dictionary
+                            # check if data is valid and store to latest_data
                             # readings length should be 3 (RH, T, P)
                             if len(readings) == 3:
-                                # store data to latest_data
                                 self.latest_data[dev_id] = readings
-                            else: # if data is not valid
-                                # store nan values to latest_data
-                                self.latest_data[dev_id] = full(3, nan)
 
-                    except Exception as e: # if reading fails, store nan values to latest_data
+                            # check if there's extra data in buffer
+                            # max message length is 23 (normal 20 + 2 \r\n + 1 if negative T)
+                            buffer_length = dev.child('Connection').value().connection.inWaiting()
+                            if buffer_length >= 24:
+                                # create log entry
+                                # serial_number = dev.child('Serial number').value()
+                                # logging.warning("RHTP %s buffer: %i", serial_number, buffer_length)
+
+                                # read next line
+                                extra_data = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
+                                # remove '\r\n' and split data to list
+                                extra_data = extra_data.strip('\r\n').split(", ")
+                                # use extra data as latest_data if valid
+                                if len(extra_data) == 3:
+                                    self.latest_data[dev_id] = extra_data
+
+                    except Exception as e:
                         print(traceback.format_exc())
-                        self.latest_data[dev_id] = full(3, nan)
                         logging.exception(e)
                 
                 if dev.child('Device type').value() == AFM: # AFM
                     try:
+                        # start with nan list
+                        self.latest_data[dev_id] = full(5, nan)
+
                         # if device is in IDN inquiry list, look for *IDN
                         if dev_id in self.idn_inquiry_devices:
                             # read all data from buffer
@@ -1095,45 +1094,39 @@ class MainWindow(QMainWindow):
                                         # remove device from IDN inquiry list
                                         if dev_id in self.idn_inquiry_devices:
                                             self.idn_inquiry_devices.remove(dev_id)
-                            # store nan values to latest_data
-                            self.latest_data[dev_id] = full(5, nan)
                         
                         # if Serial number has been acquired, read data normally
                         else:
                             # read and decode a line of data
                             readings = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
                             # remove '\r\n' from end
-                            readings = readings[:-2]
+                            readings = readings.strip('\r\n')
                             # split data to list
                             readings = readings.split(", ")
 
-                            # check if there's an extra line's worth of data in buffer
-                            # this is done in case data cumulates slowly over time in buffer
-                            if dev.child('Connection').value().connection.inWaiting() >= 38: # 34 + 2 (\r\n) + 2 (if flow >= 10)
-                                buffer_length = dev.child('Connection').value().connection.inWaiting()
-                                # create log entry
-                                logging.warning("readIndata - AFM buffer: %i", buffer_length)
-                                print("readIndata - AFM extra data buffer:", buffer_length)
-                                try: # try to read next line
-                                    extra_line = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
-                                    # use extra line as readings
-                                    readings = extra_line[:-2].split(", ") # remove '\r\n' and split data to list
-                                except Exception as e:
-                                    print(traceback.format_exc())
-                                    logging.exception(e)
-                            
-                            #print("AFM readings:", readings)
-
-                            # check if data is valid and store to latest_data dictionary
+                            # check if data is valid and store to latest_data
                             # readings length should be 5 (volumetric flow, standard flow, RH, T, P)
                             if len(readings) == 5:
                                 self.latest_data[dev_id] = readings
-                            else:
-                                self.latest_data[dev_id] = full(5, nan)
+
+                            # check if there's extra data in buffer
+                            # max message length is 39 (normal 34 + 2 \r\n + 1 if negative T + 2 if flow values >= 10)
+                            buffer_length = dev.child('Connection').value().connection.inWaiting()
+                            if buffer_length >= 40:
+                                # create log entry
+                                # serial_number = dev.child('Serial number').value()
+                                # logging.warning("AFM %s buffer: %i", serial_number, buffer_length)
+
+                                # read next line
+                                extra_data = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
+                                # remove '\r\n' and split data to list
+                                extra_data = extra_data.strip('\r\n').split(", ")
+                                # use extra data as latest_data if valid
+                                if len(extra_data) == 5:
+                                    self.latest_data[dev_id] = extra_data
                     
-                    except Exception as e: # if reading fails, store nan values to latest_data
+                    except Exception as e:
                         print(traceback.format_exc())
-                        self.latest_data[dev_id] = full(5, nan)
                         logging.exception(e)
                 
                 if dev.child('Device type').value() == eDiluter: # eDiluter
