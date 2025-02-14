@@ -253,6 +253,12 @@ class ScalableGroup(parameterTypes.GroupParameter):
             self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
             # create new Plot to main parameter with options for plotted value
             self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'Flow', 'Standard flow', 'RH', 'T', 'P'], 'value': 'Flow'})
+        
+        # if added device is Example device, hide irrelevant parameters
+        if device_value == Example_device:
+            self.children()[-1].child('COM port').setOpts(visible=False)
+            self.children()[-1].child('Serial number').setOpts(visible=False)
+            self.children()[-1].child('Connected').setOpts(visible=False)
 
     def update_cpc_dict(self):
         self.cpc_dict = {'None': 'None'} # reset cpc_dict
