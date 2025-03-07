@@ -8,6 +8,7 @@ import random
 import traceback
 import json
 import warnings
+import sys
 
 from numpy import full, nan, array, polyval, array_equal, roll, nanmean, isnan, linspace
 from serial import Serial
@@ -64,9 +65,16 @@ locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
 # set up logging
 logging.basicConfig(filename='debug.log', encoding='UTF-8', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
 
-# assign file path to a variable
-file_path = os.path.dirname(__file__)
-main_path = os.path.dirname(file_path)
+# define file paths according to run mode (exe or script)
+script_path = os.path.realpath(os.path.dirname(__file__)) # location of this file
+# exe (one file)
+if getattr(sys, 'frozen', False):
+    save_path = os.path.realpath(os.path.dirname(sys.executable)) # save files to exe location
+    resource_path = script_path + "/res" # path of /res/ folder (images, icons)
+# script
+else:
+    save_path = os.path.dirname(script_path) # save files to repository's main folder
+    resource_path = os.path.dirname(script_path) + "/res" # path of /res/ folder (images, icons)
 
 # check if platform is OSX
 if platform.system() == "Darwin":
@@ -290,7 +298,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
 params = [
     {'name': 'Measurement status', 'type': 'group', 'children': [
         {'name': 'Data settings', 'type': 'group', 'children': [
-            {'name': 'File path', 'type': 'str', 'value': main_path},
+            {'name': 'File path', 'type': 'str', 'value': save_path},
             {'name': 'File tag', 'type': 'str', 'value': "", 'tip': "File name: YYYYMMDD_HHMMSS_(Serial number)_(Device type)_(Device nickname)_(File tag).dat"},
             {'name': 'Save data', 'type': 'bool', 'value': False},
             {'name': 'Generate daily files', 'type': 'bool', 'value': True, 'tip': "If on, new files are started at midnight."},
@@ -340,12 +348,12 @@ class MainWindow(QMainWindow):
         self.pulse_analysis_thresholds = linspace(15,1500,61) # list of thresholds used in pulse analysis
 
         # load CSS style and apply it to the main window
-        with open(file_path + "/style.css", "r") as f:
+        with open(script_path + "/style.css", "r") as f:
             self.style = f.read()
         self.setStyleSheet(self.style)
 
         # create error icon object
-        self.error_icon = QIcon(main_path + "/res/icons/error.png")
+        self.error_icon = QIcon(resource_path + "/icons/error.png")
 
         # initialize dictionaries and lists
         # data related
@@ -386,7 +394,7 @@ class MainWindow(QMainWindow):
         self.status_lights = StatusLights()
         # create logo pixmap label
         self.logo = QLabel(alignment=Qt.AlignCenter)
-        pixmap = QPixmap(main_path + "/res/images/logo.png")
+        pixmap = QPixmap(resource_path + "/images/logo.png")
         self.logo.setPixmap(pixmap.scaled(400, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         # create left side vertical splitter
         # contains parameter tree and status widget
@@ -2383,8 +2391,8 @@ class MainWindow(QMainWindow):
         if self.params.child('Measurement status').child('Data settings').child('Resume on startup').value():
             resume_measurements = 1
         # store resume config path
-        self.config_file_path = os.path.join(file_path, 'resume_config.json')
-        with open(os.path.join(file_path, 'config.ini'),'w') as f:
+        self.config_file_path = os.path.join(save_path, 'resume_config.json')
+        with open(os.path.join(save_path, 'config.ini'),'w') as f:
             f.write(self.config_file_path)
             f.write(';')
             f.write(str(resume_measurements))
@@ -2393,14 +2401,14 @@ class MainWindow(QMainWindow):
     
     def load_ini(self):
         try:
-            # load the configuration file "config.ini" from the file_path
-            with open(os.path.join(file_path, 'config.ini'),'r') as f:
+            # load the configuration file "config.ini" from the save_path
+            with open(os.path.join(save_path, 'config.ini'),'r') as f:
                 config = f.read()
                 json_path = config.split(';')[0]
                 resume_measurements = config.split(';')[1]
                 # If json path is empty
                 if not json_path:
-                    json_path = os.path.join(file_path, 'resume_config.json')
+                    json_path = os.path.join(save_path, 'resume_config.json')
                 self.config_file_path = json_path
                 resume_measurements = int(resume_measurements)
                 # if resume on startup is on, load the stored configuration
