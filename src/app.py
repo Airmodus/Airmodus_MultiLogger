@@ -2074,7 +2074,6 @@ class MainWindow(QMainWindow):
         if self.params.child('Measurement status').child('Data settings').child('Save data').value():
             # store start day
             self.start_day = dt.now().strftime("%m%d")
-            #self.start_day = dt.now().strftime("%M") # testing with minutes
             # get file path
             self.filePath = self.params.child('Measurement status').child('Data settings').child('File path').value()
             # set file path as read only
@@ -2261,7 +2260,7 @@ class MainWindow(QMainWindow):
         if self.params.child('Measurement status').child("Data settings").child('Save data').value():
             # check if new file should be started at midnight
             if self.params.child('Measurement status').child("Data settings").child('Generate daily files').value():
-                current_day = dt.now().strftime("%m%d")
+                current_day = dt.fromtimestamp(self.current_time).strftime("%m%d")
                 if current_day != self.start_day:
                     self.reset_filenames() # start new file if day has changed
                     # update start day
