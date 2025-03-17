@@ -454,7 +454,7 @@ class MainWindow(QMainWindow):
     # timer timeout launches this chain of functions
     def timer_functions(self):
         # TODO rename functions to something more descriptive, explain phases with comments
-        self.current_time = round(time()) # get current time and round it to nearest second
+        self.current_time = int(time()) # get current time as integer
         # initialize error status light flag
         self.error_status = 0 # 0 = ok, 1 = errors
         # initialize saving status flag, set to 0 in write_data function if saving not on or fails
@@ -484,8 +484,8 @@ class MainWindow(QMainWindow):
             self.max_reached = True # set max_reached flag to True
         # convert current_time to datetime object
         current_datetime = dt.fromtimestamp(self.current_time)
-        # restart timer daily (at 23:59:59) to prevent drifting over time
-        if current_datetime.hour == 23 and current_datetime.minute == 59 and current_datetime.second == 59:
+        # restart timer every 12 hours (at 11:59:59 and 23:59:59) to prevent drifting over time
+        if current_datetime.hour in [11, 23] and current_datetime.minute == 59 and current_datetime.second == 59:
             self.restartTimer()
 
     # Check if serial connection is established
@@ -3074,7 +3074,6 @@ class MainWindow(QMainWindow):
 
     def endTimer(self):
         self.timer.stop()
-        print("Timer stopped.")
     
     # restart timer to sync to seconds
     def restartTimer(self):
