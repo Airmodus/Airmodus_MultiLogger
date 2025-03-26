@@ -23,7 +23,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.10.0"
+version_number = "0.10.1"
 
 # Define instrument types
 CPC = 1
@@ -261,6 +261,12 @@ class ScalableGroup(parameterTypes.GroupParameter):
             self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
             # create new Plot to main parameter with options for plotted value
             self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'Flow', 'Standard flow', 'RH', 'T', 'P'], 'value': 'Flow'})
+        
+        # if added device is Example device, hide irrelevant parameters
+        if device_value == Example_device:
+            self.children()[-1].child('COM port').setOpts(visible=False)
+            self.children()[-1].child('Serial number').setOpts(visible=False)
+            self.children()[-1].child('Connected').setOpts(visible=False)
 
     def update_cpc_dict(self):
         self.cpc_dict = {'None': 'None'} # reset cpc_dict
@@ -456,7 +462,7 @@ class MainWindow(QMainWindow):
     # timer timeout launches this chain of functions
     def timer_functions(self):
         # TODO rename functions to something more descriptive, explain phases with comments
-        self.current_time = round(time()) # get current time and round it to nearest second
+        self.current_time = int(time()) # get current time as integer
         # initialize error status light flag
         self.error_status = 0 # 0 = ok, 1 = errors
         # initialize saving status flag, set to 0 in write_data function if saving not on or fails
@@ -486,8 +492,8 @@ class MainWindow(QMainWindow):
             self.max_reached = True # set max_reached flag to True
         # convert current_time to datetime object
         current_datetime = dt.fromtimestamp(self.current_time)
-        # restart timer daily (at 23:59:59) to prevent drifting over time
-        if current_datetime.hour == 23 and current_datetime.minute == 59 and current_datetime.second == 59:
+        # restart timer every 12 hours (at 11:59:59 and 23:59:59) to prevent drifting over time
+        if current_datetime.hour in [11, 23] and current_datetime.minute == 59 and current_datetime.second == 59:
             self.restartTimer()
 
     # Check if serial connection is established
@@ -1021,6 +1027,9 @@ class MainWindow(QMainWindow):
                 
                 if dev.child('Device type').value() == RHTP: # RHTP
                     try:
+                        # start with nan list
+                        self.latest_data[dev_id] = full(3, nan)
+
                         # if device is in IDN inquiry list, look for *IDN
                         if dev_id in self.idn_inquiry_devices:
                             # read all data from buffer
@@ -1040,50 +1049,46 @@ class MainWindow(QMainWindow):
                                         # remove device from IDN inquiry list
                                         if dev_id in self.idn_inquiry_devices:
                                             self.idn_inquiry_devices.remove(dev_id)
-                            # store nan values to latest_data
-                            self.latest_data[dev_id] = full(3, nan)
                         
                         # if Serial number has been acquired, read data normally
                         else:
                             # read and decode a line of data
                             readings = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
                             # remove '\r\n' from end
-                            readings = readings[:-2]
+                            readings = readings.strip('\r\n')
                             # split data to list
                             readings = readings.split(", ")
 
-                            # check if there's an extra line's worth of data in buffer
-                            # TODO when extra lines occur, store them for next round using a dictionary, e.g. self.extra_data[dev.child('DevID').value()] = extra_line
-                            # - create check before first reading above: is there extra data stored in dictionary? if yes, use it and remove from dictionary
-                            # - consider valid data length in various scenarios: is it always the same (22)?
-                            # - create similar system for PSM data reading?
-                            if dev.child('Connection').value().connection.inWaiting() >= 22:
-                                buffer_length = dev.child('Connection').value().connection.inWaiting()
-                                try: # try to read next line
-                                    extra_line = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
-                                    # create log entry
-                                    logging.warning("readIndata - RHTP buffer: %i - RHTP extra line: %s", buffer_length, extra_line)
-                                    #print("readIndata - RHTP buffer:", buffer_length, "- RHTP extra line:", extra_line)
-                                except Exception as e:
-                                    print(traceback.format_exc())
-                                    logging.exception(e)
-
-                            # check if data is valid and store to latest_data dictionary
+                            # check if data is valid and store to latest_data
                             # readings length should be 3 (RH, T, P)
                             if len(readings) == 3:
-                                # store data to latest_data
                                 self.latest_data[dev_id] = readings
-                            else: # if data is not valid
-                                # store nan values to latest_data
-                                self.latest_data[dev_id] = full(3, nan)
 
-                    except Exception as e: # if reading fails, store nan values to latest_data
+                            # check if there's extra data in buffer
+                            # max message length is 23 (normal 20 + 2 \r\n + 1 if negative T)
+                            buffer_length = dev.child('Connection').value().connection.inWaiting()
+                            if buffer_length >= 24:
+                                # create log entry
+                                # serial_number = dev.child('Serial number').value()
+                                # logging.warning("RHTP %s buffer: %i", serial_number, buffer_length)
+
+                                # read next line
+                                extra_data = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
+                                # remove '\r\n' and split data to list
+                                extra_data = extra_data.strip('\r\n').split(", ")
+                                # use extra data as latest_data if valid
+                                if len(extra_data) == 3:
+                                    self.latest_data[dev_id] = extra_data
+
+                    except Exception as e:
                         print(traceback.format_exc())
-                        self.latest_data[dev_id] = full(3, nan)
                         logging.exception(e)
                 
                 if dev.child('Device type').value() == AFM: # AFM
                     try:
+                        # start with nan list
+                        self.latest_data[dev_id] = full(5, nan)
+
                         # if device is in IDN inquiry list, look for *IDN
                         if dev_id in self.idn_inquiry_devices:
                             # read all data from buffer
@@ -1103,45 +1108,39 @@ class MainWindow(QMainWindow):
                                         # remove device from IDN inquiry list
                                         if dev_id in self.idn_inquiry_devices:
                                             self.idn_inquiry_devices.remove(dev_id)
-                            # store nan values to latest_data
-                            self.latest_data[dev_id] = full(5, nan)
                         
                         # if Serial number has been acquired, read data normally
                         else:
                             # read and decode a line of data
                             readings = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
                             # remove '\r\n' from end
-                            readings = readings[:-2]
+                            readings = readings.strip('\r\n')
                             # split data to list
                             readings = readings.split(", ")
 
-                            # check if there's an extra line's worth of data in buffer
-                            # this is done in case data cumulates slowly over time in buffer
-                            if dev.child('Connection').value().connection.inWaiting() >= 38: # 34 + 2 (\r\n) + 2 (if flow >= 10)
-                                buffer_length = dev.child('Connection').value().connection.inWaiting()
-                                # create log entry
-                                logging.warning("readIndata - AFM buffer: %i", buffer_length)
-                                print("readIndata - AFM extra data buffer:", buffer_length)
-                                try: # try to read next line
-                                    extra_line = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
-                                    # use extra line as readings
-                                    readings = extra_line[:-2].split(", ") # remove '\r\n' and split data to list
-                                except Exception as e:
-                                    print(traceback.format_exc())
-                                    logging.exception(e)
-                            
-                            #print("AFM readings:", readings)
-
-                            # check if data is valid and store to latest_data dictionary
+                            # check if data is valid and store to latest_data
                             # readings length should be 5 (volumetric flow, standard flow, RH, T, P)
                             if len(readings) == 5:
                                 self.latest_data[dev_id] = readings
-                            else:
-                                self.latest_data[dev_id] = full(5, nan)
+
+                            # check if there's extra data in buffer
+                            # max message length is 39 (normal 34 + 2 \r\n + 1 if negative T + 2 if flow values >= 10)
+                            buffer_length = dev.child('Connection').value().connection.inWaiting()
+                            if buffer_length >= 40:
+                                # create log entry
+                                # serial_number = dev.child('Serial number').value()
+                                # logging.warning("AFM %s buffer: %i", serial_number, buffer_length)
+
+                                # read next line
+                                extra_data = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
+                                # remove '\r\n' and split data to list
+                                extra_data = extra_data.strip('\r\n').split(", ")
+                                # use extra data as latest_data if valid
+                                if len(extra_data) == 5:
+                                    self.latest_data[dev_id] = extra_data
                     
-                    except Exception as e: # if reading fails, store nan values to latest_data
+                    except Exception as e:
                         print(traceback.format_exc())
-                        self.latest_data[dev_id] = full(5, nan)
                         logging.exception(e)
                 
                 if dev.child('Device type').value() == eDiluter: # eDiluter
@@ -1238,47 +1237,51 @@ class MainWindow(QMainWindow):
         # go through devices
         for dev in self.params.child('Device settings').children():
 
-            # if device is Airmodus CPC, set TAVG according to 10 hz parameter and check connection to PSM
-            if dev.child('Device type').value() == CPC:
-                # if 10 hz is on
-                if dev.child('10 hz').value() == True:
-                    # if device is connected
-                    if dev.child('Connected').value() == True:
-                        # if TAVG is not 0.1, set it to 0.1
-                        if self.latest_settings[dev.child('DevID').value()][0] != 0.1:
-                            dev.child('Connection').value().send_message(":SET:TAVG 0.1")
-                    # check if CPC is still connected to PSM with 10 hz on
-                    ten_hz_connected = False
-                    for psm in self.params.child('Device settings').children():
-                        if psm.child('Device type').value() in [PSM, PSM2]:
-                            if psm.child('Connected CPC').value() == dev.child('DevID').value():
-                                if psm.child('10 hz').value() == True:
-                                    ten_hz_connected = True
+            try:
+                # if device is Airmodus CPC, set TAVG according to 10 hz parameter and check connection to PSM
+                if dev.child('Device type').value() == CPC:
+                    # if 10 hz is on
+                    if dev.child('10 hz').value() == True:
+                        # if device is connected
+                        if dev.child('Connected').value() == True:
+                            # if TAVG is not 0.1, set it to 0.1
+                            if self.latest_settings[dev.child('DevID').value()][0] != 0.1:
+                                dev.child('Connection').value().send_message(":SET:TAVG 0.1")
+                        # check if CPC is still connected to PSM with 10 hz on
+                        ten_hz_connected = False
+                        for psm in self.params.child('Device settings').children():
+                            if psm.child('Device type').value() in [PSM, PSM2]:
+                                if psm.child('Connected CPC').value() == dev.child('DevID').value():
+                                    if psm.child('10 hz').value() == True:
+                                        ten_hz_connected = True
+                                        break
+                        # if CPC is not connected to PSM with 10 hz on, set 10 hz off
+                        if ten_hz_connected == False:
+                            dev.child('10 hz').setValue(False)
+                    # if 10 hz is off
+                    else:
+                        # if device is connected
+                        if dev.child('Connected').value() == True:
+                            # if TAVG is smaller than 1, set it to 1
+                            if self.latest_settings[dev.child('DevID').value()][0] < 1:
+                                dev.child('Connection').value().send_message(":SET:TAVG 1")
+                
+                # if device is PSM and 10 hz is on, check if connected CPC has 10 hz on
+                elif dev.child('Device type').value() in [PSM, PSM2]:
+                    if dev.child('10 hz').value() == True:
+                        # if a connected CPC exists
+                        if dev.child('Connected CPC').value() != 'None':
+                            for cpc in self.params.child('Device settings').children():
+                                if cpc.child('DevID').value() == dev.child('Connected CPC').value():
+                                    # check if connected CPC is Airmodus CPC
+                                    if cpc.child('Device type').value() == CPC:
+                                        # if connected CPC has 10 hz off, set it on
+                                        if cpc.child('10 hz').value() == False:
+                                            cpc.child('10 hz').setValue(True)
                                     break
-                    # if CPC is not connected to PSM with 10 hz on, set 10 hz off
-                    if ten_hz_connected == False:
-                        dev.child('10 hz').setValue(False)
-                # if 10 hz is off
-                else:
-                    # if device is connected
-                    if dev.child('Connected').value() == True:
-                        # if TAVG is smaller than 1, set it to 1
-                        if self.latest_settings[dev.child('DevID').value()][0] < 1:
-                            dev.child('Connection').value().send_message(":SET:TAVG 1")
-            
-            # if device is PSM and 10 hz is on, check if connected CPC has 10 hz on
-            elif dev.child('Device type').value() in [PSM, PSM2]:
-                if dev.child('10 hz').value() == True:
-                    # if a connected CPC exists
-                    if dev.child('Connected CPC').value() != 'None':
-                        for cpc in self.params.child('Device settings').children():
-                            if cpc.child('DevID').value() == dev.child('Connected CPC').value():
-                                # check if connected CPC is Airmodus CPC
-                                if cpc.child('Device type').value() == CPC:
-                                    # if connected CPC has 10 hz off, set it on
-                                    if cpc.child('10 hz').value() == False:
-                                        cpc.child('10 hz').setValue(True)
-                                break      
+            except Exception as e:
+                print(traceback.format_exc())
+                logging.exception(e)
     
     # update plot data lists
     def update_plot_data(self):
@@ -1527,7 +1530,7 @@ class MainWindow(QMainWindow):
                                             pulse_duration = round(self.latest_data[dev_id][1] * 1000 / self.latest_data[dev_id][2], 2)
                                         # store pulse duration and pulse ratio values to plot_data
                                         self.plot_data[str(dev_id)+':pd'][-1] = pulse_duration
-                                        self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][11]
+                                        self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][12]
                                     else: # if concentration is outside range (invalid)
                                         # store nan values to plot_data
                                         self.plot_data[str(dev_id)+':pd'][-1] = nan
@@ -2079,7 +2082,6 @@ class MainWindow(QMainWindow):
         if self.params.child('Measurement status').child('Data settings').child('Save data').value():
             # store start day
             self.start_day = dt.now().strftime("%m%d")
-            #self.start_day = dt.now().strftime("%M") # testing with minutes
             # get file path
             self.filePath = self.params.child('Measurement status').child('Data settings').child('File path').value()
             # set file path as read only
@@ -2266,7 +2268,7 @@ class MainWindow(QMainWindow):
         if self.params.child('Measurement status').child("Data settings").child('Save data').value():
             # check if new file should be started at midnight
             if self.params.child('Measurement status').child("Data settings").child('Generate daily files').value():
-                current_day = dt.now().strftime("%m%d")
+                current_day = dt.fromtimestamp(self.current_time).strftime("%m%d")
                 if current_day != self.start_day:
                     self.reset_filenames() # start new file if day has changed
                     # update start day
@@ -3079,7 +3081,6 @@ class MainWindow(QMainWindow):
 
     def endTimer(self):
         self.timer.stop()
-        print("Timer stopped.")
     
     # restart timer to sync to seconds
     def restartTimer(self):
