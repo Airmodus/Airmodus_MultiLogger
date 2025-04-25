@@ -23,7 +23,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.10.1"
+version_number = "0.10.2"
 
 # Define instrument types
 CPC = 1
@@ -859,14 +859,12 @@ class MainWindow(QMainWindow):
                                 try:
                                     if dev.child('Firmware version').value() != "":
                                         firmware_version = dev.child('Firmware version').value().split(".")
-                                        # Retrofit: version >= 
-                                        # TODO add correct version check when scan status is added to firmware
+                                        # Retrofit: version >= 0.5.5
                                         if dev.child('Device type').value() == PSM:
-                                            # if int(firmware_version[1]) > 5:
-                                            #     scan_status = data[15]
-                                            # elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 4:
-                                            #     scan_status = data[15]
-                                            pass
+                                            if int(firmware_version[1]) > 5:
+                                                scan_status = data[15]
+                                            elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 5:
+                                                scan_status = data[15]
                                         # PSM 2.0: version >= 0.6.8
                                         elif dev.child('Device type').value() == PSM2:
                                             if int(firmware_version[1]) > 6:
