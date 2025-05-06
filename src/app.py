@@ -136,6 +136,9 @@ class SerialDeviceConnection():
             # print message if connection does not exist
             print("send_message - no connection, message -", message)
     
+    def send_delayed_message(self, message, delay):
+        QTimer.singleShot(delay, lambda: self.send_message(message))
+    
     def send_multiple_messages(self, device_type, ten_hz=False):
 
         if device_type == 1: # CPC
@@ -371,6 +374,7 @@ class MainWindow(QMainWindow):
         self.latest_ten_hz = {} # contains latest 10 hz OPC concentration log values
         self.extra_data = {} # contains extra data, used when multiple data prints are received at once
         self.pulse_analysis_index = {} # contains CPC pulse analysis index, used for pulse analysis progress tracking
+        self.psm_dilution = {} # contains PSM dilution parameters
         # plot related
         self.plot_data = {} # contains plotted values
         self.curve_dict = {} # contains curve objects for main plot
@@ -553,6 +557,13 @@ class MainWindow(QMainWindow):
                 if connected and dev.child('Connected').value() == False:
                     if dev.child('DevID').value() not in self.idn_inquiry_devices:
                         self.idn_inquiry_devices.append(dev.child('DevID').value())
+                    # if device is PSM, reset firmware version and dilution parameters to ensure they are updated
+                    if dev.child('Device type').value() in [PSM, PSM2]:
+                        dev.child('Firmware version').setValue("") # reset firmware version
+                        if dev.child('DevID').value() in self.psm_dilution:
+                            del self.psm_dilution[dev.child('DevID').value()] # reset dilution parameters
+                        # set settings update flag
+                        self.psm_settings_updates[dev.child('DevID').value()] = True
             
             # set the connection state according to connected value
             dev.child('Connected').setValue(connected)
@@ -586,6 +597,9 @@ class MainWindow(QMainWindow):
                         if self.psm_settings_updates[dev.child('DevID').value()] == True:
                             # send message to device to get settings
                             dev.child('Connection').value().send_message(":SYST:PRNT")
+                        # if dilution parameters have not been fetched, send message
+                        if dev.child('DevID').value() not in self.psm_dilution:
+                            dev.child('Connection').value().send_delayed_message(":SYST:VCMP", 150)
 
                     elif device_type == Electrometer: # Electrometer
                         dev.child('Connection').value().connection.reset_input_buffer()
@@ -938,6 +952,14 @@ class MainWindow(QMainWindow):
                                     if dev.child('Firmware version').value() != firmware_version:
                                         dev.child('Firmware version').setValue(firmware_version)
                             
+                            elif command == ":SYST:VCMP":
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                if len(data) == 6: # make sure data is valid
+                                    # store dilution parameters to dictionary
+                                    self.psm_dilution[dev_id] = data
+                                else:
+                                    print("PSM dilution parameters invalid:", data)
+                            
                             else: # print other messages to command widget text box
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
 
@@ -950,8 +972,8 @@ class MainWindow(QMainWindow):
                         self.device_widgets[dev_id].measure_tab.step.change_color(0)
                         self.device_widgets[dev_id].measure_tab.fixed.change_color(0)
                     
-                    # compile settings list if update flag is True and settings_fetched is True
-                    if self.psm_settings_updates[dev_id] == True and settings_fetched == True:
+                    # compile settings list if update flag is True, settings_fetched is True and dilution parameters have been fetched
+                    if self.psm_settings_updates[dev_id] == True and settings_fetched == True and dev_id in self.psm_dilution:
                         try:
                             psm_version = dev.child('Device type').value()
                             if psm_version == PSM:
@@ -960,8 +982,9 @@ class MainWindow(QMainWindow):
                             elif psm_version == PSM2:
                                 # set nan as placeholder
                                 co_flow = "nan"
+                            dilution_parameters = self.psm_dilution[dev_id]
                             # compile settings with latest PSM prnt settings and CO flow rate
-                            settings = self.compile_psm_settings(self.latest_psm_prnt[dev_id], co_flow, psm_version)
+                            settings = self.compile_psm_settings(self.latest_psm_prnt[dev_id], co_flow, dilution_parameters, psm_version)
                             # store settings to latest settings dictionary with device id as key
                             self.latest_settings[dev_id] = settings
                             # add par update flag
@@ -1936,10 +1959,9 @@ class MainWindow(QMainWindow):
                                     if dev.child('Device type').value() == CPC: # CPC
                                         file.write('YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau,Command input')
                                     elif dev.child('Device type').value() == PSM: # PSM
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
                                     elif dev.child('Device type').value() == PSM2: # PSM2
-                                        # TODO: check if correct
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
                                 
                                 # reset local update_par flag
                                 update_par = 0
@@ -2179,17 +2201,24 @@ class MainWindow(QMainWindow):
         return psm_data
     
     # compile settings list for PSM .par file
-    def compile_psm_settings(self, prnt, co_flow, psm_version):
+    def compile_psm_settings(self, prnt, co_flow, dilution_parameters, psm_version):
         
         # inlet flow is calculated and stored in update_plot_data
         psm_settings = [
             prnt[1], prnt[2], prnt[3], prnt[4], prnt[5], # T setpoints: growth tube, PSM saturator, inlet, heater, drainage
             prnt[6], "nan" # PSM stored CPC flow rate, inlet flow rate (added when calculated),
+            # CO flow (Retrofit only),
+            # dilution parameters,
+            # CPC values (added in write_data),
         ]
 
-        # if PSM, add CO flow rate
+        # if PSM Retrofit, add CO flow rate
         if psm_version == PSM:
             psm_settings.append(co_flow)
+        
+        # add dilution parameters
+        for value in dilution_parameters:
+            psm_settings.append(value)
 
         # add CPC values later in write_data if CPC connected
         return psm_settings
@@ -2198,12 +2227,6 @@ class MainWindow(QMainWindow):
     # when flag is True, PSM settings are requested from device in get_dev_data
     def psm_update(self, device_id):
         self.psm_settings_updates[device_id] = True
-    
-    # sends set CPC flow rate to PSM and CPC if connected
-    # TODO unused, remove?
-    def psm_cpc_flow_send(self, device, value):
-        self.psm_flow_send(device, value) # send flow rate to PSM
-        self.cpc_flow_send(device, value) # send flow rate to connected CPC if it exists  
     
     # sends set flow rate to PSM
     def psm_flow_send(self, device, value):
@@ -3040,7 +3063,7 @@ class MainWindow(QMainWindow):
                 pass
             # remove device from all device related dictionaries
             for dictionary in [self.latest_data, self.latest_settings, self.latest_psm_prnt, # data
-                self.latest_poly_correction, self.latest_ten_hz, self.extra_data, # data
+                self.latest_poly_correction, self.latest_ten_hz, self.extra_data, self.psm_dilution, # data
                 self.plot_data, self.curve_dict, self.start_times, self.device_widgets, # plots and widgets
                 self.dat_filenames, self.par_filenames, self.ten_hz_filenames, # filenames
                 self.par_updates, self.psm_settings_updates, self.device_errors]: # flags
