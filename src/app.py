@@ -815,9 +815,11 @@ class MainWindow(QMainWindow):
                 
                 if dev.child('Device type').value() in [PSM, PSM2]: # PSM
                     
-                    # if device doesn't yet exist in latest_data dictionary, add as nan list
-                    if dev_id not in self.latest_data:
-                        self.latest_data[dev_id] = full(31, nan)
+                    # initialize latest data with nan list
+                    if dev.child('Device type').value() == PSM:
+                        self.latest_data[dev_id] = full(33, nan)
+                    elif dev.child('Device type').value() == PSM2:
+                        self.latest_data[dev_id] = full(34, nan)
 
                     # clear par update flag
                     self.par_updates[dev_id] = 0
@@ -963,9 +965,8 @@ class MainWindow(QMainWindow):
                             else: # print other messages to command widget text box
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
 
-                    except Exception as e: # if reading fails, store nan values to latest_data
+                    except Exception as e:
                         print(traceback.format_exc())
-                        self.latest_data[dev_id] = full(31, nan) # TODO determine amount of data items
                         logging.exception(e)
                         # update widget error colors
                         self.device_widgets[dev_id].measure_tab.scan.change_color(0)
