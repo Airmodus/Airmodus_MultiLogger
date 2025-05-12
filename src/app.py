@@ -816,10 +816,11 @@ class MainWindow(QMainWindow):
                 if dev.child('Device type').value() in [PSM, PSM2]: # PSM
                     
                     # initialize latest data with nan list
+                    # convert from array to list to allow string insertion (CPC status hex)
                     if dev.child('Device type').value() == PSM:
-                        self.latest_data[dev_id] = full(33, nan)
+                        self.latest_data[dev_id] = full(33, nan).tolist()
                     elif dev.child('Device type').value() == PSM2:
-                        self.latest_data[dev_id] = full(34, nan)
+                        self.latest_data[dev_id] = full(34, nan).tolist()
 
                     # clear par update flag
                     self.par_updates[dev_id] = 0

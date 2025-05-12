@@ -3,6 +3,7 @@
 ### 0.10.2 - 2025.04.25
 - PSM Retrofit scan status logging (.dat)
 - PSM dilution parameters logging (.par)
+- PSM initial nan list fix
 
 ### 0.10.1 - 2025.03.17
 - CPC pulse quality: pulse ratio index fix
