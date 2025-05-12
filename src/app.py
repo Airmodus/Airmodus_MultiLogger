@@ -973,6 +973,11 @@ class MainWindow(QMainWindow):
                         self.device_widgets[dev_id].measure_tab.scan.change_color(0)
                         self.device_widgets[dev_id].measure_tab.step.change_color(0)
                         self.device_widgets[dev_id].measure_tab.fixed.change_color(0)
+                        try:
+                            # print message_string to log
+                            logging.info("PSM message_string: %s", message_string)
+                        except Exception:
+                            print(traceback.format_exc())
                     
                     # compile settings list if update flag is True, settings_fetched is True and dilution parameters have been fetched
                     if self.psm_settings_updates[dev_id] == True and settings_fetched == True and dev_id in self.psm_dilution:
