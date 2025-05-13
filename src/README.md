@@ -2,6 +2,7 @@
 
 ### 0.10.3 - 2025.05.13
 - PSM partial data handling
+- PSM extra data handling
 
 ### 0.10.2 - 2025.05.12
 - PSM Retrofit scan status logging (.dat)

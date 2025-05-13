@@ -23,7 +23,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.10.2"
+version_number = "0.10.3"
 
 # Define instrument types
 CPC = 1
@@ -816,12 +816,17 @@ class MainWindow(QMainWindow):
                 
                 if dev.child('Device type').value() in [PSM, PSM2]: # PSM
                     
-                    # initialize latest data with nan list
-                    # convert from array to list to allow string insertion (CPC status hex)
-                    if dev.child('Device type').value() == PSM:
-                        self.latest_data[dev_id] = full(33, nan).tolist()
-                    elif dev.child('Device type').value() == PSM2:
-                        self.latest_data[dev_id] = full(34, nan).tolist()
+                    # check if there is extra data from last round
+                    if dev_id in self.extra_data:
+                        # if there is extra data, store it to latest_data dictionary
+                        self.latest_data[dev_id] = self.extra_data.pop(dev_id)
+                    else:
+                        # if no extra data, initialize latest_data with nan list
+                        # convert from array to list to allow string insertion (CPC status hex)
+                        if dev.child('Device type').value() == PSM:
+                            self.latest_data[dev_id] = full(33, nan).tolist()
+                        elif dev.child('Device type').value() == PSM2:
+                            self.latest_data[dev_id] = full(34, nan).tolist()
 
                     # clear par update flag
                     self.par_updates[dev_id] = 0
@@ -908,8 +913,14 @@ class MainWindow(QMainWindow):
                                     print(traceback.format_exc())
                                     logging.exception(e)
                                 
-                                # compile and store psm data to latest data dictionary with device id as key
-                                self.latest_data[dev_id] = self.compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
+                                # compile psm data
+                                compiled_data = self.compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
+                                # if latest_data is nan, store data normally
+                                if isnan(self.latest_data[dev_id][2]): # check saturator flow rate value (index 2)
+                                    self.latest_data[dev_id] = compiled_data
+                                else: # if not nan, store data to extra_data dictionary
+                                    self.extra_data[dev_id] = compiled_data
+                                    logging.info("PSM %s extra data: %s", dev.child('Serial number').value(), str(compiled_data))
                             
                             elif command == ":SYST:PRNT":
                                 # update GUI set points
