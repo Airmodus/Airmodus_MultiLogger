@@ -1,6 +1,9 @@
 # Airmodus MultiLogger - Software change log
 
-### 0.10.2 - 2025.04.25
+### 0.10.3 - 2025.05.13
+- PSM partial data handling
+
+### 0.10.2 - 2025.05.12
 - PSM Retrofit scan status logging (.dat)
 - PSM dilution parameters logging (.par)
 - PSM initial nan list fix

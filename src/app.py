@@ -373,6 +373,7 @@ class MainWindow(QMainWindow):
         self.latest_command = {} # contains latest user entered command message
         self.latest_ten_hz = {} # contains latest 10 hz OPC concentration log values
         self.extra_data = {} # contains extra data, used when multiple data prints are received at once
+        self.partial_data = {} # contains partial data, used when incomplete messages are received
         self.pulse_analysis_index = {} # contains CPC pulse analysis index, used for pulse analysis progress tracking
         self.psm_dilution = {} # contains PSM dilution parameters
         # plot related
@@ -832,9 +833,24 @@ class MainWindow(QMainWindow):
                     try: # try to read data, decode and split
                         #print("inWaiting():", dev.child('Connection').value().connection.inWaiting())
                         readings = dev.child('Connection').value().connection.read_all()
-                        # decode, separate messages and remove last empty message
-                        readings = readings.decode().split("\r")[:-1]
-                        #print("PSM messages:", readings)
+                        # decode and separate messages
+                        readings = readings.decode().split("\r")
+
+                        # check if first message is expected as second half of partial message
+                        if dev_id in self.partial_data:
+                            # add stored partial message to the front of first message
+                            readings[0] = self.partial_data[dev_id] + readings[0]
+                            # remove partial message from dictionary
+                            del self.partial_data[dev_id]
+                            logging.info("PSM %s combined message: %s", dev.child('Serial number').value(), readings[0])
+
+                        # check if last message is empty or partial
+                        if readings[-1] == "": # if empty, remove it from readings
+                            readings = readings[:-1]
+                        else: # if not empty, store partial message and remove it from readings
+                            self.partial_data[dev_id] = readings[-1]
+                            readings = readings[:-1]
+                            logging.info("PSM %s partial message: %s", dev.child('Serial number').value(), self.partial_data[dev_id])
                         
                         # loop through messages
                         for message in readings:
