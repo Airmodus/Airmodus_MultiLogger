@@ -724,7 +724,7 @@ class MainWindow(QMainWindow):
                             elif command == ":MEAS:OPC_CONC_LOG":
                                 del data[0] # remove first item (timestamp)
                                 # if latest_ten_hz is nan, store data normally
-                                if isnan(self.latest_ten_hz[dev_id][0]):
+                                if isnan(float(self.latest_ten_hz[dev_id][0])):
                                     self.latest_ten_hz[dev_id] = data
                                 else: # if not nan, store data to extra_data dictionary
                                     self.extra_data[str(dev_id)+":10hz"] = data
@@ -916,7 +916,7 @@ class MainWindow(QMainWindow):
                                 # compile psm data
                                 compiled_data = self.compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
                                 # if latest_data is nan, store data normally
-                                if isnan(self.latest_data[dev_id][2]): # check saturator flow rate value (index 2)
+                                if isnan(float(self.latest_data[dev_id][2])): # check saturator flow rate value (index 2)
                                     self.latest_data[dev_id] = compiled_data
                                 else: # if not nan, store data to extra_data dictionary
                                     self.extra_data[dev_id] = compiled_data
