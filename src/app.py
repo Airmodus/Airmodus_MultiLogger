@@ -23,7 +23,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.10.3"
+version_number = "0.10.4"
 
 # Define instrument types
 CPC = 1
@@ -899,7 +899,12 @@ class MainWindow(QMainWindow):
                                 # note hex handling
                                 note_hex = data[-1]
                                 # update widget liquid states with note hex
-                                self.device_widgets[dev_id].update_notes(note_hex)
+                                liquid_errors = self.device_widgets[dev_id].update_notes(note_hex)
+                                # set error flags if liquid errors is not 0
+                                if liquid_errors != 0:
+                                    self.error_status = 1
+                                    # set device error flag
+                                    self.set_device_error(dev_id, True)
                                 # store polynomial correction value as float to dictionary
                                 self.latest_poly_correction[dev_id] = float(data[14])
 
@@ -3763,6 +3768,7 @@ class PSMWidget(QTabWidget):
     
     # convert PSM notes hex to binary and update liquid mode settings
     def update_notes(self, note_hex):
+        liquid_errors = 0 # increment if liquid errors occur
         note_length = 7 # if new note bits are added in firmware, change this value accordingly
         note_bin = bin(int(note_hex, 16)) # convert hex to int and int to binary
         note_bin = note_bin[2:].zfill(note_length) # remove 0b from string and fill with 0s
@@ -3783,8 +3789,14 @@ class PSMWidget(QTabWidget):
             self.set_tab.drain.update_state(0)
         # 0 = saturator liquid level OK, 1 = saturator liquid level LOW
         self.status_tab.liquid_saturator.change_color(inverted_note_bin[6])
+        if inverted_note_bin[6] == "1":
+            liquid_errors += 1
         # 0 = drain liquid level OK, 1 = drain liquid level HIGH
         self.status_tab.liquid_drain.change_color(inverted_note_bin[0])
+        if inverted_note_bin[0] == "1":
+            liquid_errors += 1
+
+        return liquid_errors # return total number of liquid errors
 
     def update_settings(self, settings):
         self.set_tab.set_growth_tube_temp.value_spinbox.setValue(float(settings[1]))

@@ -1,5 +1,8 @@
 # Airmodus MultiLogger - Software change log
 
+### 0.10.4 - 2025.05.15
+- PSM liquid level error fix
+
 ### 0.10.3 - 2025.05.13
 - PSM partial data handling
 - PSM extra data handling
