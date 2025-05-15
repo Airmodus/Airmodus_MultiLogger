@@ -373,6 +373,7 @@ class MainWindow(QMainWindow):
         self.latest_command = {} # contains latest user entered command message
         self.latest_ten_hz = {} # contains latest 10 hz OPC concentration log values
         self.extra_data = {} # contains extra data, used when multiple data prints are received at once
+        self.extra_data_counter = {} # contains extra data counter, used to determine when extra data buffer is safe to clear
         self.partial_data = {} # contains partial data, used when incomplete messages are received
         self.pulse_analysis_index = {} # contains CPC pulse analysis index, used for pulse analysis progress tracking
         self.psm_dilution = {} # contains PSM dilution parameters
@@ -815,11 +816,19 @@ class MainWindow(QMainWindow):
                         self.par_updates[dev_id] = 0
                 
                 if dev.child('Device type').value() in [PSM, PSM2]: # PSM
+
+                    # clear extra data buffer after 60 seconds of consecutive buffering
+                    # this ensures data is real time and not delayed by 1 second
+                    if dev_id in self.extra_data and self.extra_data_counter[dev_id] >= 60:
+                        del self.extra_data[dev_id]
+                        logging.info("PSM %s extra data buffer cleared", dev.child('Serial number').value())
                     
                     # check if there is extra data from last round
                     if dev_id in self.extra_data:
                         # if there is extra data, store it to latest_data dictionary
                         self.latest_data[dev_id] = self.extra_data.pop(dev_id)
+                        # increment extra data counter
+                        self.extra_data_counter[dev_id] += 1
                     else:
                         # if no extra data, initialize latest_data with nan list
                         # convert from array to list to allow string insertion (CPC status hex)
@@ -827,6 +836,8 @@ class MainWindow(QMainWindow):
                             self.latest_data[dev_id] = full(33, nan).tolist()
                         elif dev.child('Device type').value() == PSM2:
                             self.latest_data[dev_id] = full(34, nan).tolist()
+                        # reset extra data counter
+                        self.extra_data_counter[dev_id] = 0
 
                     # clear par update flag
                     self.par_updates[dev_id] = 0
@@ -847,7 +858,7 @@ class MainWindow(QMainWindow):
                             readings[0] = self.partial_data[dev_id] + readings[0]
                             # remove partial message from dictionary
                             del self.partial_data[dev_id]
-                            logging.info("PSM %s combined message: %s", dev.child('Serial number').value(), readings[0])
+                            #logging.info("PSM %s combined message: %s", dev.child('Serial number').value(), readings[0])
 
                         # check if last message is empty or partial
                         if readings[-1] == "": # if empty, remove it from readings
@@ -855,7 +866,7 @@ class MainWindow(QMainWindow):
                         else: # if not empty, store partial message and remove it from readings
                             self.partial_data[dev_id] = readings[-1]
                             readings = readings[:-1]
-                            logging.info("PSM %s partial message: %s", dev.child('Serial number').value(), self.partial_data[dev_id])
+                            #logging.info("PSM %s partial message: %s", dev.child('Serial number').value(), self.partial_data[dev_id])
                         
                         # loop through messages
                         for message in readings:
@@ -920,7 +931,7 @@ class MainWindow(QMainWindow):
                                     self.latest_data[dev_id] = compiled_data
                                 else: # if not nan, store data to extra_data dictionary
                                     self.extra_data[dev_id] = compiled_data
-                                    logging.info("PSM %s extra data: %s", dev.child('Serial number').value(), str(compiled_data))
+                                    #logging.info("PSM %s extra data: %s", dev.child('Serial number').value(), str(compiled_data))
                             
                             elif command == ":SYST:PRNT":
                                 # update GUI set points
@@ -2938,6 +2949,8 @@ class MainWindow(QMainWindow):
                 widget = PSMWidget(device_param, device_type)
                 # add to psm_settings_updates dictionary, set to True
                 self.psm_settings_updates[device_id] = True
+                # add to extra_data_counter dictionary, set to 0
+                self.extra_data_counter[device_id] = 0
                 # connect Measure tab buttons to send_set function
                 widget.measure_tab.scan.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_scan()))
                 widget.measure_tab.step.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_step()))
