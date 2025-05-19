@@ -23,7 +23,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.10.1"
+version_number = "0.10.4"
 
 # Define instrument types
 CPC = 1
@@ -135,6 +135,9 @@ class SerialDeviceConnection():
         except AttributeError:
             # print message if connection does not exist
             print("send_message - no connection, message -", message)
+    
+    def send_delayed_message(self, message, delay):
+        QTimer.singleShot(delay, lambda: self.send_message(message))
     
     def send_multiple_messages(self, device_type, ten_hz=False):
 
@@ -370,7 +373,10 @@ class MainWindow(QMainWindow):
         self.latest_command = {} # contains latest user entered command message
         self.latest_ten_hz = {} # contains latest 10 hz OPC concentration log values
         self.extra_data = {} # contains extra data, used when multiple data prints are received at once
+        self.extra_data_counter = {} # contains extra data counter, used to determine when extra data buffer is safe to clear
+        self.partial_data = {} # contains partial data, used when incomplete messages are received
         self.pulse_analysis_index = {} # contains CPC pulse analysis index, used for pulse analysis progress tracking
+        self.psm_dilution = {} # contains PSM dilution parameters
         # plot related
         self.plot_data = {} # contains plotted values
         self.curve_dict = {} # contains curve objects for main plot
@@ -553,6 +559,13 @@ class MainWindow(QMainWindow):
                 if connected and dev.child('Connected').value() == False:
                     if dev.child('DevID').value() not in self.idn_inquiry_devices:
                         self.idn_inquiry_devices.append(dev.child('DevID').value())
+                    # if device is PSM, reset firmware version and dilution parameters to ensure they are updated
+                    if dev.child('Device type').value() in [PSM, PSM2]:
+                        dev.child('Firmware version').setValue("") # reset firmware version
+                        if dev.child('DevID').value() in self.psm_dilution:
+                            del self.psm_dilution[dev.child('DevID').value()] # reset dilution parameters
+                        # set settings update flag
+                        self.psm_settings_updates[dev.child('DevID').value()] = True
             
             # set the connection state according to connected value
             dev.child('Connected').setValue(connected)
@@ -586,6 +599,9 @@ class MainWindow(QMainWindow):
                         if self.psm_settings_updates[dev.child('DevID').value()] == True:
                             # send message to device to get settings
                             dev.child('Connection').value().send_message(":SYST:PRNT")
+                        # if dilution parameters have not been fetched, send message
+                        if dev.child('DevID').value() not in self.psm_dilution:
+                            dev.child('Connection').value().send_delayed_message(":SYST:VCMP", 150)
 
                     elif device_type == Electrometer: # Electrometer
                         dev.child('Connection').value().connection.reset_input_buffer()
@@ -709,7 +725,7 @@ class MainWindow(QMainWindow):
                             elif command == ":MEAS:OPC_CONC_LOG":
                                 del data[0] # remove first item (timestamp)
                                 # if latest_ten_hz is nan, store data normally
-                                if isnan(self.latest_ten_hz[dev_id][0]):
+                                if isnan(float(self.latest_ten_hz[dev_id][0])):
                                     self.latest_ten_hz[dev_id] = data
                                 else: # if not nan, store data to extra_data dictionary
                                     self.extra_data[str(dev_id)+":10hz"] = data
@@ -800,10 +816,28 @@ class MainWindow(QMainWindow):
                         self.par_updates[dev_id] = 0
                 
                 if dev.child('Device type').value() in [PSM, PSM2]: # PSM
+
+                    # clear extra data buffer after 60 seconds of consecutive buffering
+                    # this ensures data is real time and not delayed by 1 second
+                    if dev_id in self.extra_data and self.extra_data_counter[dev_id] >= 60:
+                        del self.extra_data[dev_id]
+                        logging.info("PSM %s extra data buffer cleared", dev.child('Serial number').value())
                     
-                    # if device doesn't yet exist in latest_data dictionary, add as nan list
-                    if dev_id not in self.latest_data:
-                        self.latest_data[dev_id] = full(31, nan)
+                    # check if there is extra data from last round
+                    if dev_id in self.extra_data:
+                        # if there is extra data, store it to latest_data dictionary
+                        self.latest_data[dev_id] = self.extra_data.pop(dev_id)
+                        # increment extra data counter
+                        self.extra_data_counter[dev_id] += 1
+                    else:
+                        # if no extra data, initialize latest_data with nan list
+                        # convert from array to list to allow string insertion (CPC status hex)
+                        if dev.child('Device type').value() == PSM:
+                            self.latest_data[dev_id] = full(33, nan).tolist()
+                        elif dev.child('Device type').value() == PSM2:
+                            self.latest_data[dev_id] = full(34, nan).tolist()
+                        # reset extra data counter
+                        self.extra_data_counter[dev_id] = 0
 
                     # clear par update flag
                     self.par_updates[dev_id] = 0
@@ -815,9 +849,24 @@ class MainWindow(QMainWindow):
                     try: # try to read data, decode and split
                         #print("inWaiting():", dev.child('Connection').value().connection.inWaiting())
                         readings = dev.child('Connection').value().connection.read_all()
-                        # decode, separate messages and remove last empty message
-                        readings = readings.decode().split("\r")[:-1]
-                        #print("PSM messages:", readings)
+                        # decode and separate messages
+                        readings = readings.decode().split("\r")
+
+                        # check if first message is expected as second half of partial message
+                        if dev_id in self.partial_data:
+                            # add stored partial message to the front of first message
+                            readings[0] = self.partial_data[dev_id] + readings[0]
+                            # remove partial message from dictionary
+                            del self.partial_data[dev_id]
+                            #logging.info("PSM %s combined message: %s", dev.child('Serial number').value(), readings[0])
+
+                        # check if last message is empty or partial
+                        if readings[-1] == "": # if empty, remove it from readings
+                            readings = readings[:-1]
+                        else: # if not empty, store partial message and remove it from readings
+                            self.partial_data[dev_id] = readings[-1]
+                            readings = readings[:-1]
+                            #logging.info("PSM %s partial message: %s", dev.child('Serial number').value(), self.partial_data[dev_id])
                         
                         # loop through messages
                         for message in readings:
@@ -850,7 +899,12 @@ class MainWindow(QMainWindow):
                                 # note hex handling
                                 note_hex = data[-1]
                                 # update widget liquid states with note hex
-                                self.device_widgets[dev_id].update_notes(note_hex)
+                                liquid_errors = self.device_widgets[dev_id].update_notes(note_hex)
+                                # set error flags if liquid errors is not 0
+                                if liquid_errors != 0:
+                                    self.error_status = 1
+                                    # set device error flag
+                                    self.set_device_error(dev_id, True)
                                 # store polynomial correction value as float to dictionary
                                 self.latest_poly_correction[dev_id] = float(data[14])
 
@@ -859,14 +913,12 @@ class MainWindow(QMainWindow):
                                 try:
                                     if dev.child('Firmware version').value() != "":
                                         firmware_version = dev.child('Firmware version').value().split(".")
-                                        # Retrofit: version >= 
-                                        # TODO add correct version check when scan status is added to firmware
+                                        # Retrofit: version >= 0.5.5
                                         if dev.child('Device type').value() == PSM:
-                                            # if int(firmware_version[1]) > 5:
-                                            #     scan_status = data[15]
-                                            # elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 4:
-                                            #     scan_status = data[15]
-                                            pass
+                                            if int(firmware_version[1]) > 5:
+                                                scan_status = data[15]
+                                            elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 5:
+                                                scan_status = data[15]
                                         # PSM 2.0: version >= 0.6.8
                                         elif dev.child('Device type').value() == PSM2:
                                             if int(firmware_version[1]) > 6:
@@ -877,8 +929,14 @@ class MainWindow(QMainWindow):
                                     print(traceback.format_exc())
                                     logging.exception(e)
                                 
-                                # compile and store psm data to latest data dictionary with device id as key
-                                self.latest_data[dev_id] = self.compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
+                                # compile psm data
+                                compiled_data = self.compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
+                                # if latest_data is nan, store data normally
+                                if isnan(float(self.latest_data[dev_id][2])): # check saturator flow rate value (index 2)
+                                    self.latest_data[dev_id] = compiled_data
+                                else: # if not nan, store data to extra_data dictionary
+                                    self.extra_data[dev_id] = compiled_data
+                                    #logging.info("PSM %s extra data: %s", dev.child('Serial number').value(), str(compiled_data))
                             
                             elif command == ":SYST:PRNT":
                                 # update GUI set points
@@ -940,20 +998,32 @@ class MainWindow(QMainWindow):
                                     if dev.child('Firmware version').value() != firmware_version:
                                         dev.child('Firmware version').setValue(firmware_version)
                             
+                            elif command == ":SYST:VCMP":
+                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                if len(data) == 6: # make sure data is valid
+                                    # store dilution parameters to dictionary
+                                    self.psm_dilution[dev_id] = data
+                                else:
+                                    print("PSM dilution parameters invalid:", data)
+                            
                             else: # print other messages to command widget text box
                                 self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
 
-                    except Exception as e: # if reading fails, store nan values to latest_data
+                    except Exception as e:
                         print(traceback.format_exc())
-                        self.latest_data[dev_id] = full(31, nan) # TODO determine amount of data items
                         logging.exception(e)
                         # update widget error colors
                         self.device_widgets[dev_id].measure_tab.scan.change_color(0)
                         self.device_widgets[dev_id].measure_tab.step.change_color(0)
                         self.device_widgets[dev_id].measure_tab.fixed.change_color(0)
+                        try:
+                            # print message_string to log
+                            logging.info("PSM message_string: %s", message_string)
+                        except Exception:
+                            print(traceback.format_exc())
                     
-                    # compile settings list if update flag is True and settings_fetched is True
-                    if self.psm_settings_updates[dev_id] == True and settings_fetched == True:
+                    # compile settings list if update flag is True, settings_fetched is True and dilution parameters have been fetched
+                    if self.psm_settings_updates[dev_id] == True and settings_fetched == True and dev_id in self.psm_dilution:
                         try:
                             psm_version = dev.child('Device type').value()
                             if psm_version == PSM:
@@ -962,8 +1032,9 @@ class MainWindow(QMainWindow):
                             elif psm_version == PSM2:
                                 # set nan as placeholder
                                 co_flow = "nan"
+                            dilution_parameters = self.psm_dilution[dev_id]
                             # compile settings with latest PSM prnt settings and CO flow rate
-                            settings = self.compile_psm_settings(self.latest_psm_prnt[dev_id], co_flow, psm_version)
+                            settings = self.compile_psm_settings(self.latest_psm_prnt[dev_id], co_flow, dilution_parameters, psm_version)
                             # store settings to latest settings dictionary with device id as key
                             self.latest_settings[dev_id] = settings
                             # add par update flag
@@ -1938,10 +2009,9 @@ class MainWindow(QMainWindow):
                                     if dev.child('Device type').value() == CPC: # CPC
                                         file.write('YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau,Command input')
                                     elif dev.child('Device type').value() == PSM: # PSM
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
                                     elif dev.child('Device type').value() == PSM2: # PSM2
-                                        # TODO: check if correct
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
+                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
                                 
                                 # reset local update_par flag
                                 update_par = 0
@@ -2181,17 +2251,24 @@ class MainWindow(QMainWindow):
         return psm_data
     
     # compile settings list for PSM .par file
-    def compile_psm_settings(self, prnt, co_flow, psm_version):
+    def compile_psm_settings(self, prnt, co_flow, dilution_parameters, psm_version):
         
         # inlet flow is calculated and stored in update_plot_data
         psm_settings = [
             prnt[1], prnt[2], prnt[3], prnt[4], prnt[5], # T setpoints: growth tube, PSM saturator, inlet, heater, drainage
             prnt[6], "nan" # PSM stored CPC flow rate, inlet flow rate (added when calculated),
+            # CO flow (Retrofit only),
+            # dilution parameters,
+            # CPC values (added in write_data),
         ]
 
-        # if PSM, add CO flow rate
+        # if PSM Retrofit, add CO flow rate
         if psm_version == PSM:
             psm_settings.append(co_flow)
+        
+        # add dilution parameters
+        for value in dilution_parameters:
+            psm_settings.append(value)
 
         # add CPC values later in write_data if CPC connected
         return psm_settings
@@ -2200,12 +2277,6 @@ class MainWindow(QMainWindow):
     # when flag is True, PSM settings are requested from device in get_dev_data
     def psm_update(self, device_id):
         self.psm_settings_updates[device_id] = True
-    
-    # sends set CPC flow rate to PSM and CPC if connected
-    # TODO unused, remove?
-    def psm_cpc_flow_send(self, device, value):
-        self.psm_flow_send(device, value) # send flow rate to PSM
-        self.cpc_flow_send(device, value) # send flow rate to connected CPC if it exists  
     
     # sends set flow rate to PSM
     def psm_flow_send(self, device, value):
@@ -2883,6 +2954,8 @@ class MainWindow(QMainWindow):
                 widget = PSMWidget(device_param, device_type)
                 # add to psm_settings_updates dictionary, set to True
                 self.psm_settings_updates[device_id] = True
+                # add to extra_data_counter dictionary, set to 0
+                self.extra_data_counter[device_id] = 0
                 # connect Measure tab buttons to send_set function
                 widget.measure_tab.scan.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_scan()))
                 widget.measure_tab.step.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_step()))
@@ -3042,7 +3115,7 @@ class MainWindow(QMainWindow):
                 pass
             # remove device from all device related dictionaries
             for dictionary in [self.latest_data, self.latest_settings, self.latest_psm_prnt, # data
-                self.latest_poly_correction, self.latest_ten_hz, self.extra_data, # data
+                self.latest_poly_correction, self.latest_ten_hz, self.extra_data, self.psm_dilution, # data
                 self.plot_data, self.curve_dict, self.start_times, self.device_widgets, # plots and widgets
                 self.dat_filenames, self.par_filenames, self.ten_hz_filenames, # filenames
                 self.par_updates, self.psm_settings_updates, self.device_errors]: # flags
@@ -3695,6 +3768,7 @@ class PSMWidget(QTabWidget):
     
     # convert PSM notes hex to binary and update liquid mode settings
     def update_notes(self, note_hex):
+        liquid_errors = 0 # increment if liquid errors occur
         note_length = 7 # if new note bits are added in firmware, change this value accordingly
         note_bin = bin(int(note_hex, 16)) # convert hex to int and int to binary
         note_bin = note_bin[2:].zfill(note_length) # remove 0b from string and fill with 0s
@@ -3715,8 +3789,14 @@ class PSMWidget(QTabWidget):
             self.set_tab.drain.update_state(0)
         # 0 = saturator liquid level OK, 1 = saturator liquid level LOW
         self.status_tab.liquid_saturator.change_color(inverted_note_bin[6])
+        if inverted_note_bin[6] == "1":
+            liquid_errors += 1
         # 0 = drain liquid level OK, 1 = drain liquid level HIGH
         self.status_tab.liquid_drain.change_color(inverted_note_bin[0])
+        if inverted_note_bin[0] == "1":
+            liquid_errors += 1
+
+        return liquid_errors # return total number of liquid errors
 
     def update_settings(self, settings):
         self.set_tab.set_growth_tube_temp.value_spinbox.setValue(float(settings[1]))
