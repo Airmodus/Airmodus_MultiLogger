@@ -361,8 +361,9 @@ class MainWindow(QMainWindow):
             self.style = f.read()
         self.setStyleSheet(self.style)
 
-        # create error icon object
+        # create error and disconnected icon objects
         self.error_icon = QIcon(resource_path + "/icons/error.png")
+        self.disconnected_icon = QIcon(resource_path + "/icons/disconnected.png")
 
         # initialize dictionaries and lists
         # data related
@@ -2826,9 +2827,18 @@ class MainWindow(QMainWindow):
                 device_widget = self.device_widgets[device_id]
                 # device widget tab index
                 tab_index = self.device_tabs.indexOf(device_widget)
+                # connected status
+                connected = dev.child('Connected').value() # True or False
+
+                # if connected is False
+                if not connected and device_type != Example_device: # exclude Example device
+                    # set disconnected icon
+                    self.device_tabs.setTabIcon(tab_index, self.disconnected_icon)
+                    # set general error status flag
+                    self.error_status = 1
 
                 # if error is True
-                if error:
+                elif error:
                     # change tab icon to error icon
                     self.device_tabs.setTabIcon(tab_index, self.error_icon)
                     # change status tab icon to error icon if device is CPC or PSM
@@ -2836,7 +2846,7 @@ class MainWindow(QMainWindow):
                         status_tab_index = device_widget.indexOf(device_widget.status_tab)
                         device_widget.setTabIcon(status_tab_index, self.error_icon)
 
-                # if error is False
+                # if connected and no error
                 else:
                     # remove error icon with empty QIcon object
                     self.device_tabs.setTabIcon(tab_index, QIcon())
