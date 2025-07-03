@@ -23,7 +23,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.10.4"
+version_number = "0.10.5"
 
 # Define instrument types
 CPC = 1
@@ -567,6 +567,11 @@ class MainWindow(QMainWindow):
                             del self.psm_dilution[dev.child('DevID').value()] # reset dilution parameters
                         # set settings update flag
                         self.psm_settings_updates[dev.child('DevID').value()] = True
+            
+            # print disconnected message when device is disconnected
+            if dev.child('Device type').value() in [CPC, PSM, PSM2]:
+                if connected == False and dev.child('Connected').value() == True:
+                    self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box("Device disconnected.")
             
             # set the connection state according to connected value
             dev.child('Connected').setValue(connected)
