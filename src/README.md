@@ -1,5 +1,8 @@
 # Airmodus MultiLogger - Software change log
 
+### 0.10.7 - 2025.08.12
+- Simplified ParameterTree structure
+
 ### 0.10.6 - 2025.08.11
 - Set disconnected device's values to grey
 - CSS: ParameterTree (QTreeView) style improvements

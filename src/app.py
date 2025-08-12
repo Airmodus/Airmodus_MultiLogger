@@ -23,7 +23,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.10.6"
+version_number = "0.10.7"
 
 # Define instrument types
 CPC = 1
@@ -305,26 +305,25 @@ class ScalableGroup(parameterTypes.GroupParameter):
 
 # Create a dictionary, in which the names, types and default values are set
 params = [
-    {'name': 'Measurement status', 'type': 'group', 'children': [
-        {'name': 'Data settings', 'type': 'group', 'children': [
-            {'name': 'File path', 'type': 'str', 'value': save_path},
-            {'name': 'File tag', 'type': 'str', 'value': "", 'tip': "File name: YYYYMMDD_HHMMSS_(Serial number)_(Device type)_(Device nickname)_(File tag).dat"},
-            {'name': 'Save data', 'type': 'bool', 'value': False},
-            {'name': 'Generate daily files', 'type': 'bool', 'value': True, 'tip': "If on, new files are started at midnight."},
-            {'name': 'Resume on startup', 'type': 'bool', 'value': False, 'tip': "Option to resume the last settings on startup."},
-            {'name': 'Save settings', 'type': 'action'},
-            {'name': 'Load settings', 'type': 'action'},
-        ]},
-        {'name': 'COM settings', 'type': 'group', 'children': [
-            {'name': 'Available ports', 'type': 'text', 'value': '', 'readonly': True},
-            {'name': 'Update port list', 'type': 'action'},
-        ]}
+    {'name': 'Data settings', 'type': 'group', 'children': [
+        {'name': 'File path', 'type': 'str', 'value': save_path},
+        {'name': 'File tag', 'type': 'str', 'value': "", 'tip': "File name: YYYYMMDD_HHMMSS_(Serial number)_(Device type)_(Device nickname)_(File tag).dat"},
+        {'name': 'Save data', 'type': 'bool', 'value': False},
+        {'name': 'Generate daily files', 'type': 'bool', 'value': True, 'tip': "If on, new files are started at midnight."},
+        {'name': 'Resume on startup', 'type': 'bool', 'value': False, 'tip': "Option to resume the last settings on startup."},
+        {'name': 'Save settings', 'type': 'action'},
+        {'name': 'Load settings', 'type': 'action'},
     ]},
     {'name': 'Plot settings', 'type': 'group', 'children': [
         {'name': 'Follow', 'type': 'bool', 'value': True},
         {'name': 'Time window (s)', 'type': 'int', 'value': 60},
         {'name': 'Autoscale Y', 'type': 'bool', 'value': True}
     ]},
+    {'name': 'Serial ports', 'type': 'group', 'children': [
+        {'name': 'Available serial ports', 'type': 'text', 'value': '', 'readonly': True},
+        {'name': 'Update serial ports', 'type': 'action'},
+    ]},
+    
     ScalableGroup(name="Device settings", children=[
         # devices will be added here
     ]),
@@ -432,13 +431,13 @@ class MainWindow(QMainWindow):
         # connect timer timeout to timer_functions
         self.timer.timeout.connect(self.timer_functions)
         # connect parameter tree's save data parameter
-        self.params.child('Measurement status').child('Data settings').child('Save data').sigValueChanged.connect(self.save_changed)
+        self.params.child('Data settings').child('Save data').sigValueChanged.connect(self.save_changed)
         # connect file path parameter to filepath_changed function
-        self.params.child('Measurement status').child('Data settings').child('File path').sigValueChanged.connect(self.filepath_changed)
+        self.params.child('Data settings').child('File path').sigValueChanged.connect(self.filepath_changed)
         # connect file tag parameter to reset_filenames function
-        self.params.child('Measurement status').child('Data settings').child('File tag').sigValueChanged.connect(self.reset_filenames)
+        self.params.child('Data settings').child('File tag').sigValueChanged.connect(self.reset_filenames)
         # connect com port update button
-        self.params.child('Measurement status').child('COM settings').child('Update port list').sigActivated.connect(self.set_inquiry_flag)
+        self.params.child('Serial ports').child('Update serial ports').sigActivated.connect(self.set_inquiry_flag)
 
         # connect parameter tree's sigChildAdded signal to device_added function
         p.child("Device settings").sigChildAdded.connect(self.device_added)
@@ -459,8 +458,8 @@ class MainWindow(QMainWindow):
         # connect parameter tree's sigTreeStateChanged signal to save_ini function
         self.params.sigTreeStateChanged.connect(self.save_ini)
         # connect 'Save settings' and 'Load settings' buttons
-        self.params.child('Measurement status').child('Data settings').child('Save settings').sigActivated.connect(self.manual_save_configuration)
-        self.params.child('Measurement status').child('Data settings').child('Load settings').sigActivated.connect(self.manual_load_configuration)
+        self.params.child('Data settings').child('Save settings').sigActivated.connect(self.manual_save_configuration)
+        self.params.child('Data settings').child('Load settings').sigActivated.connect(self.manual_load_configuration)
         # load ini file if available
         self.load_ini()
 
@@ -1847,7 +1846,7 @@ class MainWindow(QMainWindow):
     # write data to file(s)
     def write_data(self):
         # if saving is on
-        if self.params.child('Measurement status').child('Data settings').child('Save data').value():
+        if self.params.child('Data settings').child('Save data').value():
 
             # create timestamp from current_time
             timestamp = dt.fromtimestamp(self.current_time)
@@ -1888,7 +1887,7 @@ class MainWindow(QMainWindow):
                             if device_nickname != "":
                                 device_nickname = '_' + device_nickname
                             # get file tag from data settings
-                            file_tag = self.params.child('Measurement status').child('Data settings').child('File tag').value()
+                            file_tag = self.params.child('Data settings').child('File tag').value()
                             # if file tag is not empty, add underscore to beginning
                             if file_tag != "":
                                 file_tag = '_' + file_tag
@@ -1932,7 +1931,7 @@ class MainWindow(QMainWindow):
                                 if device_nickname != "":
                                     device_nickname = '_' + device_nickname
                                 # get file tag from data settings
-                                file_tag = self.params.child('Measurement status').child('Data settings').child('File tag').value()
+                                file_tag = self.params.child('Data settings').child('File tag').value()
                                 # if file tag is not empty, add underscore to beginning
                                 if file_tag != "":
                                     file_tag = '_' + file_tag
@@ -2162,22 +2161,22 @@ class MainWindow(QMainWindow):
     # triggered when saving is toggled on/off
     def save_changed(self):
         # if saving is toggled on
-        if self.params.child('Measurement status').child('Data settings').child('Save data').value():
+        if self.params.child('Data settings').child('Save data').value():
             # store start day
             self.start_day = dt.now().strftime("%m%d")
             # get file path
-            self.filePath = self.params.child('Measurement status').child('Data settings').child('File path').value()
+            self.filePath = self.params.child('Data settings').child('File path').value()
             # set file path as read only
-            self.params.child('Measurement status').child('Data settings').child('File path').setReadonly(True)
+            self.params.child('Data settings').child('File path').setReadonly(True)
         # if saving is toggled off, reset filename dictionaries
         else:
             self.reset_filenames()
             # disable read only file path
-            self.params.child('Measurement status').child('Data settings').child('File path').setReadonly(False)
+            self.params.child('Data settings').child('File path').setReadonly(False)
 
     def filepath_changed(self):
         # set file path
-        self.filePath = self.params.child('Measurement status').child('Data settings').child('File path').value()
+        self.filePath = self.params.child('Data settings').child('File path').value()
         # reset filename dictionaries
         self.reset_filenames()
     
@@ -2325,7 +2324,7 @@ class MainWindow(QMainWindow):
             dev_param.child('Connection').value().send_message(message)
 
             # if saving is on, store command to latest_command dictionary
-            if self.params.child('Measurement status').child('Data settings').child('Save data').value():
+            if self.params.child('Data settings').child('Save data').value():
                 self.latest_command[dev_id] = message
         
         except Exception as e:
@@ -2349,9 +2348,9 @@ class MainWindow(QMainWindow):
     # compare current day to file start day (self.start_day defined in save_changed)
     def compare_day(self):
         # check if saving is on
-        if self.params.child('Measurement status').child("Data settings").child('Save data').value():
+        if self.params.child('Data settings').child('Save data').value():
             # check if new file should be started at midnight
-            if self.params.child('Measurement status').child("Data settings").child('Generate daily files').value():
+            if self.params.child("Data settings").child('Generate daily files').value():
                 current_day = dt.fromtimestamp(self.current_time).strftime("%m%d")
                 if current_day != self.start_day:
                     self.reset_filenames() # start new file if day has changed
@@ -2467,14 +2466,14 @@ class MainWindow(QMainWindow):
             # if port is currently physically connected - in com_port_list
             if key in com_port_list:
                 com_ports_text += key + " - " + self.com_descriptions[key] + "\n"
-        # update GUI 'Available ports' text box if com port list has changed
-        if com_ports_text != self.params.child('Measurement status').child('COM settings').child('Available ports').value():
-            self.params.child('Measurement status').child('COM settings').child('Available ports').setValue(com_ports_text)
-    
+        # update GUI 'Available serial ports' text box if com port list has changed
+        if com_ports_text != self.params.child('Serial ports').child('Available serial ports').value():
+            self.params.child('Serial ports').child('Available serial ports').setValue(com_ports_text)
+
     def save_ini(self):
         # check if resume on startup is on
         resume_measurements = 0
-        if self.params.child('Measurement status').child('Data settings').child('Resume on startup').value():
+        if self.params.child('Data settings').child('Resume on startup').value():
             resume_measurements = 1
         # store resume config path
         self.config_file_path = os.path.join(save_path, 'resume_config.json')
@@ -2764,7 +2763,7 @@ class MainWindow(QMainWindow):
             self.device_widgets[device_id].pulse_quality.clear_analysis_points()
 
             # create file and store threshold value
-            filepath = self.params.child('Measurement status').child('Data settings').child('File path').value()
+            filepath = self.params.child('Data settings').child('File path').value()
             # timestamp
             timestamp = dt.fromtimestamp(self.current_time)
             timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
