@@ -566,13 +566,13 @@ class MainWindow(QMainWindow):
                             del self.psm_dilution[dev.child('DevID').value()] # reset dilution parameters
                         # set settings update flag
                         self.psm_settings_updates[dev.child('DevID').value()] = True
-                    if dev.child('Device type').value() in [CPC, PSM, PSM2]:
+                    if dev.child('Device type').value() in [CPC, PSM, PSM2, eDiluter]:
                         # set text to normal using CSS ID
                         self.device_widgets[dev.child('DevID').value()].setObjectName("connected")
                         self.device_widgets[dev.child('DevID').value()].setStyleSheet("")
 
             # print disconnected message when device is disconnected
-            if dev.child('Device type').value() in [CPC, PSM, PSM2]:
+            if dev.child('Device type').value() in [CPC, PSM, PSM2, eDiluter]:
                 if connected == False and dev.child('Connected').value() == True:
                     self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box("Device disconnected.")
                     # set text to grey using CSS ID
