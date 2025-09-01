@@ -1,5 +1,8 @@
 # Airmodus MultiLogger - Software change log
 
+### 0.10.8 - 2025.09.01
+- New logo
+
 ### 0.10.7 - 2025.08.12
 - Simplified ParameterTree structure
 

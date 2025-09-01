@@ -405,8 +405,8 @@ class MainWindow(QMainWindow):
         # create status lights widget instance showing measurement and saving status
         self.status_lights = StatusLights()
         # create logo pixmap label
-        self.logo = QLabel(alignment=Qt.AlignCenter)
-        pixmap = QPixmap(resource_path + "/images/logo.png")
+        self.logo = QLabel(alignment=Qt.AlignCenter, objectName="logo")
+        pixmap = QPixmap(resource_path + "/images/airmodus-envea-logo.png")
         self.logo.setPixmap(pixmap.scaled(400, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         # create left side vertical splitter
         # contains parameter tree and status widget
