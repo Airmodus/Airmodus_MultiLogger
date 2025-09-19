@@ -1,5 +1,9 @@
 # Airmodus MultiLogger - Software change log
 
+### 0.10.8 - 2025.09.19
+- New logo
+- Save TSI CPC concentration and dilution correction to PSM file
+
 ### 0.10.7 - 2025.08.12
 - Simplified ParameterTree structure
 

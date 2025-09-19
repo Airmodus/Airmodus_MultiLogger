@@ -23,7 +23,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.10.7"
+version_number = "0.10.8"
 
 # Define instrument types
 CPC = 1
@@ -405,8 +405,8 @@ class MainWindow(QMainWindow):
         # create status lights widget instance showing measurement and saving status
         self.status_lights = StatusLights()
         # create logo pixmap label
-        self.logo = QLabel(alignment=Qt.AlignCenter)
-        pixmap = QPixmap(resource_path + "/images/logo.png")
+        self.logo = QLabel(alignment=Qt.AlignCenter, objectName="logo")
+        pixmap = QPixmap(resource_path + "/images/airmodus-envea-logo.png")
         self.logo.setPixmap(pixmap.scaled(400, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         # create left side vertical splitter
         # contains parameter tree and status widget
@@ -1458,13 +1458,11 @@ class MainWindow(QMainWindow):
                                 ]
                                 # replace PSM's latest_data CPC placeholders with connected CPC data
                                 self.latest_data[psm_id][-16:-2] = connected_cpc_data # 14 values before status hex and note hex
-                                # if dev.child('Device type').value() == PSM:
-                                #     # PSM: index 17-30 (no vacuum flow)
-                                #     self.latest_data[psm_id][17:31] = connected_cpc_data
-                                # elif dev.child('Device type').value() == PSM2:
-                                #     # PSM: index 18-31 (with vacuum flow)
-                                #     self.latest_data[psm_id][18:32] = connected_cpc_data
-            
+                            # if Connected device is TSI CPC, add concentration and dilution correction factor to PSM latest_data
+                            elif cpc_device.child('Device type').value() == TSI_CPC:
+                                self.latest_data[psm_id][-16] = cpc_data[0] # concentration
+                                self.latest_data[psm_id][-15] = round(dilution_correction_factor, 3) # dilution correction factor
+
             except Exception as e:
                 print(traceback.format_exc())
                 logging.exception(e)
