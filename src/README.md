@@ -1,5 +1,8 @@
 # Airmodus MultiLogger - Software change log
 
+### 0.10.9 - 2025.10.09
+- Removed PSM CPC inlet flow reset (when CPC not connected)
+
 ### 0.10.8 - 2025.09.19
 - New logo
 - Save TSI CPC concentration and dilution correction to PSM file

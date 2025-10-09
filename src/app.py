@@ -23,7 +23,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.10.8"
+version_number = "0.10.9"
 
 # Define instrument types
 CPC = 1
@@ -1794,13 +1794,6 @@ class MainWindow(QMainWindow):
                 if dev_type in [PSM ,PSM2] and dev.child('Connected').value():
                     # if no CPC is connected
                     if dev.child('Connected CPC').value() == 'None':
-                        # if stored CPC flow is not 1, set it to 1
-                        if float(self.latest_settings[dev_id][5]) != 1:
-                            # send value to PSM
-                            dev.child('Connection').value().send_set_val(1, ":SET:FLOW:CPC ")
-                            # set PSM update flag
-                            self.psm_settings_updates[dev_id] = True
-                            # GUI is updated when PSM settings are fetched
                         # update status_tab flow_cpc widget value and color
                         if self.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != "Not connected":
                             # set status_tab flow_cpc color to red and change text
