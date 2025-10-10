@@ -23,7 +23,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.10.8"
+version_number = "0.10.9"
 
 # Define instrument types
 CPC = 1
@@ -1794,13 +1794,6 @@ class MainWindow(QMainWindow):
                 if dev_type in [PSM ,PSM2] and dev.child('Connected').value():
                     # if no CPC is connected
                     if dev.child('Connected CPC').value() == 'None':
-                        # if stored CPC flow is not 1, set it to 1
-                        if float(self.latest_settings[dev_id][5]) != 1:
-                            # send value to PSM
-                            dev.child('Connection').value().send_set_val(1, ":SET:FLOW:CPC ")
-                            # set PSM update flag
-                            self.psm_settings_updates[dev_id] = True
-                            # GUI is updated when PSM settings are fetched
                         # update status_tab flow_cpc widget value and color
                         if self.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != "Not connected":
                             # set status_tab flow_cpc color to red and change text
@@ -3650,7 +3643,7 @@ class CPCWidget(QTabWidget):
             self.status_tab.temp_condenser, self.status_tab.pres_inlet,
             self.status_tab.pres_nozzle, self.status_tab.laser_power,
             self.status_tab.liquid_level, self.status_tab.temp_cabin,
-            self.status_tab.pres_critical_orifice
+            self.status_tab.pres_critical_orifice, self.status_tab.pulse_quality
         ]
 
     # convert CPC status hex to binary and update error label colors
@@ -4522,9 +4515,11 @@ class CPCStatusTab(QWidget):
 
         # misc indicators
         self.laser_power = IndicatorWidget("Laser power") # create laser power indicator
-        layout.addWidget(self.laser_power, 0, 2, 2, 1)
+        layout.addWidget(self.laser_power, 0, 2, 1, 1)
         self.liquid_level = IndicatorWidget("Liquid level") # create liquid level indicator
-        layout.addWidget(self.liquid_level, 2, 2, 2, 1)
+        layout.addWidget(self.liquid_level, 1, 2, 1, 1)
+        self.pulse_quality = IndicatorWidget("Pulse quality") # create pulse quality indicator
+        layout.addWidget(self.pulse_quality, 2, 2, 1, 1)
 
         self.setLayout(layout)
 
@@ -4535,7 +4530,7 @@ class IndicatorWidget(QWidget):
         super().__init__()
         layout = QVBoxLayout() # create widget layout
         self.name = name # save name
-        self.ok_error_indicators = ["Laser power", "Saturator liquid level", "Drain liquid level"]
+        self.ok_error_indicators = ["Laser power", "Saturator liquid level", "Drain liquid level", "Pulse quality"]
         self.value_label = QLabel(self.name + "\n", objectName="label") # create value label
 
         self.default_color = self.value_label.styleSheet() # save default color
@@ -4560,6 +4555,8 @@ class IndicatorWidget(QWidget):
                 self.change_value("LOW")
             elif self.name == "Drain liquid level":
                 self.change_value("HIGH")
+            elif self.name == "Pulse quality":
+                self.change_value("ERROR")
         else: # if bit is 0 (no error), set background color to normal
             self.value_label.setStyleSheet(self.default_color)
             if self.name in self.ok_error_indicators:
