@@ -1,5 +1,5 @@
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
-from config import (CPC, PSM, Electrometer, CO2_sensor, RHTP, eDiluter, PSM2, TSI_CPC, AFM, Example_device, save_path, osx_mode)
+from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, EDILUTER, PSM2, TSI_CPC, AFM, EXAMPLE_DEVICE, save_path, osx_mode)
 from serial_connection import SerialDeviceConnection
 
 # ScalableGroup for creating a menu where to set up new COM devices
@@ -17,12 +17,9 @@ class ScalableGroup(parameterTypes.GroupParameter):
 
     def addNew(self, device_type, device_name=None): # device_type is the name of the added device type
         # device_value is used to set the default value for the Device type parameter below
-        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_type]
+        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": ELECTROMETER, "CO2 sensor": CO2_SENSOR, "RHTP": RHTP, "AFM": AFM, "eDiluter": EDILUTER, "TSI CPC": TSI_CPC, "Example device": -1}[device_type]
         # if OSX mode is on, set COM port type as string to allow complex port addresses
-        if osx_mode:
-            port_type = 'str'
-        else:
-            port_type = 'int'
+        port_type = 'str' if osx_mode else 'int'
         # if device_name argument is not given, set device name according to device type
         if device_name == None:
             device_name = device_type
@@ -42,7 +39,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 dict(name="Serial number", type='str', value="", readonly=True),
                 #dict(name="Baud rate", type='int', value=115200, visible=False),
                 dict(name = "Connection", value = SerialDeviceConnection(), visible=False),
-                {'name': 'Device type', 'type': 'list', 'values': {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
+                {'name': 'Device type', 'type': 'list', 'values': {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": ELECTROMETER, "CO2 sensor": CO2_SENSOR, "RHTP": RHTP, "AFM": AFM, "eDiluter": EDILUTER, "TSI CPC": TSI_CPC, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
                 dict(name = "Connected", type='bool', value=False, readonly = True),
                 dict(name = "DevID", type='int', value=self.n_devices,readonly = True, visible = False),
                 dict(name = "Plot to main", type='bool', value=True),
@@ -89,7 +86,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
             self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'Flow', 'Standard flow', 'RH', 'T', 'P'], 'value': 'Flow'})
         
         # if added device is Example device, hide irrelevant parameters
-        if device_value == Example_device:
+        if device_value == EXAMPLE_DEVICE:
             self.children()[-1].child('COM port').setOpts(visible=False)
             self.children()[-1].child('Serial number').setOpts(visible=False)
             self.children()[-1].child('Connected').setOpts(visible=False)

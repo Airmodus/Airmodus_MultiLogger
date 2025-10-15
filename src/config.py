@@ -28,14 +28,21 @@ version_number = "0.10.9"
 # Define instrument types
 CPC = 1
 PSM = 2
-Electrometer = 3
-CO2_sensor = 4
+ELECTROMETER = 3
+CO2_SENSOR = 4
 RHTP = 5
-eDiluter = 6
+EDILUTER = 6
 PSM2 = 7
 TSI_CPC = 8
 AFM = 9
-Example_device = -1
+EXAMPLE_DEVICE = -1
+
+# App-wide constants
+MAX_TIME_SEC = 604800 # maximum time value in seconds (7 days)
+PULSE_ANALYSIS_THRESHOLDS = linspace(15,1500,61) # list of thresholds used in pulse analysis
+TIMER_DELAY_MS = 600 # how long to wait for machine until we start reading data
+IDN_INQUIRY_DELAY_MS = 400 
+FIRMWARE_INQUIRY_DELAY_MS = 400
 
 # self test error descriptions
 CPC_ERRORS = (
@@ -79,12 +86,12 @@ else:
 # check if platform is OSX
 if platform.system() == "Darwin":
     # OSX mode makes code compatible with OSX
-    osx_mode = 1
+    osx_mode = True
 else:
-    osx_mode = 0
+    osx_mode = False
 
 __all__ = [
-    'version_number', 'CPC', 'PSM', 'Electrometer', 'CO2_sensor', 'RHTP', 'eDiluter', 
-    'PSM2', 'TSI_CPC', 'AFM', 'Example_device', 'CPC_ERRORS', 'PSM_ERRORS', 
+    'MAX_TIME_SEC', 'PULSE_ANALYSIS_THRESHOLDS', 'TIMER_DELAY_MS', 'IDN_INQUIRY_DELAY_MS', 'FIRMWARE_INQUIRY_DELAY_MS', 'version_number', 'CPC', 'PSM', 'ELECTROMETER', 'CO2_SENSOR', 'RHTP', 'EDILUTER', 
+    'PSM2', 'TSI_CPC', 'AFM', 'EXAMPLE_DEVICE', 'CPC_ERRORS', 'PSM_ERRORS', 
     'osx_mode', 'save_path', 'resource_path', 'script_path'
 ]
