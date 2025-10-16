@@ -22,315 +22,10 @@ from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, Q
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
-# current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.10.9"
+from config import *
+from serial_connection import SerialDeviceConnection
+from params import ScalableGroup, params, p
 
-# Define instrument types
-CPC = 1
-PSM = 2
-Electrometer = 3
-CO2_sensor = 4
-RHTP = 5
-eDiluter = 6
-PSM2 = 7
-TSI_CPC = 8
-AFM = 9
-Example_device = -1
-
-# self test error descriptions
-CPC_ERRORS = (
-    "RESERVED FOR FUTURE USE", "ERROR_SELFTEST_FLASH_ID", "ERROR_SELFTEST_TEMP_OPTICS", "ERROR_SELFTEST_TEMP_SATURATOR", "ERROR_SELFTEST_TEMP_CONDENSER",
-    "ERROR_SELFTEST_TEMP_BOARD", "ERROR_SELFTEST_LIQUID_SENSOR", "ERROR_SELFTEST_PRESSURE_INLET", "ERROR_SELFTEST_PRESSURE_NOZZLE", "ERROR_SELFTEST_PRESSURE_CRITICAL",
-    "ERROR_SELFTEST_DISPLAY", "ERROR_SELFTEST_VOLTAGE_3V3", "ERROR_SELFTEST_VOLTAGE_5V", "ERROR_SELFTEST_VOLTAGE_12V", "ERROR_SELFTEST_VOLTAGE_REF_NTC",
-    "ERROR_SELFTEST_VOLTAGE_REF_PRES", "ERROR_SELFTEST_VOLTAGE_REF_DAC", "ERROR_SELFTEST_VOLTAGE_OPC_DC", "ERROR_SELFTEST_VOLTAGE_LASER",
-    "ERROR_SELFTEST_FAN1", "ERROR_SELFTEST_FAN2", "ERROR_SELFTEST_FAN3", "ERROR_SELFTEST_PRESSURE_CAB", "ERROR_SELFTEST_RTC",
-    "ERROR_SELFTEST_DAC1", "ERROR_SELFTEST_DAC2", "ERROR_SELFTEST_ANALOG_OUT", "ERROR_SELFTEST_ANALOG_OUT2", "ERROR_SELFTEST_PRESSURE_WREM",
-)
-
-PSM_ERRORS = (
-    "RESERVED FOR FUTURE USE", "ERROR_SELFTEST_FLASH_ID", "ERROR_SELFTEST_TEMP_GROWTH_TUBE", "ERROR_SELFTEST_TEMP_SATURATOR", "RESERVED FOR FUTURE USE",
-    "ERROR_SELFTEST_TEMP_BOARD", "ERROR_SELFTEST_LIQUID_SENSOR", "ERROR_SELFTEST_PRESSURE_ABS", "ERROR_SELFTEST_PRESSURE_ABSSAT", "ERROR_SELFTEST_PRESSURE_SATDRY",
-    "ERROR_SELFTEST_TEMP_PREHEATER", "ERROR_SELFTEST_VOLTAGE_3V3", "ERROR_SELFTEST_VOLTAGE_5V", "ERROR_SELFTEST_VOLTAGE_12V", "ERROR_SELFTEST_VOLTAGE_REF_NTC",
-    "ERROR_SELFTEST_VOLTAGE_REF_PRES", "ERROR_SELFTEST_VOLTAGE_REF_DAC", "ERROR_SELFTEST_TEMP_INLET", "ERROR_SELFTEST_DRAIN_LIQUID_SENSOR",
-    "ERROR_SELFTEST_FAN1", "ERROR_SELFTEST_FAN2", "ERROR_SELFTEST_FAN3", "ERROR_SELFTEST_RTC", "ERROR_SELFTEST_DAC1", "ERROR_SELFTEST_DAC2",
-    "ERROR_SELFTEST_TEMP_DRAIN", "ERROR_SELFTEST_MFC_SATURATOR", "ERROR_SELFTEST_MFC_HEATER", "ERROR_SELFTEST_PRESSURE_CRIT", "ERROR_SELFTEST_MFC_VACUUM"
-)
-
-warnings.filterwarnings("ignore", message='Mean of empty slice')
-warnings.filterwarnings("ignore", message='All-NaN slice encountered')
-
-# Set the LC_ALL environment variable to US English (en_US)
-locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
-
-# set up logging
-logging.basicConfig(filename='debug.log', encoding='UTF-8', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
-
-# define file paths according to run mode (exe or script)
-script_path = os.path.realpath(os.path.dirname(__file__)) # location of this file
-# exe (one file)
-if getattr(sys, 'frozen', False):
-    save_path = os.path.realpath(os.path.dirname(sys.executable)) # save files to exe location
-    resource_path = script_path + "/res" # path of /res/ folder (images, icons)
-# script
-else:
-    save_path = os.path.dirname(script_path) # save files to repository's main folder
-    resource_path = os.path.dirname(script_path) + "/res" # path of /res/ folder (images, icons)
-
-# check if platform is OSX
-if platform.system() == "Darwin":
-    # OSX mode makes code compatible with OSX
-    osx_mode = 1
-else:
-    osx_mode = 0
-
-class SerialDeviceConnection():
-    def __init__(self):
-        self.serial_port = "NaN"
-        self.timeout = 0.2
-        self.baud_rate = 115200
-        
-    def set_port(self, serial_port):
-        self.serial_port = serial_port
-    
-    def set_baud_rate(self, baud_rate):
-        self.baud_rate = baud_rate
-    
-    # open serial connection
-    def connect(self):
-        try: # Try to close with the port that was last used (needed if the port has been changed)
-            self.connection.close()
-        except: # if fails (i.e. port has not been open) continue normally
-            pass
-        self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout) #, rtscts=True)
-        print("Connected to %s" % self.serial_port)
-    
-    # close serial connection
-    def close(self):
-        # if connection exist, it is closed
-        try:
-            # Try to close with the port that was last used (needed if the port has been changed)
-            self.connection.close()
-            #print("Connection closed")
-        except:
-            pass
-    
-    # close old connection and open new connection
-    def change_port(self, serial_port):
-        # close current connection
-        self.close()
-        # set new port
-        self.set_port(serial_port)
-        try:
-            # connect to new port
-            self.connect()
-        except Exception as e:
-            print("change_port:", e)
-    
-    def send_message(self, message):
-        # add line termination and convert to bytes
-        message = bytes((str(message)+'\r\n'), 'utf-8')
-        try:
-            # send message if connection exists
-            self.connection.write(message)
-        except AttributeError:
-            # print message if connection does not exist
-            print("send_message - no connection, message -", message)
-    
-    def send_delayed_message(self, message, delay):
-        QTimer.singleShot(delay, lambda: self.send_message(message))
-    
-    def send_multiple_messages(self, device_type, ten_hz=False):
-
-        if device_type == 1: # CPC
-            self.send_message(":MEAS:ALL")
-            QTimer.singleShot(150, lambda: self.send_message(":SYST:PRNT"))
-            QTimer.singleShot(300, lambda: self.send_message(":SYST:PALL"))
-            if ten_hz:
-                QTimer.singleShot(450, lambda: self.send_message(":MEAS:OPC_CONC_LOG"))
-        
-        elif device_type == TSI_CPC: # TSI CPC
-            self.send_message("RD") # read concentration
-            QTimer.singleShot(150, lambda: self.send_message("RIE")) # read instrument errors
-    
-    def send_pulse_analysis_messages(self, threshold):
-        # send required messages for pulse analysis
-        self.send_message(":SET:OPC:THRS " + str(threshold))
-        QTimer.singleShot(150, lambda: self.send_message(":MEAS:ALL"))
-    
-    # --- CPC & PSM set/command functions ---
-
-    # # send set message
-    def send_set(self, message):
-        if message == None:
-            # if message is None, do nothing
-            return
-        else:
-            # send message
-            self.send_message(message)
-    
-    # add value to set message
-    def send_set_val(self, value, message, **kwargs):
-        if isinstance(value, float): # if value is float, round to 2 or x decimals
-            if kwargs: # if kwargs is not empty
-                value = round(value, kwargs['decimals']) # round value to kwargs['decimals'] decimals
-            else: # otherwise, round to 2 decimals
-                value = round(value, 2)
-        message = message + str(value) # add value to message
-        #print("send_set_val -", message) # print message for debugging
-        self.send_set(message) # send message using send_message()
-
-# ScalableGroup for creating a menu where to set up new COM devices
-class ScalableGroup(parameterTypes.GroupParameter):
-    def __init__(self, **opts):
-        #opts['type'] = 'action'
-        opts['addText'] = "Add new device"
-        # opts for choosing device type when adding new device
-        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "AFM", "eDiluter", "TSI CPC", "Example device"]
-        parameterTypes.GroupParameter.__init__(self, **opts)
-        self.n_devices = 0
-        self.cpc_dict = {'None': 'None'}
-        # update cpc_dict when device is removed
-        self.sigChildRemoved.connect(self.update_cpc_dict)
-
-    def addNew(self, device_type, device_name=None): # device_type is the name of the added device type
-        # device_value is used to set the default value for the Device type parameter below
-        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}[device_type]
-        # if OSX mode is on, set COM port type as string to allow complex port addresses
-        if osx_mode:
-            port_type = 'str'
-        else:
-            port_type = 'int'
-        # if device_name argument is not given, set device name according to device type
-        if device_name == None:
-            device_name = device_type
-        # if device name is in use, add number to the end of the name
-        if device_name in [child.name() for child in self.children()]:
-            name_number = 1
-            name_set = False
-            while not name_set:
-                name_number += 1
-                if device_name + " (%d)" % (name_number) not in [child.name() for child in self.children()]:
-                    device_name = device_name + " (%d)" % (name_number)
-                    name_set = True
-        # New types of devices should be added in the "Device type" list and given unique id number
-        self.addChild({'name': device_name, 'removable': True, 'type': 'group', 'children': [
-                dict(name="Device nickname", type='str', value="", renamable=True),
-                dict(name="COM port", type=port_type),
-                dict(name="Serial number", type='str', value="", readonly=True),
-                #dict(name="Baud rate", type='int', value=115200, visible=False),
-                dict(name = "Connection", value = SerialDeviceConnection(), visible=False),
-                {'name': 'Device type', 'type': 'list', 'values': {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": Electrometer, "CO2 sensor": CO2_sensor, "RHTP": RHTP, "AFM": AFM, "eDiluter": eDiluter, "TSI CPC": TSI_CPC, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
-                dict(name = "Connected", type='bool', value=False, readonly = True),
-                dict(name = "DevID", type='int', value=self.n_devices,readonly = True, visible = False),
-                dict(name = "Plot to main", type='bool', value=True),
-                ]})
-
-        self.n_devices += 1 # increase device counter
-
-        # if added device is CPC, update cpc_dict
-        if device_value in [CPC, TSI_CPC]:
-            self.update_cpc_dict()
-            # if Airmodus CPC, add hidden 10 hz parameter
-            # when 10 hz is True, OPC concentration is polled
-            if device_value == CPC:
-                self.children()[-1].addChild({'name': '10 hz', 'type': 'bool', 'value': False, 'readonly': True, 'visible': False})
-
-        # if added device is PSM, add hidden parameters and option for 'Connected CPC'
-        if device_value in [PSM, PSM2]:
-            # if device is PSM Retrofit, add hidden CO flow parameter
-            if device_value == PSM:
-                self.children()[-1].addChild({'name': 'CO flow', 'type': 'str', 'visible': False})
-            # add hidden 10 hz parameter for storing 10 hz status for startup
-            self.children()[-1].addChild({'name': '10 hz', 'type': 'bool', 'value': False, 'readonly': True, 'visible': False})
-            # add options for connected CPC
-            self.children()[-1].addChild({'name': 'Connected CPC', 'type': 'list', 'values': self.cpc_dict, 'value': 'None'})
-            # add cpc_changed flag to device
-            self.children()[-1].cpc_changed = False
-            # connect value change signal of Connected CPC to update_cpc_changed slot
-            self.children()[-1].child('Connected CPC').sigValueChanged.connect(self.update_cpc_changed)
-            # add firmware version parameter to index 3
-            self.children()[-1].insertChild(3, {'name': 'Firmware version', 'type': 'str', 'value': "", 'readonly': True})
-        
-        # if added device is RHTP, add options for plotted value
-        if device_value == RHTP:
-            # remove default Plot to main parameter
-            self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
-            # create new Plot to main parameter with options for plotted value
-            self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'RH', 'T', 'P'], 'value': 'RH'})
-        
-        # if added device is AFM, add options for plotted value
-        if device_value == AFM:
-            # remove default Plot to main parameter
-            self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
-            # create new Plot to main parameter with options for plotted value
-            self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'Flow', 'Standard flow', 'RH', 'T', 'P'], 'value': 'Flow'})
-        
-        # if added device is Example device, hide irrelevant parameters
-        if device_value == Example_device:
-            self.children()[-1].child('COM port').setOpts(visible=False)
-            self.children()[-1].child('Serial number').setOpts(visible=False)
-            self.children()[-1].child('Connected').setOpts(visible=False)
-
-    def update_cpc_dict(self):
-        self.cpc_dict = {'None': 'None'} # reset cpc_dict
-        # add device name to cpc_dict if device is CPC
-        for device in self.children():
-            if device.child('Device type').value() in [CPC, TSI_CPC]:
-                # check if device has a nickname
-                if device.child('Device nickname').value() != "":
-                    self.cpc_dict[device.child('Device nickname').value()] = device.child('DevID').value()
-                else: # if no nickname, use device parameter name (device type and serial number)
-                    self.cpc_dict[device.name()] = device.child('DevID').value()
-        # update Connected CPC parameter for all PSM devices
-        for device in self.children():
-            if device.child('Device type').value() in [PSM, PSM2]:
-                # store current value (ID) of Connected CPC parameter
-                current_cpc = device.child('Connected CPC').value()
-                # remove Connected CPC parameter
-                device.removeChild(device.child('Connected CPC'))
-                # add updated Connected CPC parameter
-                device.addChild({'name': 'Connected CPC', 'type': 'list', 'values': self.cpc_dict})
-                # set Connected CPC parameter to previous value if it is still in the list
-                if current_cpc in self.cpc_dict.values():
-                    device.child('Connected CPC').setValue(current_cpc)
-                else: # else set cpc_changed to True
-                    device.cpc_changed = True
-                # connect value change signal of Connected CPC to update_cpc_changed slot
-                device.child('Connected CPC').sigValueChanged.connect(self.update_cpc_changed)
-
-    # slot for setting cpc_changed flag to True when Connected CPC parameter is changed
-    def update_cpc_changed(self, value):
-        device = value.parent() # get device parameter
-        device.cpc_changed = True # set cpc_changed flag to True
-
-# Create a dictionary, in which the names, types and default values are set
-params = [
-    {'name': 'Data settings', 'type': 'group', 'children': [
-        {'name': 'File path', 'type': 'str', 'value': save_path},
-        {'name': 'File tag', 'type': 'str', 'value': "", 'tip': "File name: YYYYMMDD_HHMMSS_(Serial number)_(Device type)_(Device nickname)_(File tag).dat"},
-        {'name': 'Save data', 'type': 'bool', 'value': False},
-        {'name': 'Generate daily files', 'type': 'bool', 'value': True, 'tip': "If on, new files are started at midnight."},
-        {'name': 'Resume on startup', 'type': 'bool', 'value': False, 'tip': "Option to resume the last settings on startup."},
-        {'name': 'Save settings', 'type': 'action'},
-        {'name': 'Load settings', 'type': 'action'},
-    ]},
-    {'name': 'Plot settings', 'type': 'group', 'children': [
-        {'name': 'Follow', 'type': 'bool', 'value': True},
-        {'name': 'Time window (s)', 'type': 'int', 'value': 60},
-        {'name': 'Autoscale Y', 'type': 'bool', 'value': True}
-    ]},
-    {'name': 'Serial ports', 'type': 'group', 'children': [
-        {'name': 'Available serial ports', 'type': 'text', 'value': '', 'readonly': True},
-        {'name': 'Update serial ports', 'type': 'action'},
-    ]},
-    
-    ScalableGroup(name="Device settings", children=[
-        # devices will be added here
-    ]),
-]
-
-# Create tree of Parameter objects
-p = Parameter.create(name='params', type='group', children=params)
 
 # main program
 class MainWindow(QMainWindow):
@@ -341,30 +36,21 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(timerType=Qt.PreciseTimer) # create timer object
         self.params = params # predefined parameter tree
         self.config_file_path = "" # path to the configuration file
-        # create parameter tree
-        t = ParameterTree()
-        t.setParameters(p, showTop=False)
-        t.setHeaderHidden(True)
-        # x axis time attributes
-        self.time_counter = 0 # used as index value, incremented every second
-        self.x_time_list = full(10, nan) # 60 # list for saving x-axis time values
-        self.max_time = 604800 # maximum time value in seconds
-        self.max_reached = False # flag for checking if max_time has been reached
-        self.first_connection = 0 # once first connection has been made, set to 1
-        self.inquiry_flag = False # when COM ports change, this is set to True to inquire device IDNs
 
-        self.pulse_analysis_thresholds = linspace(15,1500,61) # list of thresholds used in pulse analysis
+        # Extracted inits
+        self._init_data_structs()
+        self._setup_parameter_tree()
+        self._setup_gui()
+        self._connect_signals()
 
-        # load CSS style and apply it to the main window
-        with open(script_path + "/style.css", "r") as f:
-            self.style = f.read()
-        self.setStyleSheet(self.style)
+        self.list_com_ports()
+        self.startTimer()
+        # load ini file if available
+        self.load_ini()
 
-        # create error and disconnected icon objects
-        self.error_icon = QIcon(resource_path + "/icons/error.png")
-        self.disconnected_icon = QIcon(resource_path + "/icons/disconnected.png")
 
-        # initialize dictionaries and lists
+    def _init_data_structs(self):
+        """Initialize all dicts/lists (data, plots, devices, etc.)."""
         # data related
         self.latest_data = {} # contains latest values
         self.latest_settings = {} # contains latest CPC and PSM settings
@@ -396,9 +82,32 @@ class MainWindow(QMainWindow):
         self.device_errors = {} # contains device error flags: 0 = ok, 1 = errors
         self.idn_inquiry_devices = [] # contains IDs of devices that need IDN inquiry
         # dictionary of device names matching device type
-        self.device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', Electrometer: 'Electrometer', CO2_sensor: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', eDiluter: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', Example_device: 'Example device'}
+        self.device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', ELECTROMETER: 'Electrometer', CO2_SENSOR: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', EDILUTER: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', EXAMPLE_DEVICE: 'Example device'}
 
-        # initialize GUI
+    def _setup_parameter_tree(self):
+        """Create and configure the ParameterTree."""
+        # create parameter tree
+        self.t = ParameterTree()
+        self.t.setParameters(p, showTop=False)
+        self.t.setHeaderHidden(True)
+        # x axis time attributes
+        self.time_counter = 0 # used as index value, incremented every second
+        self.x_time_list = full(10, nan) # 60 # list for saving x-axis time values
+        self.max_reached = False # flag for checking if MAX_TIME_SEC has been reached
+        self.first_connection = 0 # once first connection has been made, set to 1
+        self.inquiry_flag = False # when COM ports change, this is set to True to inquire device IDNs
+
+        # load CSS style and apply it to the main window
+        with open(script_path + "/style.css", "r") as f:
+            self.style = f.read()
+        self.setStyleSheet(self.style)
+
+        # create error and disconnected icon objects
+        self.error_icon = QIcon(resource_path + "/icons/error.png")
+        self.disconnected_icon = QIcon(resource_path + "/icons/disconnected.png")
+
+    def _setup_gui(self):
+        """Build main layout, splitters, tabs, etc."""
         # create and set central widget (requirement of QMainWindow)
         self.main_splitter = QSplitter()
         self.setCentralWidget(self.main_splitter)
@@ -412,7 +121,7 @@ class MainWindow(QMainWindow):
         # contains parameter tree and status widget
         left_splitter = QSplitter(Qt.Vertical) # split vertically
         left_splitter.addWidget(self.logo) # add logo
-        left_splitter.addWidget(t) # add parameter tree widget
+        left_splitter.addWidget(self.t) # add parameter tree widget
         left_splitter.addWidget(self.status_lights) # add status lights widget
         left_splitter.setSizes([100, 800, 100]) # set relative sizes of widgets
         # create right side tab widget containing device widgets as tabs
@@ -426,6 +135,9 @@ class MainWindow(QMainWindow):
         self.main_splitter.setSizes([2000, 8000]) # set relative sizes of widgets
         # resize window (int x, int y)
         self.resize(1400, 800)
+
+    def _connect_signals(self):
+        """Wire up all signals/slots."""
 
         # connect signals to functions
         # connect timer timeout to timer_functions
@@ -449,21 +161,12 @@ class MainWindow(QMainWindow):
         # connect main_plot's auto range button click to auto_range_clicked function
         self.main_plot.plot.autoBtn.clicked.connect(self.auto_range_clicked)
 
-        # list com ports at startup
-        self.list_com_ports()
-
-        # start timer
-        self.startTimer()
 
         # connect parameter tree's sigTreeStateChanged signal to save_ini function
         self.params.sigTreeStateChanged.connect(self.save_ini)
         # connect 'Save settings' and 'Load settings' buttons
         self.params.child('Data settings').child('Save settings').sigActivated.connect(self.manual_save_configuration)
         self.params.child('Data settings').child('Load settings').sigActivated.connect(self.manual_load_configuration)
-        # load ini file if available
-        self.load_ini()
-
-        # end of __init__ function
 
     # timer timeout launches this chain of functions
     def timer_functions(self):
@@ -479,7 +182,7 @@ class MainWindow(QMainWindow):
         if self.first_connection: # if first connection has been made
             self.get_dev_data() # send read commands to connected serial devices
             # launch delayed_functions after specified ms
-            QTimer.singleShot(600, self.delayed_functions) # changed from 500 to 600
+            QTimer.singleShot(TIMER_DELAY_MS, self.delayed_functions) # changed from 500 to 600
 
     # delayed functions are launched after a short delay
     def delayed_functions(self):
@@ -492,9 +195,9 @@ class MainWindow(QMainWindow):
         self.update_error_icons() # set error icons according to device_errors dict
         self.status_lights.set_error_light(self.error_status) # update error status light according to error_status flag
         self.status_lights.set_saving_light(self.saving_status) # update saving status light according to saving_status flag
-        if self.time_counter < self.max_time - 1: # if time counter has not reached max_time - 1
+        if self.time_counter < MAX_TIME_SEC - 1: # if time counter has not reached MAX_TIME_SEC - 1
             self.time_counter += 1 # increment time counter
-        else: # if time counter has reached max_time - 1 (max index)
+        else: # if time counter has reached MAX_TIME_SEC - 1 (max index)
             self.max_reached = True # set max_reached flag to True
         # convert current_time to datetime object
         current_datetime = dt.fromtimestamp(self.current_time)
@@ -555,7 +258,7 @@ class MainWindow(QMainWindow):
             
             # add device to IDN inquiry list whenever connection is made ('Connected' changes from False to True)
             # this ensures serial number is up to date if device changes
-            if dev.child('Device type').value() in [CPC, PSM, PSM2, CO2_sensor, RHTP, AFM]:
+            if dev.child('Device type').value() in [CPC, PSM, PSM2, CO2_SENSOR, RHTP, AFM]:
                 if connected and dev.child('Connected').value() == False:
                     if dev.child('DevID').value() not in self.idn_inquiry_devices:
                         self.idn_inquiry_devices.append(dev.child('DevID').value())
@@ -566,13 +269,13 @@ class MainWindow(QMainWindow):
                             del self.psm_dilution[dev.child('DevID').value()] # reset dilution parameters
                         # set settings update flag
                         self.psm_settings_updates[dev.child('DevID').value()] = True
-                    if dev.child('Device type').value() in [CPC, PSM, PSM2, eDiluter]:
+                    if dev.child('Device type').value() in [CPC, PSM, PSM2, EDILUTER]:
                         # set text to normal using CSS ID
                         self.device_widgets[dev.child('DevID').value()].setObjectName("connected")
                         self.device_widgets[dev.child('DevID').value()].setStyleSheet("")
 
             # print disconnected message when device is disconnected
-            if dev.child('Device type').value() in [CPC, PSM, PSM2, eDiluter]:
+            if dev.child('Device type').value() in [CPC, PSM, PSM2, EDILUTER]:
                 if connected == False and dev.child('Connected').value() == True:
                     self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box("Device disconnected.")
                     # set text to grey using CSS ID
@@ -599,7 +302,7 @@ class MainWindow(QMainWindow):
                         if device_type == CPC and dev.child('DevID').value() in self.pulse_analysis_index:
                             # if pulse analysis is in progress, send pulse analysis messages
                             if self.pulse_analysis_index[dev.child('DevID').value()] is not None: # when index is None, analysis has reached its end
-                                threshold = self.pulse_analysis_thresholds[self.pulse_analysis_index[dev.child('DevID').value()]]
+                                threshold = PULSE_ANALYSIS_THRESHOLDS[self.pulse_analysis_index[dev.child('DevID').value()]]
                                 dev.child('Connection').value().send_pulse_analysis_messages(threshold)
                         elif device_type == CPC and dev.child('10 hz').value() == True:
                             dev.child('Connection').value().send_multiple_messages(device_type, ten_hz=True)
@@ -615,13 +318,13 @@ class MainWindow(QMainWindow):
                         if dev.child('DevID').value() not in self.psm_dilution:
                             dev.child('Connection').value().send_delayed_message(":SYST:VCMP", 150)
 
-                    elif device_type == Electrometer: # Electrometer
+                    elif device_type == ELECTROMETER: # ELECTROMETER
                         dev.child('Connection').value().connection.reset_input_buffer()
                         dev.child('Connection').value().connection.reset_output_buffer()
                         dev.child('Connection').value().connection.read_all()
                         dev.child('Connection').value().send_message(":MEAS:V")
 
-                    elif device_type == CO2_sensor: # CO2 sensor
+                    elif device_type == CO2_SENSOR: # CO2 sensor
                         dev.child('Connection').value().connection.reset_input_buffer()
                         dev.child('Connection').value().connection.reset_output_buffer()
                         dev.child('Connection').value().connection.read_all()
@@ -630,7 +333,7 @@ class MainWindow(QMainWindow):
                     
                     # RHTP, eDiluter and AFM push data automatically
 
-                    if device_type in [CPC, PSM, PSM2, CO2_sensor, RHTP, AFM]: # CPC, PSM, CO2, RHTP, AFM
+                    if device_type in [CPC, PSM, PSM2, CO2_SENSOR, RHTP, AFM]: # CPC, PSM, CO2, RHTP, AFM
                         # if device is in IDN inquiry list, send IDN inquiry with delay
                         if dev.child('DevID').value() in self.idn_inquiry_devices:
                             self.idn_inquiry(dev.child('Connection').value().connection)
@@ -647,10 +350,10 @@ class MainWindow(QMainWindow):
     # independent functions for delayed sends prevent serial connections getting mixed up in iteration
     # send IDN inquiry with delay
     def idn_inquiry(self, connection):
-        QTimer.singleShot(400, lambda: connection.write(b'*IDN?\n'))
+        QTimer.singleShot(IDN_INQUIRY_DELAY_MS, lambda: connection.write(b'*IDN?\n'))
     # send firmware inquiry with delay
     def firmware_inquiry(self, connection):
-        QTimer.singleShot(400, lambda: connection.write(b':SYST:VER\n'))
+        QTimer.singleShot(FIRMWARE_INQUIRY_DELAY_MS, lambda: connection.write(b':SYST:VER\n'))
     
     # read and compile data
     def readIndata(self):
@@ -1057,7 +760,7 @@ class MainWindow(QMainWindow):
                             print(traceback.format_exc())
                             logging.exception(e)
                 
-                if dev.child('Device type').value() == Electrometer: # Electrometer
+                if dev.child('Device type').value() == ELECTROMETER: # ELECTROMETER
                     try: # try to read data, decode, split and convert to float
                         readings = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
                         readings = list(map(float,readings.split(";")))
@@ -1068,7 +771,7 @@ class MainWindow(QMainWindow):
                         self.latest_data[dev_id] = full(3, nan)
                         logging.exception(e)
 
-                if dev.child('Device type').value() == CO2_sensor: # CO2 sensor TODO make CO2 process similar to RHTP?
+                if dev.child('Device type').value() == CO2_SENSOR: # CO2 sensor TODO make CO2 process similar to RHTP?
                     try:
                         # if device is in IDN inquiry list, look for *IDN
                         if dev_id in self.idn_inquiry_devices:
@@ -1226,7 +929,7 @@ class MainWindow(QMainWindow):
                         print(traceback.format_exc())
                         logging.exception(e)
                 
-                if dev.child('Device type').value() == eDiluter: # eDiluter
+                if dev.child('Device type').value() == EDILUTER: # eDiluter
                     try:
                         # store nan values to latest_data in case reading fails
                         self.latest_data[dev_id] = full(12, nan)
@@ -1469,20 +1172,7 @@ class MainWindow(QMainWindow):
 
         # ----- update plot data -----
 
-        # TODO create function for array doubling/shifting to avoid repetition
-        # if time_counter has reached max_time - 1 (max index), start shifting data
-        if self.time_counter >= self.max_time - 1:
-            # if max has been reached, shift all items one index to left
-            if self.max_reached == True:
-                self.x_time_list = self.x_time_list[:self.max_time] # shorten list to max time length
-                self.x_time_list[:-1] = self.x_time_list[1:] # shift all items one index to left
-                self.x_time_list[-1] = nan # change nan to end
-        # if max_time hasn't been reached, double time array size when full (when time_counter reaches array length)
-        elif self.time_counter >= self.x_time_list.shape[0]:
-            tmp_time = self.x_time_list
-            self.x_time_list = full(self.x_time_list.shape[0] * 2, nan)
-            self.x_time_list[:tmp_time.shape[0]] = tmp_time
-        # add current time to x time list
+        self.x_time_list = self._manage_plot_array(self.x_time_list, max_reached=self.max_reached)
         self.x_time_list[self.time_counter] = self.current_time
         
         # go through each device
@@ -1491,17 +1181,18 @@ class MainWindow(QMainWindow):
             dev_id = dev.child('DevID').value()
 
             try: # if one device fails, continue with the next one
+                dev_type = dev.child('Device type').value()
 
                 # Devices with multiple values - create lists for each value
-                if dev.child('Device type').value() in [CPC, TSI_CPC, Electrometer, RHTP, AFM]:
+                if dev_type in [CPC, TSI_CPC, ELECTROMETER, RHTP, AFM]:
                     # determine value types based on device type
-                    if dev.child('Device type').value() in [CPC, TSI_CPC]:
+                    if dev_type in [CPC, TSI_CPC]:
                         types = ['', ':raw'] # concentration, raw concentration
-                    elif dev.child('Device type').value() == Electrometer:
+                    elif dev_type == ELECTROMETER:
                         types = [':1', ':2', ':3'] # voltage 1, voltage 2, voltage 3
-                    elif dev.child('Device type').value() == RHTP:
+                    elif dev_type == RHTP:
                         types = [':rh', ':t', ':p'] # RH, T, P
-                    elif dev.child('Device type').value() == AFM:
+                    elif dev_type == AFM:
                         types = [':f', ':sf', ':rh', ':t', ':p'] # flow, standard flow, RH, T, P
                     
                     # if device is not yet in plot_data dict, add it
@@ -1509,19 +1200,10 @@ class MainWindow(QMainWindow):
                         # make the new lists the same size as x_time_list
                         for i in types:
                             self.plot_data[str(dev_id)+i] = full(len(self.x_time_list), nan)
-                    # if time_counter has reached max_time - 1, start shifting data
-                    if self.time_counter >= self.max_time - 1:
-                        for i in types:
-                            if self.max_reached == True:
-                                self.plot_data[str(dev_id)+i] = self.plot_data[str(dev_id)+i][:self.max_time] # shorten list to max time length
-                                self.plot_data[str(dev_id)+i][:-1] = self.plot_data[str(dev_id)+i][1:] # shift all items one index to left
-                                self.plot_data[str(dev_id)+i][-1] = nan # change nan to end
-                    # if max_time hasn't been reached, double device plot array sizes when full
-                    elif self.time_counter >= self.plot_data[str(dev_id)+types[0]].shape[0]:
-                        for i in types:
-                            tmp_data = self.plot_data[str(dev_id)+i]
-                            self.plot_data[str(dev_id)+i] = full(self.plot_data[str(dev_id)+i].shape[0] * 2, nan)
-                            self.plot_data[str(dev_id)+i][:tmp_data.shape[0]] = tmp_data
+
+                    # Manage all arrays for this device type in one go
+                    for i in types:
+                        self.plot_data[str(dev_id)+i] = self._manage_plot_array(self.plot_data[str(dev_id)+i], max_reached=self.max_reached)
                 
                 # other devices
                 else:
@@ -1529,33 +1211,20 @@ class MainWindow(QMainWindow):
                     if dev_id not in self.plot_data:
                         # make the new list the same size as x_time_list
                         self.plot_data[dev_id] = full(len(self.x_time_list), nan)
-                    # if time_counter has reached max_time - 1, start shifting data
-                    if self.time_counter >= self.max_time - 1:
-                        if self.max_reached == True:
-                            self.plot_data[dev_id] = self.plot_data[dev_id][:self.max_time] # shorten list to max time length
-                            self.plot_data[dev_id][:-1] = self.plot_data[dev_id][1:] # # shift all items one index to left
-                            self.plot_data[dev_id][-1] = nan # change nan to end
-                    # if max_time hasn't been reached, double device plot array size when full
-                    elif self.time_counter >= self.plot_data[dev_id].shape[0]:
-                        tmp_data = self.plot_data[dev_id]
-                        self.plot_data[dev_id] = full(self.plot_data[dev_id].shape[0] * 2, nan)
-                        self.plot_data[dev_id][:tmp_data.shape[0]] = tmp_data
+                    self.plot_data[dev_id] = self._manage_plot_array(self.plot_data[dev_id], max_reached=self.max_reached)
                 
                 # create lists for pulse duration and pulse ratio if they don't exist yet
-                if dev.child('Device type').value() == CPC:
+                if dev_type == CPC:
                     if str(dev_id)+':pd' not in self.plot_data:
                         self.plot_data[str(dev_id)+':pd'] = full(86400, nan) # 24 hours in seconds
+                    self._roll_pulse_array(str(dev_id)+':pd')
                     if str(dev_id)+':pr' not in self.plot_data:
                         self.plot_data[str(dev_id)+':pr'] = full(86400, nan)
-                    # roll data
-                    self.plot_data[str(dev_id)+':pd'] = roll(self.plot_data[str(dev_id)+':pd'], -1)
-                    self.plot_data[str(dev_id)+':pd'][-1] = nan
-                    self.plot_data[str(dev_id)+':pr'] = roll(self.plot_data[str(dev_id)+':pr'], -1)
-                    self.plot_data[str(dev_id)+':pr'][-1] = nan
+                    self._roll_pulse_array(str(dev_id)+':pr')
                 
                 # if device is connected, add latest_values data to plot_data according to device
                 if dev.child('Connected').value():
-                    if dev.child('Device type').value() in [CPC, TSI_CPC]: # CPC
+                    if dev_type in [CPC, TSI_CPC]: # CPC
                         
                         # if CPC is in pulse analysis mode, update pulse analysis plot data instead of normal plot data
                         if dev_id in self.pulse_analysis_index:
@@ -1570,7 +1239,7 @@ class MainWindow(QMainWindow):
                                         # pulse duration = dead time * 1000 (micro to nano) / number of pulses
                                         pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
                                     # get current threshold value with pulse_analysis_index
-                                    threshold_value = self.pulse_analysis_thresholds[self.pulse_analysis_index[dev_id]]
+                                    threshold_value = PULSE_ANALYSIS_THRESHOLDS[self.pulse_analysis_index[dev_id]]
                                     #print(f"threshold: {threshold_value} pulse duration: {pulse_duration} dead time: {dead_time} number of pulses: {number_of_pulses}")
                                     # add analysis point to pulse quality widget
                                     self.device_widgets[dev_id].pulse_quality.add_analysis_point(pulse_duration, threshold_value)
@@ -1623,33 +1292,33 @@ class MainWindow(QMainWindow):
                                     self.plot_data[str(dev_id)+':pd'][-1] = nan
                                     self.plot_data[str(dev_id)+':pr'][-1] = nan
 
-                    elif dev.child('Device type').value() in [PSM, PSM2]: # PSM
+                    elif dev_type in [PSM, PSM2]: # PSM
                         # add latest saturator flow rate value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][2]
-                    elif dev.child('Device type').value() == Electrometer: # Electrometer
+                    elif dev_type == ELECTROMETER: # ELECTROMETER
                         # add latest voltage values to time_counter index of plot_data
                         self.plot_data[str(dev_id)+':1'][self.time_counter] = self.latest_data[dev_id][0]
                         self.plot_data[str(dev_id)+':2'][self.time_counter] = self.latest_data[dev_id][1]
                         self.plot_data[str(dev_id)+':3'][self.time_counter] = self.latest_data[dev_id][2]
-                    elif dev.child('Device type').value() == CO2_sensor: # CO2 sensor
+                    elif dev_type == CO2_SENSOR: # CO2 sensor
                         # add latest CO2 value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][0]
-                    elif dev.child('Device type').value() == RHTP: # RHTP
+                    elif dev_type == RHTP: # RHTP
                         # add latest values (RH, T, P) to time_counter index of plot_data
                         self.plot_data[str(dev_id)+':rh'][self.time_counter] = self.latest_data[dev_id][0]
                         self.plot_data[str(dev_id)+':t'][self.time_counter] = self.latest_data[dev_id][1]
                         self.plot_data[str(dev_id)+':p'][self.time_counter] = self.latest_data[dev_id][2]
-                    elif dev.child('Device type').value() == AFM: # AFM
+                    elif dev_type == AFM: # AFM
                         # add latest values (flow, RH, T, P) to time_counter index of plot_data
                         self.plot_data[str(dev_id)+':f'][self.time_counter] = self.latest_data[dev_id][0]
                         self.plot_data[str(dev_id)+':sf'][self.time_counter] = self.latest_data[dev_id][1]
                         self.plot_data[str(dev_id)+':rh'][self.time_counter] = self.latest_data[dev_id][2]
                         self.plot_data[str(dev_id)+':t'][self.time_counter] = self.latest_data[dev_id][3]
                         self.plot_data[str(dev_id)+':p'][self.time_counter] = self.latest_data[dev_id][4]
-                    elif dev.child('Device type').value() == eDiluter: # eDiluter
+                    elif dev_type == EDILUTER: # eDiluter
                         # add latest T1 value to time_counter index of plot_data
                         self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][3]
-                if dev.child('Device type').value() == -1: # Example device
+                if dev_type == -1: # Example device
                     # generate random value for plotting and logging
                     random_value = round(random.random() * 100, 2) # 0-100
                     # add random value to time_counter index of plot_data
@@ -1660,6 +1329,28 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(traceback.format_exc())
                 logging.exception(e)
+
+    def _manage_plot_array(self, arr, max_reached=False):
+        """Centralized array shift/double logic. Returns arr (mutated or new)."""
+        if self.time_counter >= MAX_TIME_SEC - 1:
+            if max_reached:
+                # Truncate if needed 
+                if len(arr) > MAX_TIME_SEC:
+                    arr = arr[:MAX_TIME_SEC]
+                arr[:-1] = arr[1:]  # Shift left (mutates)
+                arr[-1] = nan       # End with nan (mutates)
+        elif self.time_counter >= len(arr):  # Use len() for safety
+            tmp = arr.copy()
+            new_size = len(tmp) * 2
+            arr = full(new_size, nan)
+            arr[:len(tmp)] = tmp
+        return arr  # return for reassignment
+
+    def _roll_pulse_array(self, key):
+        arr = self.plot_data[key]
+        arr = roll(arr, -1)
+        arr[-1] = nan
+        self.plot_data[key] = arr  # Reassign if needed
     
     # update plots with plot data lists
     def update_figures_and_menus(self):
@@ -1709,7 +1400,7 @@ class MainWindow(QMainWindow):
                     if dev_type in [CPC, TSI_CPC]: # CPC
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)][:self.time_counter+1])
                     # if device is Electrometer, plot Voltage 2
-                    elif dev_type == Electrometer: # Electrometer
+                    elif dev_type == ELECTROMETER: # ELECTROMETER
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':2'][:self.time_counter+1])
                     else: # other devices
                         self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[dev_id][:self.time_counter+1])
@@ -1723,7 +1414,7 @@ class MainWindow(QMainWindow):
                 # INDIVIDUAL PLOTS
 
                 # if device is connected OR Example device
-                if dev.child('Connected').value() or dev_type == Example_device:
+                if dev.child('Connected').value() or dev_type == EXAMPLE_DEVICE:
                     
                     # store current time counter value as start time in dictionary if not yet stored
                     # start time is stored when first non-nan value is received
@@ -1733,8 +1424,8 @@ class MainWindow(QMainWindow):
                         if dev_type in [CPC, TSI_CPC]:
                             if str(self.plot_data[str(dev_id)+':raw'][self.time_counter]) != "nan":
                                 self.start_times[dev_id] = self.time_counter
-                        # Electrometer
-                        elif dev_type == Electrometer:
+                        # ELECTROMETER
+                        elif dev_type == ELECTROMETER:
                             if str(self.plot_data[str(dev_id)+':1'][self.time_counter]) != "nan":
                                 self.start_times[dev_id] = self.time_counter
                         # RHTP or AFM
@@ -1759,7 +1450,7 @@ class MainWindow(QMainWindow):
                             if dev_type == CPC:
                                 self.pulse_quality_update(dev_id)
 
-                        elif dev_type == Electrometer: # Electrometer
+                        elif dev_type == ELECTROMETER: # ELECTROMETER
                             # update Electrometer plot with all 3 values
                             self.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':1'][:self.time_counter+1])
                             self.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':2'][:self.time_counter+1])
@@ -1781,7 +1472,7 @@ class MainWindow(QMainWindow):
                         
                         # scale x-axis range if Follow is on
                         if self.params.child('Plot settings').child('Follow').value():
-                            if dev_type == Electrometer: # if Electrometer, update all 3 plots
+                            if dev_type == ELECTROMETER: # if ELECTROMETER, update all 3 plots
                                 for plot in self.device_widgets[dev_id].plot_tab.plots:
                                     plot.setXRange(self.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.current_time, padding=0)
                             else: # other devices
@@ -1854,7 +1545,7 @@ class MainWindow(QMainWindow):
                     pass
 
                 # if device is connected OR example device
-                elif dev.child('Connected').value() or dev.child('Device type').value() == Example_device:
+                elif dev.child('Connected').value() or dev.child('Device type').value() == EXAMPLE_DEVICE:
 
                     try:
                         # store device id to variable for clarity
@@ -1966,17 +1657,17 @@ class MainWindow(QMainWindow):
                                 elif dev.child('Device type').value() == PSM2: # PSM 2.0
                                     # TODO check if correct
                                     file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,Vacuum flow (lpm),PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)')
-                                elif dev.child('Device type').value() == Electrometer: # Electrometer
+                                elif dev.child('Device type').value() == ELECTROMETER: # ELECTROMETER
                                     file.write('YYYY.MM.DD hh:mm:ss,Voltage 1 (V),Voltage 2 (V),Voltage 3 (V)')
-                                elif dev.child('Device type').value() == CO2_sensor: # CO2
+                                elif dev.child('Device type').value() == CO2_SENSOR: # CO2
                                     file.write('YYYY.MM.DD hh:mm:ss,CO2 (ppm),T (C),RH (%)')
                                 elif dev.child('Device type').value() == RHTP: # RHTP
                                     file.write('YYYY.MM.DD hh:mm:ss,RH (%),T (C),P (Pa)')
                                 elif dev.child('Device type').value() == AFM: # AFM
                                     file.write('YYYY.MM.DD hh:mm:ss,Flow (lpm),Standard flow (slpm),RH (%),T (C),P (Pa)')
-                                elif dev.child('Device type').value() == eDiluter: # eDiluter
+                                elif dev.child('Device type').value() == EDILUTER: # eDiluter
                                     file.write('YYYY.MM.DD hh:mm:ss,Status,P1,P2,T1,T2,T3,T4,T5,T6,DF1,DF2,DFTot')
-                                elif dev.child('Device type').value() == Example_device:
+                                elif dev.child('Device type').value() == EXAMPLE_DEVICE:
                                     file.write('YYYY.MM.DD hh:mm:ss,Random value (0-100)')
                                 else:
                                     file.write('YYYY.MM.DD hh:mm:ss,value1,value2,value3')
@@ -2131,7 +1822,7 @@ class MainWindow(QMainWindow):
                             # pulse duration = dead time * 1000 (micro to nano) / number of pulses
                             pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
                         # get current threshold value with pulse_analysis_index
-                        threshold_value = self.pulse_analysis_thresholds[self.pulse_analysis_index[dev_id]]
+                        threshold_value = PULSE_ANALYSIS_THRESHOLDS[self.pulse_analysis_index[dev_id]]
                         # get filename from dictionary (includes file path)
                         filename = self.pulse_analysis_filenames[dev_id]
                         # append file with new data
@@ -2141,7 +1832,7 @@ class MainWindow(QMainWindow):
                         # increase pulse_analysis_index by 1
                         self.pulse_analysis_index[dev_id] += 1
                         # if all thresholds have been gone through, end pulse analysis
-                        if self.pulse_analysis_index[dev_id] >= len(self.pulse_analysis_thresholds):
+                        if self.pulse_analysis_index[dev_id] >= len(PULSE_ANALYSIS_THRESHOLDS):
                             self.pulse_analysis_stop(dev_id, dev)
                     except Exception as e:
                         print(traceback.format_exc())
@@ -2601,7 +2292,7 @@ class MainWindow(QMainWindow):
         for dev in self.params.child('Device settings').children():
             dev_id = dev.child('DevID').value()
             dev_type = dev.child('Device type').value()
-            if dev_type == Electrometer:
+            if dev_type == ELECTROMETER:
                 for plot in self.device_widgets[dev_id].plot_tab.plots:
                     plot.enableAutoRange()
             else:
@@ -2677,8 +2368,8 @@ class MainWindow(QMainWindow):
                     # if CPC, round value to 2 decimals
                     if dev.child('Device type').value() in [CPC, TSI_CPC]:
                         legend_string = device_name + ": " + str(round(self.plot_data[str(dev_id)][self.time_counter], 2))
-                    # if Electrometer, get Voltage 2 value
-                    elif dev.child('Device type').value() == Electrometer:
+                    # if ELECTROMETER, get Voltage 2 value
+                    elif dev.child('Device type').value() == ELECTROMETER:
                         legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':2'][self.time_counter])
                     # other devices
                     else:
@@ -2833,7 +2524,7 @@ class MainWindow(QMainWindow):
                 connected = dev.child('Connected').value() # True or False
 
                 # if connected is False
-                if not connected and device_type != Example_device: # exclude Example device
+                if not connected and device_type != EXAMPLE_DEVICE: # exclude Example device
                     # set disconnected icon
                     self.device_tabs.setTabIcon(tab_index, self.disconnected_icon)
                     # set general error status flag
@@ -3029,10 +2720,10 @@ class MainWindow(QMainWindow):
                 widget.set_tab.drying.clicked.connect(lambda: connection.send_set(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
                 #widget.set_tab.drying.clicked.connect(lambda: self.psm_update(device_id))
 
-            if device_type == Electrometer: # if Electrometer
-                widget = ElectrometerWidget(device_param) # create Electrometer widget instance
+            if device_type == ELECTROMETER: # if ELECTROMETER
+                widget = ElectrometerWidget(device_param) # create ELECTROMETER widget instance
 
-            if device_type == CO2_sensor: # if CO2
+            if device_type == CO2_SENSOR: # if CO2
                 widget = CO2Widget(device_param) # create CO2 widget instance
             
             if device_type == RHTP: # if RHTP
@@ -3061,7 +2752,7 @@ class MainWindow(QMainWindow):
                 # delay ensures connection is made from updated "Plot to main" AFM menu
                 QTimer.singleShot(60, lambda: device_param.child("Plot to main").sigValueChanged.connect(lambda parameter: self.afm_axis_changed(parameter.value())))
             
-            if device_type == eDiluter: # if eDiluter
+            if device_type == EDILUTER: # if eDiluter
                 widget = eDiluterWidget(device_param) # create eDiluter widget instance
                 # connect set_tab's mode buttons to send_set function
                 widget.set_tab.init.clicked.connect(lambda: connection.send_set("do set app.measurement.state INIT"))
@@ -3087,11 +2778,11 @@ class MainWindow(QMainWindow):
                 # connect device nickname change to ScalableGroup's update_cpc_dict function
                 device_param.child("Device nickname").sigValueChanged.connect(param.update_cpc_dict)
             
-            if device_type == Example_device: # if Example device
+            if device_type == EXAMPLE_DEVICE: # if Example device
                 widget = ExampleDeviceWidget(device_param) # create Example device widget instance
             
             # connect x range change of plot_tab's viewbox(es) to x_range_changed function (autoscale y)
-            if device_type == Electrometer:
+            if device_type == ELECTROMETER:
                 for plot in widget.plot_tab.plots:
                     plot.getViewBox().sigXRangeChanged.connect(self.x_range_changed)
             elif device_type in [RHTP, AFM]:
@@ -3138,11 +2829,11 @@ class MainWindow(QMainWindow):
                 # plot data string keys cleaning
                 if dictionary == self.plot_data:
                     # check if device has multiple data types
-                    if device_type in [CPC, TSI_CPC, Electrometer, RHTP, AFM]:
+                    if device_type in [CPC, TSI_CPC, ELECTROMETER, RHTP, AFM]:
                         # determine value types based on device type
                         if device_type in [CPC, TSI_CPC]:
                             types = ['', ':raw'] # concentration, raw concentration
-                        elif device_type == Electrometer:
+                        elif device_type == ELECTROMETER:
                             types = [':1', ':2', ':3'] # voltage 1, voltage 2, voltage 3
                         elif device_type == RHTP:
                             types = [':rh', ':t', ':p'] # RH, T, P
@@ -3213,27 +2904,27 @@ class MainPlot(GraphicsLayoutWidget):
         self.set_axis_style(self.axes[PSM], 'w') # set axis style
         self.axes[PSM].linkToView(self.viewboxes[PSM]) # link axis to viewbox
 
-        # Electrometer viewbox
-        self.viewboxes[Electrometer] = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewboxes[Electrometer]) # add viewbox to scene
-        self.viewboxes[Electrometer].setXLink(self.plot) # link x axis of viewbox to x axis of plot
-        # Electrometer axis
-        self.axes[Electrometer] = AxisItem('right') # create third axis
-        self.plot.layout.addItem(self.axes[Electrometer], 2, 4) # add axis to plot
-        self.axes[Electrometer].setLabel('Electrometer voltage 2', units='V', color='w') # set label
-        self.set_axis_style(self.axes[Electrometer], 'w') # set axis style
-        self.axes[Electrometer].linkToView(self.viewboxes[Electrometer]) # link axis to viewbox
+        # ELECTROMETER viewbox
+        self.viewboxes[ELECTROMETER] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[ELECTROMETER]) # add viewbox to scene
+        self.viewboxes[ELECTROMETER].setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        # ELECTROMETER axis
+        self.axes[ELECTROMETER] = AxisItem('right') # create third axis
+        self.plot.layout.addItem(self.axes[ELECTROMETER], 2, 4) # add axis to plot
+        self.axes[ELECTROMETER].setLabel('ELECTROMETER voltage 2', units='V', color='w') # set label
+        self.set_axis_style(self.axes[ELECTROMETER], 'w') # set axis style
+        self.axes[ELECTROMETER].linkToView(self.viewboxes[ELECTROMETER]) # link axis to viewbox
 
         # CO2 viewbox
-        self.viewboxes[CO2_sensor] = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewboxes[CO2_sensor]) # add viewbox to scene
-        self.viewboxes[CO2_sensor].setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[CO2_SENSOR] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[CO2_SENSOR]) # add viewbox to scene
+        self.viewboxes[CO2_SENSOR].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # CO2 axis
-        self.axes[CO2_sensor] = AxisItem('right') # create fourth axis
-        self.plot.layout.addItem(self.axes[CO2_sensor], 2, 5) # add axis to plot
-        self.axes[CO2_sensor].setLabel('CO2 concentration', units='ppm', color='w') # set label
-        self.set_axis_style(self.axes[CO2_sensor], 'w') # set axis style
-        self.axes[CO2_sensor].linkToView(self.viewboxes[CO2_sensor]) # link axis to viewbox
+        self.axes[CO2_SENSOR] = AxisItem('right') # create fourth axis
+        self.plot.layout.addItem(self.axes[CO2_SENSOR], 2, 5) # add axis to plot
+        self.axes[CO2_SENSOR].setLabel('CO2 concentration', units='ppm', color='w') # set label
+        self.set_axis_style(self.axes[CO2_SENSOR], 'w') # set axis style
+        self.axes[CO2_SENSOR].linkToView(self.viewboxes[CO2_SENSOR]) # link axis to viewbox
 
         # RHTP viewbox
         self.viewboxes[RHTP] = ViewBox() # create viewbox
@@ -3258,26 +2949,26 @@ class MainPlot(GraphicsLayoutWidget):
         self.axes[AFM].linkToView(self.viewboxes[AFM])
 
         # eDiluter viewbox
-        self.viewboxes[eDiluter] = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewboxes[eDiluter]) # add viewbox to scene
-        self.viewboxes[eDiluter].setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[EDILUTER] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[EDILUTER]) # add viewbox to scene
+        self.viewboxes[EDILUTER].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # eDiluter axis
-        self.axes[eDiluter] = AxisItem('right') # create axis
-        self.plot.layout.addItem(self.axes[eDiluter], 2, 8) # add axis to plot
-        self.axes[eDiluter].setLabel('eDiluter temperature', units='°C', color='w') # set label
-        self.set_axis_style(self.axes[eDiluter], 'w') # set axis style
-        self.axes[eDiluter].linkToView(self.viewboxes[eDiluter]) # link axis to viewbox
+        self.axes[EDILUTER] = AxisItem('right') # create axis
+        self.plot.layout.addItem(self.axes[EDILUTER], 2, 8) # add axis to plot
+        self.axes[EDILUTER].setLabel('eDiluter temperature', units='°C', color='w') # set label
+        self.set_axis_style(self.axes[EDILUTER], 'w') # set axis style
+        self.axes[EDILUTER].linkToView(self.viewboxes[EDILUTER]) # link axis to viewbox
 
         # Example device viewbox
-        self.viewboxes[Example_device] = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewboxes[Example_device]) # add viewbox to scene
-        self.viewboxes[Example_device].setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        self.viewboxes[EXAMPLE_DEVICE] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[EXAMPLE_DEVICE]) # add viewbox to scene
+        self.viewboxes[EXAMPLE_DEVICE].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # Example device axis
-        self.axes[Example_device] = AxisItem('right') # create axis
-        self.plot.layout.addItem(self.axes[Example_device], 2, 9) # add axis to plot
-        self.axes[Example_device].setLabel('Example device', units='units', color='w') # set label
-        self.set_axis_style(self.axes[Example_device], 'w') # set axis style
-        self.axes[Example_device].linkToView(self.viewboxes[Example_device]) # link axis to viewbox
+        self.axes[EXAMPLE_DEVICE] = AxisItem('right') # create axis
+        self.plot.layout.addItem(self.axes[EXAMPLE_DEVICE], 2, 9) # add axis to plot
+        self.axes[EXAMPLE_DEVICE].setLabel('Example device', units='units', color='w') # set label
+        self.set_axis_style(self.axes[EXAMPLE_DEVICE], 'w') # set axis style
+        self.axes[EXAMPLE_DEVICE].linkToView(self.viewboxes[EXAMPLE_DEVICE]) # link axis to viewbox
         
         # connect viewbox resize event to updateViews function
         self.plot.vb.sigResized.connect(self.updateViews)
@@ -3607,13 +3298,13 @@ class SinglePlot(GraphicsLayoutWidget):
             self.plot.setLabel('left', "Concentration", units='#/cc')
         elif device_type == PSM:
             self.plot.setLabel('left', "Saturator flow", units='lpm')
-        elif device_type == CO2_sensor:
+        elif device_type == CO2_SENSOR:
             self.plot.setLabel('left', "CO2", units='ppm')
-        elif device_type == eDiluter:
+        elif device_type == EDILUTER:
             self.plot.setLabel('left', "eDiluter temperature", units='°C')
         elif device_type == AFM:
             self.plot.setLabel('left', "Flow", units='lpm')
-        elif device_type == Example_device:
+        elif device_type == EXAMPLE_DEVICE:
             self.plot.setLabel('left', "Example device", units='units')
         
         self.viewbox = self.plot.getViewBox() # store viewbox to variable
@@ -4084,7 +3775,7 @@ class FloatTextEdit(QTextEdit):
         if event.key() in self.allowed_keys:
             super().keyPressEvent(event)
 
-# Electrometer widget
+# ELECTROMETER widget
 class ElectrometerWidget(QTabWidget):
     def __init__(self, device_parameter, *args, **kwargs):
         super().__init__()
@@ -4101,7 +3792,7 @@ class CO2Widget(QTabWidget):
         self.device_parameter = device_parameter # store device parameter tree reference
         self.name = device_parameter.name() # store device name
         # create plot widget for CO2
-        self.plot_tab = SinglePlot(device_type=CO2_sensor)
+        self.plot_tab = SinglePlot(device_type=CO2_SENSOR)
         self.addTab(self.plot_tab, "CO2 plot")
 
 # RHTP widget
@@ -4138,7 +3829,7 @@ class eDiluterWidget(QTabWidget):
         self.status_tab = eDiluterStatusTab()
         self.addTab(self.status_tab, "Status")
         # create plot widget for eDiluter
-        self.plot_tab = SinglePlot(device_type=eDiluter)
+        self.plot_tab = SinglePlot(device_type=EDILUTER)
         self.addTab(self.plot_tab, "eDiluter plot")
         # create dictionary with mode names and corresponding widgets
         self.mode_dict = {"INIT": self.set_tab.init, "WARMUP": self.set_tab.warmup,
@@ -4190,7 +3881,7 @@ class ExampleDeviceWidget(QTabWidget):
         self.device_parameter = device_parameter # store device parameter tree reference
         self.name = device_parameter.name() # store device name
         # create plot widget for CO2
-        self.plot_tab = SinglePlot(device_type=Example_device)
+        self.plot_tab = SinglePlot(device_type=EXAMPLE_DEVICE)
         self.addTab(self.plot_tab, "Example device plot")
 
 class eDiluterSetTab(QWidget):
