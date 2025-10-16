@@ -23,6 +23,19 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 from config import *
+from utils import (
+    compile_cpc_data,
+    compile_cpc_settings,
+    compile_psm_data,
+    compile_psm_settings,
+    _manage_plot_array,
+    _roll_pulse_array,
+    psm_update,
+    psm_flow_send,
+    cpc_flow_send,
+    ten_hz_clicked,
+    command_entered
+)
 from serial_connection import SerialDeviceConnection
 from params import ScalableGroup, params, p
 
@@ -417,9 +430,9 @@ class MainWindow(QMainWindow):
                                 # compile data list
                                 # if latest_data is nan, store data normally
                                 if isnan(self.latest_data[dev_id][0]):
-                                    self.latest_data[dev_id] = self.compile_cpc_data(meas_list, status_hex, total_errors)
+                                    self.latest_data[dev_id] = compile_cpc_data(meas_list, status_hex, total_errors)
                                 else: # if not nan, store data to extra_data dictionary
-                                    self.extra_data[dev_id] = self.compile_cpc_data(meas_list, status_hex, total_errors)
+                                    self.extra_data[dev_id] = compile_cpc_data(meas_list, status_hex, total_errors)
 
                             elif command == ":SYST:PRNT":
                                 # if prnt_list is nan, store data normally
@@ -516,7 +529,7 @@ class MainWindow(QMainWindow):
                         # get previous settings form latest_settings dictionary
                         previous_settings = self.latest_settings[dev_id]
                         # compile settings list
-                        settings = self.compile_cpc_settings(prnt_list, pall_list)
+                        settings = compile_cpc_settings(prnt_list, pall_list)
 
                         if not array_equal(settings, previous_settings, equal_nan=True): # if values have changed
                             # update latest settings
@@ -645,7 +658,7 @@ class MainWindow(QMainWindow):
                                     logging.exception(e)
                                 
                                 # compile psm data
-                                compiled_data = self.compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
+                                compiled_data = compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
                                 # if latest_data is nan, store data normally
                                 if isnan(float(self.latest_data[dev_id][2])): # check saturator flow rate value (index 2)
                                     self.latest_data[dev_id] = compiled_data
@@ -749,7 +762,7 @@ class MainWindow(QMainWindow):
                                 co_flow = "nan"
                             dilution_parameters = self.psm_dilution[dev_id]
                             # compile settings with latest PSM prnt settings and CO flow rate
-                            settings = self.compile_psm_settings(self.latest_psm_prnt[dev_id], co_flow, dilution_parameters, psm_version)
+                            settings = compile_psm_settings(self.latest_psm_prnt[dev_id], co_flow, dilution_parameters, psm_version)
                             # store settings to latest settings dictionary with device id as key
                             self.latest_settings[dev_id] = settings
                             # add par update flag
@@ -1172,7 +1185,7 @@ class MainWindow(QMainWindow):
 
         # ----- update plot data -----
 
-        self.x_time_list = self._manage_plot_array(self.x_time_list, max_reached=self.max_reached)
+        self.x_time_list = _manage_plot_array(self.x_time_list, self.time_counter, max_reached=self.max_reached)
         self.x_time_list[self.time_counter] = self.current_time
         
         # go through each device
@@ -1203,7 +1216,7 @@ class MainWindow(QMainWindow):
 
                     # Manage all arrays for this device type in one go
                     for i in types:
-                        self.plot_data[str(dev_id)+i] = self._manage_plot_array(self.plot_data[str(dev_id)+i], max_reached=self.max_reached)
+                        self.plot_data[str(dev_id)+i] = _manage_plot_array(self.plot_data[str(dev_id)+i], self.time_counter, max_reached=self.max_reached)
                 
                 # other devices
                 else:
@@ -1211,16 +1224,18 @@ class MainWindow(QMainWindow):
                     if dev_id not in self.plot_data:
                         # make the new list the same size as x_time_list
                         self.plot_data[dev_id] = full(len(self.x_time_list), nan)
-                    self.plot_data[dev_id] = self._manage_plot_array(self.plot_data[dev_id], max_reached=self.max_reached)
+                    self.plot_data[dev_id] = _manage_plot_array(self.plot_data[dev_id], self.time_counter, max_reached=self.max_reached)
                 
                 # create lists for pulse duration and pulse ratio if they don't exist yet
                 if dev_type == CPC:
-                    if str(dev_id)+':pd' not in self.plot_data:
-                        self.plot_data[str(dev_id)+':pd'] = full(86400, nan) # 24 hours in seconds
-                    self._roll_pulse_array(str(dev_id)+':pd')
-                    if str(dev_id)+':pr' not in self.plot_data:
-                        self.plot_data[str(dev_id)+':pr'] = full(86400, nan)
-                    self._roll_pulse_array(str(dev_id)+':pr')
+                    key_pd = str(dev_id)+':pd'
+                    if key_pd not in self.plot_data:
+                        self.plot_data[key_pd] = full(86400, nan) # 24 hours in seconds
+                    self.plot_data[key_pd] = _roll_pulse_array(self.plot_data[key_pd])
+                    key_pr = str(dev_id)+':pr'
+                    if key_pr not in self.plot_data:
+                        self.plot_data[key_pr] = full(86400, nan)
+                    self.plot_data[key_pr] = _roll_pulse_array(self.plot_data[key_pr])
                 
                 # if device is connected, add latest_values data to plot_data according to device
                 if dev.child('Connected').value():
@@ -1330,27 +1345,6 @@ class MainWindow(QMainWindow):
                 print(traceback.format_exc())
                 logging.exception(e)
 
-    def _manage_plot_array(self, arr, max_reached=False):
-        """Centralized array shift/double logic. Returns arr (mutated or new)."""
-        if self.time_counter >= MAX_TIME_SEC - 1:
-            if max_reached:
-                # Truncate if needed 
-                if len(arr) > MAX_TIME_SEC:
-                    arr = arr[:MAX_TIME_SEC]
-                arr[:-1] = arr[1:]  # Shift left (mutates)
-                arr[-1] = nan       # End with nan (mutates)
-        elif self.time_counter >= len(arr):  # Use len() for safety
-            tmp = arr.copy()
-            new_size = len(tmp) * 2
-            arr = full(new_size, nan)
-            arr[:len(tmp)] = tmp
-        return arr  # return for reassignment
-
-    def _roll_pulse_array(self, key):
-        arr = self.plot_data[key]
-        arr = roll(arr, -1)
-        arr[-1] = nan
-        self.plot_data[key] = arr  # Reassign if needed
     
     # update plots with plot data lists
     def update_figures_and_menus(self):
@@ -1880,152 +1874,8 @@ class MainWindow(QMainWindow):
         if dev_id in self.ten_hz_filenames:
             self.ten_hz_filenames.pop(dev_id)
 
-    # compile data list for CPC .dat file
-    def compile_cpc_data(self, meas, status_hex, total_errors):
-
-        # determine pulse ratio
-        if str(meas[3]) == "nan":
-            pulse_ratio = "nan"
-        elif meas[1] == 0:
-            pulse_ratio = 0
-        else:
-            pulse_ratio = round(meas[3]/meas[1], 2) # calculate and round to 2 decimals
-
-        cpc_data = [ # TODO nominal flow concentration
-            meas[0], meas[2], meas[1], # concentration, dead time, number of pulses during average
-            meas[5], meas[7], meas[6], meas[8], # T: saturator, condenser, optics, cabin
-            meas[9], meas[10], meas[11], meas[12], # P: inlet, critical orifice, nozzle, cabin
-            int(meas[14]), pulse_ratio, # liquid level, pulse ratio
-            total_errors, status_hex # total number of errors, hexadecimal system status
-            # TODO add OPC voltage level when added to firmware
-        ]
-        return cpc_data
     
-    # compile settings list for CPC .par file
-    def compile_cpc_settings(self, prnt, pall):
-        cpc_settings = [
-            prnt[5], pall[24], prnt[10], # averaging time, nominal inlet flow rate, measured cpc flow rate
-            prnt[8], prnt[6], prnt[7], # temperature set points: saturator, condenser, optics
-            int(prnt[1]), pall[26], pall[27], int(prnt[4]), # autofill, OPC counter threshold voltage, OPC counter threshold voltage 2, water removal
-            prnt[12], int(prnt[2]), pall[20], pall[25] # dead time correction, drain, k-factor, tau
-            # TODO add Firmware version
-        ]
-        return cpc_settings
 
-    # compile data list for PSM .dat file
-    def compile_psm_data(self, meas, status_hex, note_hex, scan_status, psm_version):
-
-        # determine PSM status
-        if int(status_hex, 16) == 0:
-            psm_status = 1
-        else:
-            psm_status = 0
-        # determine PSM note
-        if int(note_hex, 16) == 0:
-            psm_note = 1
-        else:
-            psm_note = 0
-
-        # concentration form PSM is calculated and stored later in write_data
-        # cut-off diameter is left with a "nan" placeholder for now
-        psm_data = [
-            "nan", "nan", meas[0], meas[1], # concentration from PSM, cut-off diameter, saturator flow rate, excess flow rate
-            meas[3], meas[2], meas[4], meas[6], meas[5], meas[7], # psm saturator t, growth tube t, inlet t, drainage t, heater t, psm cabin t
-            meas[9], meas[10], meas[11], meas[12], # inlet p, inlet-sat p, sat-excess p, critical orifice p,
-            scan_status, # scan status number (9 if undefined)
-            psm_status, psm_note, # PSM status (1 ok / 0 nok), PSM notes (1 ok / 0 notes)
-            # CPC nan placeholders, replaced later if CPC is connected
-            "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan",
-            status_hex, note_hex # PSM status (hex), PSM notes (hex)
-        ]
-        # if PSM 2.0, insert vacuum flow rate (before PSM status number)
-        if psm_version == PSM2:
-            psm_data.insert(15, meas[13]) # vacuum flow rate
-
-        return psm_data
-    
-    # compile settings list for PSM .par file
-    def compile_psm_settings(self, prnt, co_flow, dilution_parameters, psm_version):
-        
-        # inlet flow is calculated and stored in update_plot_data
-        psm_settings = [
-            prnt[1], prnt[2], prnt[3], prnt[4], prnt[5], # T setpoints: growth tube, PSM saturator, inlet, heater, drainage
-            prnt[6], "nan" # PSM stored CPC flow rate, inlet flow rate (added when calculated),
-            # CO flow (Retrofit only),
-            # dilution parameters,
-            # CPC values (added in write_data),
-        ]
-
-        # if PSM Retrofit, add CO flow rate
-        if psm_version == PSM:
-            psm_settings.append(co_flow)
-        
-        # add dilution parameters
-        for value in dilution_parameters:
-            psm_settings.append(value)
-
-        # add CPC values later in write_data if CPC connected
-        return psm_settings
-    
-    # sets psm_settings_updates flag for specified PSM device
-    # when flag is True, PSM settings are requested from device in get_dev_data
-    def psm_update(self, device_id):
-        self.psm_settings_updates[device_id] = True
-    
-    # sends set flow rate to PSM
-    def psm_flow_send(self, device, value):
-        device.child("Connection").value().send_set_val(value, ":SET:FLOW:CPC ", decimals=3)
-    
-    # sends set flow rate to CPC
-    def cpc_flow_send(self, device, value):
-        # get connected CPC ID
-        cpc_id = device.child("Connected CPC").value()
-        # if PSM is connected to CPC, send value to CPC
-        if cpc_id != 'None':
-            # get connected CPC device parameter
-            for cpc in self.params.child('Device settings').children():
-                if cpc.child('DevID').value() == cpc_id:
-                    cpc_device = cpc
-                    break
-            # if device is Airmodus CPC
-            if cpc_device.child('Device type').value() == CPC:
-                # send flow rate set value to CPC
-                cpc_device.child("Connection").value().send_set_val(value, ":SET:FLOW ", decimals=3)
-
-    # when command is entered, send message to device and update .par file
-    def command_entered(self, dev_id, dev_param):
-        try:
-            # get message from command input and clear input
-            command_widget = self.device_widgets[dev_id].set_tab.command_widget
-            message = command_widget.command_input.text()
-            command_widget.command_input.clear()
-            # update command_widget's text box
-            command_widget.update_text_box(message)
-
-            # send message to device
-            dev_param.child('Connection').value().send_message(message)
-
-            # if saving is on, store command to latest_command dictionary
-            if self.params.child('Data settings').child('Save data').value():
-                self.latest_command[dev_id] = message
-        
-        except Exception as e:
-            self.device_widgets[dev_id].set_tab.command_widget.update_text_box(str(e))
-    
-    # change PSM's 10 Hz parameter and button status
-    def ten_hz_clicked(self, psm_param, psm_widget):
-        # get current status of PSM 10 hz parameter
-        status = psm_param.child('10 hz').value()
-        # if 10 hz is off, turn it on
-        if status == False:
-            # set 10 hz flag to True
-            psm_param.child('10 hz').setValue(True)
-            psm_widget.measure_tab.ten_hz.change_color(1)       
-        # if 10 hz is on, turn it off
-        elif status == True:
-            # set 10 hz flag to False
-            psm_param.child('10 hz').setValue(False)
-            psm_widget.measure_tab.ten_hz.change_color(0)
     
     # compare current day to file start day (self.start_day defined in save_changed)
     def compare_day(self):
@@ -2627,7 +2477,7 @@ class MainWindow(QMainWindow):
                 widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
                 widget.set_tab.water_removal.clicked.connect(lambda: connection.send_set(":SET:WREM " + str(int(widget.set_tab.water_removal.isChecked()))))
                 # connect command_input to comand_entered function
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.device_widgets))
                 # connect Set tab set points to send_set_val function
                 # send set value and message using lambda once value has been changed
                 # stepChanged signal is defined in SpinBox and DoubleSpinBox classes
@@ -2664,61 +2514,61 @@ class MainWindow(QMainWindow):
                 widget.measure_tab.step.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_step()))
                 widget.measure_tab.fixed.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_fixed()))
                 # connect ten_hz button to ten_hz_clicked function
-                widget.measure_tab.ten_hz.clicked.connect(lambda: self.ten_hz_clicked(device_param, widget))
+                widget.measure_tab.ten_hz.clicked.connect(lambda: ten_hz_clicked(device_param, widget))
                 # connect SetTab SetWidgets to send_set_val function and set settings update flag to True
                 # growth tube temperature set
                 widget.set_tab.set_growth_tube_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:GT "))
-                widget.set_tab.set_growth_tube_temp.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_growth_tube_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.set_growth_tube_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_growth_tube_temp.value_input.text()), ":SET:TEMP:GT "))
-                widget.set_tab.set_growth_tube_temp.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_growth_tube_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # saturator temperature set
                 widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:SAT "))
-                widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_saturator_temp.value_input.text()), ":SET:TEMP:SAT "))
-                widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # inlet temperature set
                 widget.set_tab.set_inlet_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:INL "))
-                widget.set_tab.set_inlet_temp.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_inlet_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.set_inlet_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_inlet_temp.value_input.text()), ":SET:TEMP:INL "))
-                widget.set_tab.set_inlet_temp.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_inlet_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # heater temperature set
                 widget.set_tab.set_heater_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:PRE "))
-                widget.set_tab.set_heater_temp.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_heater_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.set_heater_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_heater_temp.value_input.text()), ":SET:TEMP:PRE "))
-                widget.set_tab.set_heater_temp.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_heater_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # drainage temperature set
                 widget.set_tab.set_drainage_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:DRN "))
-                widget.set_tab.set_drainage_temp.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_drainage_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_drainage_temp.value_input.text()), ":SET:TEMP:DRN "))
-                widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # cpc inlet flow set (send value to PSM)
                 #widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:FLOW:CPC "))
-                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda value: self.psm_flow_send(device_param, value))
-                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda value: psm_flow_send(device_param, value))
+                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 #widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_cpc_inlet_flow.value_input.text()), ":SET:FLOW:CPC "))
-                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: self.psm_flow_send(device_param, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
-                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: psm_flow_send(device_param, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
+                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # cpc sample flow set (send value to connected CPC if it exists)
                 # TODO is psm_update required when setting cpc sample flow?
-                widget.set_tab.set_cpc_sample_flow.value_spinbox.stepChanged.connect(lambda value: self.cpc_flow_send(device_param, value))
-                widget.set_tab.set_cpc_sample_flow.value_input.returnPressed.connect(lambda: self.cpc_flow_send(device_param, float(widget.set_tab.set_cpc_sample_flow.value_input.text())))
+                widget.set_tab.set_cpc_sample_flow.value_spinbox.stepChanged.connect(lambda value: cpc_flow_send(device_param, value))
+                widget.set_tab.set_cpc_sample_flow.value_input.returnPressed.connect(lambda: cpc_flow_send(device_param, float(widget.set_tab.set_cpc_sample_flow.value_input.text())))
                 # if device type is PSM, connect co flow set
                 if device_type == PSM:
-                    widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
-                    widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                    widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                    widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                     # set value to hidden 'CO flow' parameter in parameter tree
                     widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda value: device_param.child('CO flow').setValue(str(round(value, 3))))
                     widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: device_param.child('CO flow').setValue(widget.set_tab.set_co_flow.value_input.text()))
                 # connect command_input to command_entered and psm_update functions
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param))
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.device_widgets))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # connect liquid operations
                 widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
-                #widget.set_tab.autofill.clicked.connect(lambda: self.psm_update(device_id))
+                #widget.set_tab.autofill.clicked.connect(lambda: self.psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.drain.clicked.connect(lambda: connection.send_set(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
-                #widget.set_tab.drain.clicked.connect(lambda: self.psm_update(device_id))
+                #widget.set_tab.drain.clicked.connect(lambda: self.psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.drying.clicked.connect(lambda: connection.send_set(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
-                #widget.set_tab.drying.clicked.connect(lambda: self.psm_update(device_id))
+                #widget.set_tab.drying.clicked.connect(lambda: self.psm_update(device_id, self.psm_settings_updates))
 
             if device_type == ELECTROMETER: # if ELECTROMETER
                 widget = ElectrometerWidget(device_param) # create ELECTROMETER widget instance
@@ -2766,7 +2616,7 @@ class MainWindow(QMainWindow):
                 widget.set_tab.df_2.prev_button.clicked.connect(lambda: connection.send_set("do set dilution.2nd.prev true"))
                 widget.set_tab.df_2.next_button.clicked.connect(lambda: connection.send_set("do set dilution.2nd.next true"))
                 # connect command_input to command_entered function
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param, self.device_widgets, self.latest_command))
             
             if device_type == TSI_CPC: # if TSI CPC
                 # create TSI widget instance
