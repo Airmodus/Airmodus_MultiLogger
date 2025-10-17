@@ -1928,6 +1928,10 @@ class MainWindow(QMainWindow):
         self.com_descriptions = {} # reset com descriptions
     
     def list_com_ports(self):
+        """
+        Scan and list available serial COM ports, update descriptions,
+        inquire device identities for new ports, and manage connection states.
+        """
         # get list of current available serial ports as ListPortInfo objects
         ports = list_ports.comports()
         # check if ports list has changed from stored ports
@@ -1946,6 +1950,7 @@ class MainWindow(QMainWindow):
                 self.com_descriptions[port.device] = port.description
 
             # if inquiry flag is set, inquire identity from ports not yet identified
+            # (if port has a default desc so it's not yet been acquired)
             if self.inquiry_flag and self.com_descriptions[port.device] == port.description:
                 try:
                     # attempt to open port with timeout and baud rate (throughput as bits per second)
@@ -1989,48 +1994,75 @@ class MainWindow(QMainWindow):
         return com_port_list
     
     def update_com_ports(self, new_ports, com_port_list):
-        # read messages from new_ports and update descriptions
-        for port in new_ports:
+        """
+        Process new serial port connections to read device identity messages,
+        update port descriptions, close connections, and refresh GUI display.
+        """
+        # Ensure all connections are properly closed after processing
+        def close_connection(port, conn):
             try:
-                # read received messages
-                messages = new_ports[port].read_all().decode().split("\r")
+                if conn and conn.is_open:
+                    conn.close()
+            except Exception as e:
+                logging.exception(f"Failed to close connection for {port}: {e}")
+        # read messages from new_ports and update descriptions
+        for port, serial_conn in list(new_ports.items()):
+            try:
+                # read available messages, decode and split messages by return char
+                raw_data = serial_conn.read_all()
+                if not raw_data: 
+                    continue # no data available, skip to close
+
+                messages = raw_data.decode('utf-8', errors='ignore').split('\r\n')
                 print("update_com_ports -", port, "messages:", messages)
-                # go through messages and find *IDN
+
                 for message in messages:
-                    # if message length is above 5 ("*IDN " + device IDN)
-                    if len(message) > 5:
-                        # if "*IDN " is part of message
-                        if "*IDN " in message:
-                            # read after "*IDN " and store to com_descriptions
-                            serial_number = message[message.index("*IDN ")+5:]
-                            serial_number = serial_number.strip("\n")
-                            serial_number = serial_number.strip("\r")
-                            self.com_descriptions[port] = serial_number
-                            new_ports[port].close() # close port after *IDN response
-                        # eDiluter ID
-                        elif " ID " in message:
-                            # read device ID between " ID " and ", Status" and store to com_descriptions
-                            self.com_descriptions[port] = message[message.index(" ID ")+4:message.index(", Status")]
-                            new_ports[port].close() # close port after *IDN response
+                    message = message.strip()
+                    if len(message) <= 5: # message needs to be above 5 ("*IDN " + device IDN)
+                        continue
+
+                    # handle *IDN response for serial number
+                    if message.startswith('*IDN '):
+                        serial_number = message[5:].strip()
+                        self.com_descriptions[port] = serial_number
+                        close_connection(port, serial_conn)
+                        del new_ports[port]  # Remove after successful processing
+                        break  # Assume one IDN response per inquiry
+
+                    # handle eDiluter ID response
+                    elif ' ID ' in message and ', Status' in message:
+                        start_idx = message.index(' ID ') + 4
+                        end_idx = message.index(', Status')
+                        device_id = message[start_idx:end_idx].strip()
+                        self.com_descriptions[port] = device_id
+                        close_connection(port, serial_conn)
+                        del new_ports[port]  # Remove after successful processing
+                        break  # Assume one ID response per inquiry
+
+            except UnicodeDecodeError as e:
+                logging.warning(f"Unicode decode error for {port}: {e}")
             except Exception as e:
-                print(traceback.format_exc())
-                logging.exception(e)
-            try: # if inquiry has ended and port is still open, close port
-                if self.inquiry_flag == False and new_ports[port].is_open:
-                    new_ports[port].close()
-            except Exception as e:
-                print(traceback.format_exc())
-                logging.exception(e)
-        # compile com_ports_text using com_descriptions
-        # add only devices that are connected - in com_port_list
-        com_ports_text = ""
-        for key in self.com_descriptions:
-            # if port is currently physically connected - in com_port_list
-            if key in com_port_list:
-                com_ports_text += key + " - " + self.com_descriptions[key] + "\n"
+                logging.exception(f"Error processing messages for {port}: {e}")
+
+        # close any remaining open connections (like when no IDN response received)
+        if not self.inquiry_flag:
+            for port, conn in list(new_ports.items()):
+                close_connection(port, conn)
+                del new_ports[port]
+
+        # formatted text for connected ports only, sorted by port name
+        connected_descriptions = {
+            key: desc for key, desc in self.com_descriptions.items()
+            if key in com_port_list
+        }
+        sorted_ports = sorted(connected_descriptions.items())
+        com_ports_text = '\n'.join(f"{port} - {desc}" for port, desc in sorted_ports)
+
         # update GUI 'Available serial ports' text box if com port list has changed
-        if com_ports_text != self.params.child('Serial ports').child('Available serial ports').value():
+        current_value = self.params.child('Serial ports').child('Available serial ports').value()
+        if com_ports_text != current_value:
             self.params.child('Serial ports').child('Available serial ports').setValue(com_ports_text)
+            logging.debug(f"Updated GUI with new COM ports text:\n{com_ports_text}")
 
     def save_ini(self):
         # check if resume on startup is on
