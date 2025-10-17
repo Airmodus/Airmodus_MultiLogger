@@ -23,6 +23,51 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 from config import *
+from utils import (
+    compile_cpc_data,
+    compile_cpc_settings,
+    compile_psm_data,
+    compile_psm_settings,
+    _manage_plot_array,
+    _roll_pulse_array,
+    psm_update,
+    psm_flow_send,
+    cpc_flow_send,
+    ten_hz_clicked,
+    command_entered
+)
+from widgets import (
+    SetWidget,
+    SpinBox,
+    DoubleSpinBox,
+    ToggleButton,
+    StartButton,
+    IndicatorWidget,
+    CommandWidget,
+    StepsWidget,
+    FloatTextEdit,
+    StatusLights,
+)
+from plots import (
+    MainPlot,
+    SinglePlot, 
+    TriplePlot, 
+    AFMPlot, 
+    ElectrometerPlot
+)
+
+from devices import (
+    CPCWidget, 
+    PSMWidget, 
+    CO2Widget, 
+    ElectrometerWidget, 
+    RHTPWidget,
+    eDiluterWidget, 
+    AFMWidget, 
+    TSIWidget, 
+    ExampleDeviceWidget
+)
+
 from serial_connection import SerialDeviceConnection
 from params import ScalableGroup, params, p
 
@@ -417,9 +462,9 @@ class MainWindow(QMainWindow):
                                 # compile data list
                                 # if latest_data is nan, store data normally
                                 if isnan(self.latest_data[dev_id][0]):
-                                    self.latest_data[dev_id] = self.compile_cpc_data(meas_list, status_hex, total_errors)
+                                    self.latest_data[dev_id] = compile_cpc_data(meas_list, status_hex, total_errors)
                                 else: # if not nan, store data to extra_data dictionary
-                                    self.extra_data[dev_id] = self.compile_cpc_data(meas_list, status_hex, total_errors)
+                                    self.extra_data[dev_id] = compile_cpc_data(meas_list, status_hex, total_errors)
 
                             elif command == ":SYST:PRNT":
                                 # if prnt_list is nan, store data normally
@@ -516,7 +561,7 @@ class MainWindow(QMainWindow):
                         # get previous settings form latest_settings dictionary
                         previous_settings = self.latest_settings[dev_id]
                         # compile settings list
-                        settings = self.compile_cpc_settings(prnt_list, pall_list)
+                        settings = compile_cpc_settings(prnt_list, pall_list)
 
                         if not array_equal(settings, previous_settings, equal_nan=True): # if values have changed
                             # update latest settings
@@ -645,7 +690,7 @@ class MainWindow(QMainWindow):
                                     logging.exception(e)
                                 
                                 # compile psm data
-                                compiled_data = self.compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
+                                compiled_data = compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
                                 # if latest_data is nan, store data normally
                                 if isnan(float(self.latest_data[dev_id][2])): # check saturator flow rate value (index 2)
                                     self.latest_data[dev_id] = compiled_data
@@ -749,7 +794,7 @@ class MainWindow(QMainWindow):
                                 co_flow = "nan"
                             dilution_parameters = self.psm_dilution[dev_id]
                             # compile settings with latest PSM prnt settings and CO flow rate
-                            settings = self.compile_psm_settings(self.latest_psm_prnt[dev_id], co_flow, dilution_parameters, psm_version)
+                            settings = compile_psm_settings(self.latest_psm_prnt[dev_id], co_flow, dilution_parameters, psm_version)
                             # store settings to latest settings dictionary with device id as key
                             self.latest_settings[dev_id] = settings
                             # add par update flag
@@ -1172,7 +1217,7 @@ class MainWindow(QMainWindow):
 
         # ----- update plot data -----
 
-        self.x_time_list = self._manage_plot_array(self.x_time_list, max_reached=self.max_reached)
+        self.x_time_list = _manage_plot_array(self.x_time_list, self.time_counter, max_reached=self.max_reached)
         self.x_time_list[self.time_counter] = self.current_time
         
         # go through each device
@@ -1203,7 +1248,7 @@ class MainWindow(QMainWindow):
 
                     # Manage all arrays for this device type in one go
                     for i in types:
-                        self.plot_data[str(dev_id)+i] = self._manage_plot_array(self.plot_data[str(dev_id)+i], max_reached=self.max_reached)
+                        self.plot_data[str(dev_id)+i] = _manage_plot_array(self.plot_data[str(dev_id)+i], self.time_counter, max_reached=self.max_reached)
                 
                 # other devices
                 else:
@@ -1211,16 +1256,18 @@ class MainWindow(QMainWindow):
                     if dev_id not in self.plot_data:
                         # make the new list the same size as x_time_list
                         self.plot_data[dev_id] = full(len(self.x_time_list), nan)
-                    self.plot_data[dev_id] = self._manage_plot_array(self.plot_data[dev_id], max_reached=self.max_reached)
+                    self.plot_data[dev_id] = _manage_plot_array(self.plot_data[dev_id], self.time_counter, max_reached=self.max_reached)
                 
                 # create lists for pulse duration and pulse ratio if they don't exist yet
                 if dev_type == CPC:
-                    if str(dev_id)+':pd' not in self.plot_data:
-                        self.plot_data[str(dev_id)+':pd'] = full(86400, nan) # 24 hours in seconds
-                    self._roll_pulse_array(str(dev_id)+':pd')
-                    if str(dev_id)+':pr' not in self.plot_data:
-                        self.plot_data[str(dev_id)+':pr'] = full(86400, nan)
-                    self._roll_pulse_array(str(dev_id)+':pr')
+                    key_pd = str(dev_id)+':pd'
+                    if key_pd not in self.plot_data:
+                        self.plot_data[key_pd] = full(86400, nan) # 24 hours in seconds
+                    self.plot_data[key_pd] = _roll_pulse_array(self.plot_data[key_pd])
+                    key_pr = str(dev_id)+':pr'
+                    if key_pr not in self.plot_data:
+                        self.plot_data[key_pr] = full(86400, nan)
+                    self.plot_data[key_pr] = _roll_pulse_array(self.plot_data[key_pr])
                 
                 # if device is connected, add latest_values data to plot_data according to device
                 if dev.child('Connected').value():
@@ -1330,27 +1377,6 @@ class MainWindow(QMainWindow):
                 print(traceback.format_exc())
                 logging.exception(e)
 
-    def _manage_plot_array(self, arr, max_reached=False):
-        """Centralized array shift/double logic. Returns arr (mutated or new)."""
-        if self.time_counter >= MAX_TIME_SEC - 1:
-            if max_reached:
-                # Truncate if needed 
-                if len(arr) > MAX_TIME_SEC:
-                    arr = arr[:MAX_TIME_SEC]
-                arr[:-1] = arr[1:]  # Shift left (mutates)
-                arr[-1] = nan       # End with nan (mutates)
-        elif self.time_counter >= len(arr):  # Use len() for safety
-            tmp = arr.copy()
-            new_size = len(tmp) * 2
-            arr = full(new_size, nan)
-            arr[:len(tmp)] = tmp
-        return arr  # return for reassignment
-
-    def _roll_pulse_array(self, key):
-        arr = self.plot_data[key]
-        arr = roll(arr, -1)
-        arr[-1] = nan
-        self.plot_data[key] = arr  # Reassign if needed
     
     # update plots with plot data lists
     def update_figures_and_menus(self):
@@ -1880,152 +1906,8 @@ class MainWindow(QMainWindow):
         if dev_id in self.ten_hz_filenames:
             self.ten_hz_filenames.pop(dev_id)
 
-    # compile data list for CPC .dat file
-    def compile_cpc_data(self, meas, status_hex, total_errors):
-
-        # determine pulse ratio
-        if str(meas[3]) == "nan":
-            pulse_ratio = "nan"
-        elif meas[1] == 0:
-            pulse_ratio = 0
-        else:
-            pulse_ratio = round(meas[3]/meas[1], 2) # calculate and round to 2 decimals
-
-        cpc_data = [ # TODO nominal flow concentration
-            meas[0], meas[2], meas[1], # concentration, dead time, number of pulses during average
-            meas[5], meas[7], meas[6], meas[8], # T: saturator, condenser, optics, cabin
-            meas[9], meas[10], meas[11], meas[12], # P: inlet, critical orifice, nozzle, cabin
-            int(meas[14]), pulse_ratio, # liquid level, pulse ratio
-            total_errors, status_hex # total number of errors, hexadecimal system status
-            # TODO add OPC voltage level when added to firmware
-        ]
-        return cpc_data
     
-    # compile settings list for CPC .par file
-    def compile_cpc_settings(self, prnt, pall):
-        cpc_settings = [
-            prnt[5], pall[24], prnt[10], # averaging time, nominal inlet flow rate, measured cpc flow rate
-            prnt[8], prnt[6], prnt[7], # temperature set points: saturator, condenser, optics
-            int(prnt[1]), pall[26], pall[27], int(prnt[4]), # autofill, OPC counter threshold voltage, OPC counter threshold voltage 2, water removal
-            prnt[12], int(prnt[2]), pall[20], pall[25] # dead time correction, drain, k-factor, tau
-            # TODO add Firmware version
-        ]
-        return cpc_settings
 
-    # compile data list for PSM .dat file
-    def compile_psm_data(self, meas, status_hex, note_hex, scan_status, psm_version):
-
-        # determine PSM status
-        if int(status_hex, 16) == 0:
-            psm_status = 1
-        else:
-            psm_status = 0
-        # determine PSM note
-        if int(note_hex, 16) == 0:
-            psm_note = 1
-        else:
-            psm_note = 0
-
-        # concentration form PSM is calculated and stored later in write_data
-        # cut-off diameter is left with a "nan" placeholder for now
-        psm_data = [
-            "nan", "nan", meas[0], meas[1], # concentration from PSM, cut-off diameter, saturator flow rate, excess flow rate
-            meas[3], meas[2], meas[4], meas[6], meas[5], meas[7], # psm saturator t, growth tube t, inlet t, drainage t, heater t, psm cabin t
-            meas[9], meas[10], meas[11], meas[12], # inlet p, inlet-sat p, sat-excess p, critical orifice p,
-            scan_status, # scan status number (9 if undefined)
-            psm_status, psm_note, # PSM status (1 ok / 0 nok), PSM notes (1 ok / 0 notes)
-            # CPC nan placeholders, replaced later if CPC is connected
-            "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan",
-            status_hex, note_hex # PSM status (hex), PSM notes (hex)
-        ]
-        # if PSM 2.0, insert vacuum flow rate (before PSM status number)
-        if psm_version == PSM2:
-            psm_data.insert(15, meas[13]) # vacuum flow rate
-
-        return psm_data
-    
-    # compile settings list for PSM .par file
-    def compile_psm_settings(self, prnt, co_flow, dilution_parameters, psm_version):
-        
-        # inlet flow is calculated and stored in update_plot_data
-        psm_settings = [
-            prnt[1], prnt[2], prnt[3], prnt[4], prnt[5], # T setpoints: growth tube, PSM saturator, inlet, heater, drainage
-            prnt[6], "nan" # PSM stored CPC flow rate, inlet flow rate (added when calculated),
-            # CO flow (Retrofit only),
-            # dilution parameters,
-            # CPC values (added in write_data),
-        ]
-
-        # if PSM Retrofit, add CO flow rate
-        if psm_version == PSM:
-            psm_settings.append(co_flow)
-        
-        # add dilution parameters
-        for value in dilution_parameters:
-            psm_settings.append(value)
-
-        # add CPC values later in write_data if CPC connected
-        return psm_settings
-    
-    # sets psm_settings_updates flag for specified PSM device
-    # when flag is True, PSM settings are requested from device in get_dev_data
-    def psm_update(self, device_id):
-        self.psm_settings_updates[device_id] = True
-    
-    # sends set flow rate to PSM
-    def psm_flow_send(self, device, value):
-        device.child("Connection").value().send_set_val(value, ":SET:FLOW:CPC ", decimals=3)
-    
-    # sends set flow rate to CPC
-    def cpc_flow_send(self, device, value):
-        # get connected CPC ID
-        cpc_id = device.child("Connected CPC").value()
-        # if PSM is connected to CPC, send value to CPC
-        if cpc_id != 'None':
-            # get connected CPC device parameter
-            for cpc in self.params.child('Device settings').children():
-                if cpc.child('DevID').value() == cpc_id:
-                    cpc_device = cpc
-                    break
-            # if device is Airmodus CPC
-            if cpc_device.child('Device type').value() == CPC:
-                # send flow rate set value to CPC
-                cpc_device.child("Connection").value().send_set_val(value, ":SET:FLOW ", decimals=3)
-
-    # when command is entered, send message to device and update .par file
-    def command_entered(self, dev_id, dev_param):
-        try:
-            # get message from command input and clear input
-            command_widget = self.device_widgets[dev_id].set_tab.command_widget
-            message = command_widget.command_input.text()
-            command_widget.command_input.clear()
-            # update command_widget's text box
-            command_widget.update_text_box(message)
-
-            # send message to device
-            dev_param.child('Connection').value().send_message(message)
-
-            # if saving is on, store command to latest_command dictionary
-            if self.params.child('Data settings').child('Save data').value():
-                self.latest_command[dev_id] = message
-        
-        except Exception as e:
-            self.device_widgets[dev_id].set_tab.command_widget.update_text_box(str(e))
-    
-    # change PSM's 10 Hz parameter and button status
-    def ten_hz_clicked(self, psm_param, psm_widget):
-        # get current status of PSM 10 hz parameter
-        status = psm_param.child('10 hz').value()
-        # if 10 hz is off, turn it on
-        if status == False:
-            # set 10 hz flag to True
-            psm_param.child('10 hz').setValue(True)
-            psm_widget.measure_tab.ten_hz.change_color(1)       
-        # if 10 hz is on, turn it off
-        elif status == True:
-            # set 10 hz flag to False
-            psm_param.child('10 hz').setValue(False)
-            psm_widget.measure_tab.ten_hz.change_color(0)
     
     # compare current day to file start day (self.start_day defined in save_changed)
     def compare_day(self):
@@ -2046,111 +1928,141 @@ class MainWindow(QMainWindow):
         self.com_descriptions = {} # reset com descriptions
     
     def list_com_ports(self):
-        # get list of available ports as serial objects
+        """
+        Scan and list available serial COM ports, update descriptions,
+        inquire device identities for new ports, and manage connection states.
+        """
+        # get list of current available serial ports as ListPortInfo objects
         ports = list_ports.comports()
         # check if ports list has changed from stored ports
         # if ports != self.current_ports: # if ports have changed, set flag for a specific time
         #     self.set_inquiry_flag()
         # self.current_ports = ports # store current ports for comparison
-        com_port_list = [] # list of port addresses
-        new_ports = {} # dictionary for new ports, ports are added after *IDN? send
-        # go through current ports
-        for port in sorted(ports):
-            # add comport to list of com port addresses
-            com_port_list.append(port[0])
-            # if port is not in com_descriptions
-            if port[0] not in self.com_descriptions:
-                # add port to com_descriptions with default descripion
-                self.com_descriptions[port[0]] = port[1]
-            # if inquiry flag is True, inquire IDN from ports that haven't been inquired yet
-            if self.inquiry_flag == True:
-                # inquire IDN from ports with default description
-                # if port has default description, port *IDN? hasn't been acquired
-                if self.com_descriptions[port[0]] == port[1]:
-                    try:
-                        # open port
-                        serial_connection = Serial(str(port[0]), 115200, timeout=0.2)
-                        # inquire device type - delay makes sure ESP32 init is done
-                        self.idn_inquiry(serial_connection)
-                        # add serial_connection to new_ports dictionary, port address : serial object
-                        # new_ports dictionary is sent to update_com_ports after delay
-                        new_ports[port[0]] = serial_connection
-                    # if port cannot be opened, look for serial number in device parameters
-                    except SerialException:
-                        for dev in self.params.child('Device settings').children():
-                            if osx_mode:
-                                if port[0] == dev.child('COM port').value():
-                                    # set description according to device's serial number parameter
-                                    self.com_descriptions[port[0]] = dev.child('Serial number').value()
-                            else:
-                                if port[0] == 'COM' + str(dev.child('COM port').value()):
-                                    # set description according to device's serial number parameter
-                                    self.com_descriptions[port[0]] = dev.child('Serial number').value()
-                    except Exception as e:
-                        print(traceback.format_exc())
-                        logging.exception(e)
-        # remove port descriptions for physically disconnected devices
-        remove_ports = []
-        for port in self.com_descriptions.keys():
-            if port not in com_port_list:
-                remove_ports.append(port)
-        for port in remove_ports:
-            self.com_descriptions.pop(port)
-        # if inquiry flag is True, check timeout
-        if self.inquiry_flag == True:
-            # if inquiry has timed out - if current time is bigger than inquiry_time + timeout (seconds)
-            if time() > self.inquiry_time + 3:
-                self.inquiry_flag = False # set inquiry flag to False
+        com_port_list = [] # list of current port device names (like 'COM3')
+        new_ports = {} # dictionary of new identified ports with active connections
 
-        # trigger update_com_ports with delay
-        # reads responses from opened ports and prints devices to GUI
+        # go over sorted ports by device name
+        for port in sorted(ports, key=lambda p: p.device):
+            com_port_list.append(port.device)
+
+            # add new port description if not previously known
+            if port.device not in self.com_descriptions:
+                self.com_descriptions[port.device] = port.description
+
+            # if inquiry flag is set, inquire identity from ports not yet identified
+            # (if port has a default desc so it's not yet been acquired)
+            if self.inquiry_flag and self.com_descriptions[port.device] == port.description:
+                try:
+                    # attempt to open port with timeout and baud rate (throughput as bits per second)
+                    serial_connection = Serial(str(port.device), 115200, timeout=0.2)
+                    # do device identity inquiry (delay makes sure device state init is done with ESP32)
+                    self.idn_inquiry(serial_connection)
+                    # store the serial connection for later usage with port name as the key
+                    # new_ports dictionary is sent to update_com_ports after delay
+                    new_ports[port.device] = serial_connection
+
+                except SerialException:
+                    # on failure try to update desc using device serial number from params
+                    for dev in self.params.child('Device settings').children():
+                        if osx_mode:
+                            if port.device == dev.child('COM port').value():
+                                # set description according to device's serial number parameter
+                                self.com_descriptions[port.device] = dev.child('Serial number').value()
+                        else:
+                            if port.device == 'COM' + str(dev.child('COM port').value()):
+                                # set description according to device's serial number parameter
+                                self.com_descriptions[port.device] = dev.child('Serial number').value()
+                except Exception as e:
+                    # log unexpected errors while trying to inquire the device
+                    print(traceback.format_exc())
+                    logging.exception(e)
+
+        # remove descriptions of ports that are no longer connected
+        disconnected_ports = [p for p in self.com_descriptions if p not in com_port_list]
+        for port in disconnected_ports:
+            self.com_descriptions.pop(port)
+
+        # if inquiry flag is True, check timeout
+        # manage inquiry flag timeout after 3 seconds
+        if self.inquiry_flag and time() > self.inquiry_time + 3:
+            self.inquiry_flag = False
+
+        # schedule update_com_ports to process new ports after a short delay
         QTimer.singleShot(800, lambda: self.update_com_ports(new_ports, com_port_list)) # delay increased from 600 to 800
-        # return list of port addresses
+
+        # return list of current port device names
         return com_port_list
     
     def update_com_ports(self, new_ports, com_port_list):
-        # read messages from new_ports and update descriptions
-        for port in new_ports:
+        """
+        Process new serial port connections to read device identity messages,
+        update port descriptions, close connections, and refresh GUI display.
+        """
+        # Ensure all connections are properly closed after processing
+        def close_connection(port, conn):
             try:
-                # read received messages
-                messages = new_ports[port].read_all().decode().split("\r")
+                if conn and conn.is_open:
+                    conn.close()
+            except Exception as e:
+                logging.exception(f"Failed to close connection for {port}: {e}")
+        # read messages from new_ports and update descriptions
+        for port, serial_conn in list(new_ports.items()):
+            try:
+                # read available messages, decode and split messages by return char
+                raw_data = serial_conn.read_all()
+                if not raw_data: 
+                    continue # no data available, skip to close
+
+                messages = raw_data.decode('utf-8', errors='ignore').split('\r\n')
                 print("update_com_ports -", port, "messages:", messages)
-                # go through messages and find *IDN
+
                 for message in messages:
-                    # if message length is above 5 ("*IDN " + device IDN)
-                    if len(message) > 5:
-                        # if "*IDN " is part of message
-                        if "*IDN " in message:
-                            # read after "*IDN " and store to com_descriptions
-                            serial_number = message[message.index("*IDN ")+5:]
-                            serial_number = serial_number.strip("\n")
-                            serial_number = serial_number.strip("\r")
-                            self.com_descriptions[port] = serial_number
-                            new_ports[port].close() # close port after *IDN response
-                        # eDiluter ID
-                        elif " ID " in message:
-                            # read device ID between " ID " and ", Status" and store to com_descriptions
-                            self.com_descriptions[port] = message[message.index(" ID ")+4:message.index(", Status")]
-                            new_ports[port].close() # close port after *IDN response
+                    message = message.strip()
+                    if len(message) <= 5: # message needs to be above 5 ("*IDN " + device IDN)
+                        continue
+
+                    # handle *IDN response for serial number
+                    if message.startswith('*IDN '):
+                        serial_number = message[5:].strip()
+                        self.com_descriptions[port] = serial_number
+                        close_connection(port, serial_conn)
+                        del new_ports[port]  # Remove after successful processing
+                        break  # Assume one IDN response per inquiry
+
+                    # handle eDiluter ID response
+                    elif ' ID ' in message and ', Status' in message:
+                        start_idx = message.index(' ID ') + 4
+                        end_idx = message.index(', Status')
+                        device_id = message[start_idx:end_idx].strip()
+                        self.com_descriptions[port] = device_id
+                        close_connection(port, serial_conn)
+                        del new_ports[port]  # Remove after successful processing
+                        break  # Assume one ID response per inquiry
+
+            except UnicodeDecodeError as e:
+                logging.warning(f"Unicode decode error for {port}: {e}")
             except Exception as e:
-                print(traceback.format_exc())
-                logging.exception(e)
-            try: # if inquiry has ended and port is still open, close port
-                if self.inquiry_flag == False and new_ports[port].is_open:
-                    new_ports[port].close()
-            except Exception as e:
-                print(traceback.format_exc())
-                logging.exception(e)
-        # compile com_ports_text using com_descriptions
-        # add only devices that are connected - in com_port_list
-        com_ports_text = ""
-        for key in self.com_descriptions:
-            # if port is currently physically connected - in com_port_list
-            if key in com_port_list:
-                com_ports_text += key + " - " + self.com_descriptions[key] + "\n"
+                logging.exception(f"Error processing messages for {port}: {e}")
+
+        # close any remaining open connections (like when no IDN response received)
+        if not self.inquiry_flag:
+            for port, conn in list(new_ports.items()):
+                close_connection(port, conn)
+                del new_ports[port]
+
+        # formatted text for connected ports only, sorted by port name
+        connected_descriptions = {
+            key: desc for key, desc in self.com_descriptions.items()
+            if key in com_port_list
+        }
+        sorted_ports = sorted(connected_descriptions.items())
+        com_ports_text = '\n'.join(f"{port} - {desc}" for port, desc in sorted_ports)
+
         # update GUI 'Available serial ports' text box if com port list has changed
-        if com_ports_text != self.params.child('Serial ports').child('Available serial ports').value():
+        current_value = self.params.child('Serial ports').child('Available serial ports').value()
+        if com_ports_text != current_value:
             self.params.child('Serial ports').child('Available serial ports').setValue(com_ports_text)
+            logging.debug(f"Updated GUI with new COM ports text:\n{com_ports_text}")
 
     def save_ini(self):
         # check if resume on startup is on
@@ -2627,7 +2539,7 @@ class MainWindow(QMainWindow):
                 widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
                 widget.set_tab.water_removal.clicked.connect(lambda: connection.send_set(":SET:WREM " + str(int(widget.set_tab.water_removal.isChecked()))))
                 # connect command_input to comand_entered function
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.device_widgets))
                 # connect Set tab set points to send_set_val function
                 # send set value and message using lambda once value has been changed
                 # stepChanged signal is defined in SpinBox and DoubleSpinBox classes
@@ -2664,61 +2576,61 @@ class MainWindow(QMainWindow):
                 widget.measure_tab.step.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_step()))
                 widget.measure_tab.fixed.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_fixed()))
                 # connect ten_hz button to ten_hz_clicked function
-                widget.measure_tab.ten_hz.clicked.connect(lambda: self.ten_hz_clicked(device_param, widget))
+                widget.measure_tab.ten_hz.clicked.connect(lambda: ten_hz_clicked(device_param, widget))
                 # connect SetTab SetWidgets to send_set_val function and set settings update flag to True
                 # growth tube temperature set
                 widget.set_tab.set_growth_tube_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:GT "))
-                widget.set_tab.set_growth_tube_temp.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_growth_tube_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.set_growth_tube_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_growth_tube_temp.value_input.text()), ":SET:TEMP:GT "))
-                widget.set_tab.set_growth_tube_temp.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_growth_tube_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # saturator temperature set
                 widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:SAT "))
-                widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_saturator_temp.value_input.text()), ":SET:TEMP:SAT "))
-                widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # inlet temperature set
                 widget.set_tab.set_inlet_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:INL "))
-                widget.set_tab.set_inlet_temp.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_inlet_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.set_inlet_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_inlet_temp.value_input.text()), ":SET:TEMP:INL "))
-                widget.set_tab.set_inlet_temp.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_inlet_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # heater temperature set
                 widget.set_tab.set_heater_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:PRE "))
-                widget.set_tab.set_heater_temp.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_heater_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.set_heater_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_heater_temp.value_input.text()), ":SET:TEMP:PRE "))
-                widget.set_tab.set_heater_temp.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_heater_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # drainage temperature set
                 widget.set_tab.set_drainage_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:DRN "))
-                widget.set_tab.set_drainage_temp.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_drainage_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_drainage_temp.value_input.text()), ":SET:TEMP:DRN "))
-                widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # cpc inlet flow set (send value to PSM)
                 #widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:FLOW:CPC "))
-                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda value: self.psm_flow_send(device_param, value))
-                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda value: psm_flow_send(device_param, value))
+                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 #widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_cpc_inlet_flow.value_input.text()), ":SET:FLOW:CPC "))
-                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: self.psm_flow_send(device_param, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
-                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: psm_flow_send(device_param, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
+                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # cpc sample flow set (send value to connected CPC if it exists)
                 # TODO is psm_update required when setting cpc sample flow?
-                widget.set_tab.set_cpc_sample_flow.value_spinbox.stepChanged.connect(lambda value: self.cpc_flow_send(device_param, value))
-                widget.set_tab.set_cpc_sample_flow.value_input.returnPressed.connect(lambda: self.cpc_flow_send(device_param, float(widget.set_tab.set_cpc_sample_flow.value_input.text())))
+                widget.set_tab.set_cpc_sample_flow.value_spinbox.stepChanged.connect(lambda value: cpc_flow_send(device_param, value))
+                widget.set_tab.set_cpc_sample_flow.value_input.returnPressed.connect(lambda: cpc_flow_send(device_param, float(widget.set_tab.set_cpc_sample_flow.value_input.text())))
                 # if device type is PSM, connect co flow set
                 if device_type == PSM:
-                    widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda: self.psm_update(device_id))
-                    widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                    widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                    widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                     # set value to hidden 'CO flow' parameter in parameter tree
                     widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda value: device_param.child('CO flow').setValue(str(round(value, 3))))
                     widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: device_param.child('CO flow').setValue(widget.set_tab.set_co_flow.value_input.text()))
                 # connect command_input to command_entered and psm_update functions
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param))
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.psm_update(device_id))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.device_widgets))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
                 # connect liquid operations
                 widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
-                #widget.set_tab.autofill.clicked.connect(lambda: self.psm_update(device_id))
+                #widget.set_tab.autofill.clicked.connect(lambda: self.psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.drain.clicked.connect(lambda: connection.send_set(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
-                #widget.set_tab.drain.clicked.connect(lambda: self.psm_update(device_id))
+                #widget.set_tab.drain.clicked.connect(lambda: self.psm_update(device_id, self.psm_settings_updates))
                 widget.set_tab.drying.clicked.connect(lambda: connection.send_set(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
-                #widget.set_tab.drying.clicked.connect(lambda: self.psm_update(device_id))
+                #widget.set_tab.drying.clicked.connect(lambda: self.psm_update(device_id, self.psm_settings_updates))
 
             if device_type == ELECTROMETER: # if ELECTROMETER
                 widget = ElectrometerWidget(device_param) # create ELECTROMETER widget instance
@@ -2766,7 +2678,7 @@ class MainWindow(QMainWindow):
                 widget.set_tab.df_2.prev_button.clicked.connect(lambda: connection.send_set("do set dilution.2nd.prev true"))
                 widget.set_tab.df_2.next_button.clicked.connect(lambda: connection.send_set("do set dilution.2nd.next true"))
                 # connect command_input to command_entered function
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param, self.device_widgets, self.latest_command))
             
             if device_type == TSI_CPC: # if TSI CPC
                 # create TSI widget instance
@@ -2865,1655 +2777,6 @@ class MainWindow(QMainWindow):
         self.startTimer() # start timer
         self.timer_functions() # call timer functions at start time
 
-# main plot widget
-class MainPlot(GraphicsLayoutWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-        
-        # create plot by adding it to widget
-        self.plot = self.addPlot()
-        # create legend
-        self.legend = LegendItem(offset=(70,20), labelTextColor='w', labelTextSize='11pt')
-        self.legend.setParentItem(self.plot.graphicsItem())
-        # create dictionaries for viewboxes and axes, use device type as key
-        self.viewboxes = {}
-        self.axes = {}
-
-        # time axis
-        self.plot.setAxisItems({'bottom':DateAxisItem()}) # set time axis to bottom
-        self.plot.setLabel('bottom', "Time") # set time axis label
-        self.axis_time = self.plot.getAxis('bottom') # store time axis to variable
-        self.set_axis_style(self.axis_time, 'w') # set axis style
-        self.axis_time.enableAutoSIPrefix(enable=False) # disable auto SI prefix
-
-        # CPC viewbox
-        self.viewboxes[CPC] = self.plot.getViewBox() # store default viewbox to dictionary
-        # CPC axis
-        self.axes[CPC] = self.plot.getAxis('left') # store left axis to dictionary
-        self.axes[CPC].setLabel('CPC concentration', units='#/cc', color='w') # set label
-        self.set_axis_style(self.axes[CPC], 'w') # set axis style
-
-        # PSM viewbox # TODO create function for viewbox and axis creation
-        self.viewboxes[PSM] = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewboxes[PSM]) # add viewbox to scene
-        self.viewboxes[PSM].setXLink(self.plot) # link x axis of viewbox to x axis of plot
-        # PSM axis
-        self.axes[PSM] = AxisItem('right') # create second axis
-        self.plot.layout.addItem(self.axes[PSM], 2, 3) # add axis to plot
-        self.axes[PSM].setLabel('PSM saturator flow rate', units='lpm', color='w') # set label
-        self.set_axis_style(self.axes[PSM], 'w') # set axis style
-        self.axes[PSM].linkToView(self.viewboxes[PSM]) # link axis to viewbox
-
-        # ELECTROMETER viewbox
-        self.viewboxes[ELECTROMETER] = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewboxes[ELECTROMETER]) # add viewbox to scene
-        self.viewboxes[ELECTROMETER].setXLink(self.plot) # link x axis of viewbox to x axis of plot
-        # ELECTROMETER axis
-        self.axes[ELECTROMETER] = AxisItem('right') # create third axis
-        self.plot.layout.addItem(self.axes[ELECTROMETER], 2, 4) # add axis to plot
-        self.axes[ELECTROMETER].setLabel('ELECTROMETER voltage 2', units='V', color='w') # set label
-        self.set_axis_style(self.axes[ELECTROMETER], 'w') # set axis style
-        self.axes[ELECTROMETER].linkToView(self.viewboxes[ELECTROMETER]) # link axis to viewbox
-
-        # CO2 viewbox
-        self.viewboxes[CO2_SENSOR] = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewboxes[CO2_SENSOR]) # add viewbox to scene
-        self.viewboxes[CO2_SENSOR].setXLink(self.plot) # link x axis of viewbox to x axis of plot
-        # CO2 axis
-        self.axes[CO2_SENSOR] = AxisItem('right') # create fourth axis
-        self.plot.layout.addItem(self.axes[CO2_SENSOR], 2, 5) # add axis to plot
-        self.axes[CO2_SENSOR].setLabel('CO2 concentration', units='ppm', color='w') # set label
-        self.set_axis_style(self.axes[CO2_SENSOR], 'w') # set axis style
-        self.axes[CO2_SENSOR].linkToView(self.viewboxes[CO2_SENSOR]) # link axis to viewbox
-
-        # RHTP viewbox
-        self.viewboxes[RHTP] = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewboxes[RHTP]) # add viewbox to scene
-        self.viewboxes[RHTP].setXLink(self.plot) # link x axis of viewbox to x axis of plot
-        # RHTP axis
-        self.axes[RHTP] = AxisItem('right') # create fifth axis
-        self.plot.layout.addItem(self.axes[RHTP], 2, 6) # add axis to plot
-        self.axes[RHTP].setLabel('RHTP', color='w') # set label
-        self.set_axis_style(self.axes[RHTP], 'w') # set axis style
-        self.axes[RHTP].linkToView(self.viewboxes[RHTP]) # link axis to viewbox
-
-        # AFM viewbox
-        self.viewboxes[AFM] = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewboxes[AFM]) # add viewbox to scene
-        self.viewboxes[AFM].setXLink(self.plot)
-        # AFM axis
-        self.axes[AFM] = AxisItem('right') # create sixth axis
-        self.plot.layout.addItem(self.axes[AFM], 2, 7) # add axis to plot
-        self.axes[AFM].setLabel('AFM', color='w')
-        self.set_axis_style(self.axes[AFM], 'w')
-        self.axes[AFM].linkToView(self.viewboxes[AFM])
-
-        # eDiluter viewbox
-        self.viewboxes[EDILUTER] = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewboxes[EDILUTER]) # add viewbox to scene
-        self.viewboxes[EDILUTER].setXLink(self.plot) # link x axis of viewbox to x axis of plot
-        # eDiluter axis
-        self.axes[EDILUTER] = AxisItem('right') # create axis
-        self.plot.layout.addItem(self.axes[EDILUTER], 2, 8) # add axis to plot
-        self.axes[EDILUTER].setLabel('eDiluter temperature', units='°C', color='w') # set label
-        self.set_axis_style(self.axes[EDILUTER], 'w') # set axis style
-        self.axes[EDILUTER].linkToView(self.viewboxes[EDILUTER]) # link axis to viewbox
-
-        # Example device viewbox
-        self.viewboxes[EXAMPLE_DEVICE] = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewboxes[EXAMPLE_DEVICE]) # add viewbox to scene
-        self.viewboxes[EXAMPLE_DEVICE].setXLink(self.plot) # link x axis of viewbox to x axis of plot
-        # Example device axis
-        self.axes[EXAMPLE_DEVICE] = AxisItem('right') # create axis
-        self.plot.layout.addItem(self.axes[EXAMPLE_DEVICE], 2, 9) # add axis to plot
-        self.axes[EXAMPLE_DEVICE].setLabel('Example device', units='units', color='w') # set label
-        self.set_axis_style(self.axes[EXAMPLE_DEVICE], 'w') # set axis style
-        self.axes[EXAMPLE_DEVICE].linkToView(self.viewboxes[EXAMPLE_DEVICE]) # link axis to viewbox
-        
-        # connect viewbox resize event to updateViews function
-        self.plot.vb.sigResized.connect(self.updateViews)
-        # call updateViews function to set viewboxes to same size
-        self.updateViews()
-
-        # connect plot's auto range button to set_auto_range function
-        self.plot.autoBtn.clicked.connect(self.set_auto_range)
-
-        # hide axes and disable SI scaling by default
-        for key in self.axes:
-            self.axes[key].hide()
-            self.axes[key].enableAutoSIPrefix(enable=False) # disable auto SI prefix
-        
-        # use automatic downsampling and clipping to reduce the drawing load
-        self.plot.setDownsampling(mode='peak')
-        self.plot.setClipToView(True)
-        # TODO does this affect all viewboxes?
-    
-    # handle view resizing
-    # called when plot widget (or window) is resized
-    # source: https://stackoverflow.com/questions/42931474/how-can-i-have-multiple-left-axisitems-with-the-same-alignment-position-using-py
-    def updateViews(self):
-        # set viewbox geometry to plot geometry
-        for viewbox in self.viewboxes.values():
-            # exclude CPC viewbox
-            if viewbox != self.viewboxes[CPC]:
-                viewbox.setGeometry(self.plot.vb.sceneBoundingRect())
-                # update linked axes
-                viewbox.linkedViewChanged(self.plot.vb, viewbox.XAxis)
-    
-    # set auto range on for all viewboxes
-    def set_auto_range(self):
-        for viewbox in self.viewboxes.values():
-            viewbox.enableAutoRange()
-    
-    def set_axis_style(self, axis, color):
-        axis.setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
-        axis.setPen(color)
-        axis.setTextPen(color)
-        axis.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
-
-    def show_hide_axis(self, device_type, show):
-        if device_type == PSM2:
-            axis = self.axes[PSM]
-        elif device_type == TSI_CPC:
-            axis = self.axes[CPC]
-        else:
-            axis = self.axes[device_type]
-        if show:
-            axis.show() # show axis
-        else:
-            axis.hide() # hide axis
-    
-    # change rhtp axis label according to value type
-    # None, "RH", "T", "P"
-    def change_rhtp_axis(self, value):
-        # TODO: only change axis if value differs from current axis
-        if value == None:
-            self.axes[RHTP].setLabel('RHTP', units=None, color='w')
-            self.axes[RHTP].hide() # hide axis
-        else:
-            if value == "RH":
-                self.axes[RHTP].setLabel('RHTP RH', units='%', color='w')
-            elif value == "T":
-                self.axes[RHTP].setLabel('RHTP T', units='°C', color='w')
-            elif value == "P":
-                self.axes[RHTP].setLabel('RHTP P', units='Pa', color='w')
-            self.axes[RHTP].show() # show axis
-        # set axis style
-        self.set_axis_style(self.axes[RHTP], 'w')
-    
-    def change_afm_axis(self, value):
-        if value == None:
-            self.axes[AFM].setLabel('AFM', units=None, color='w')
-            self.axes[AFM].hide() # hide axis
-        else:
-            if value == "Flow":
-                self.axes[AFM].setLabel('AFM flow', units='lpm', color='w')
-            elif value == "Standard flow":
-                self.axes[AFM].setLabel('AFM standard flow', units='slpm', color='w')
-            elif value == "RH":
-                self.axes[AFM].setLabel('AFM RH', units='%', color='w')
-            elif value == "T":
-                self.axes[AFM].setLabel('AFM T', units='°C', color='w')
-            elif value == "P":
-                self.axes[AFM].setLabel('AFM P', units='Pa', color='w')
-            self.axes[AFM].show() # show axis
-        # set axis style
-        self.set_axis_style(self.axes[AFM], 'w')
-        
-# triple plot widget containing three plots
-class TriplePlot(GraphicsLayoutWidget):
-    def __init__(self, device_type, *args, **kwargs):
-        super().__init__()
-
-        if device_type == 5: # RHTP
-            value_names = ["RH", "T", "P"]
-            unit_names = ["%", "°C", "Pa"]
-            colors = [(100,188,255), (255,100,100), (255, 255, 100)]
-        else: # other devices
-            value_names = ["val1", "val2", "val3"]
-            unit_names = ["unit1", "unit2", "unit3"]
-            colors = [(255,255,255), (255,100,100), (100,188,255)]
-        
-        # create plot by adding it to widget
-        self.plot = self.addPlot()
-
-        # time axis
-        self.plot.setAxisItems({'bottom':DateAxisItem()}) # set time axis to bottom
-        self.plot.setLabel('bottom', "Time") # set time axis label
-        self.axis_time = self.plot.getAxis('bottom') # store time axis to variable
-        self.set_axis_style(self.axis_time, 'w') # set axis style
-
-        # viewbox 1
-        self.viewbox1 = self.plot.getViewBox() # store default viewbox to variable
-        # axis 1
-        self.axis1 = self.plot.getAxis('left') # store left axis to variable
-        self.axis1.setLabel(value_names[0], units=unit_names[0], color=colors[0]) # set label
-        self.set_axis_style(self.axis1, colors[0]) # set axis style
-        # curve 1
-        self.curve1 = PlotCurveItem(pen=colors[0], connect="finite") # create curve 1
-        self.viewbox1.addItem(self.curve1) # add curve 1 to viewbox 1
-
-        # viewbox 2
-        self.viewbox2 = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox2) # add viewbox to scene
-        self.viewbox2.setXLink(self.plot) # link x axis of viewbox to x axis of plot
-        # axis 2
-        self.axis2 = AxisItem('right') # create second axis
-        self.plot.layout.addItem(self.axis2, 2, 3) # add axis to plot
-        self.axis2.setLabel(value_names[1], units=unit_names[1], color=colors[1]) # set label
-        self.set_axis_style(self.axis2, colors[1]) # set axis style
-        self.axis2.linkToView(self.viewbox2) # link axis to viewbox
-        # curve 2
-        self.curve2 = PlotCurveItem(pen=colors[1], connect="finite") # create curve 2
-        self.viewbox2.addItem(self.curve2) # add curve 2 to viewbox 2
-
-        # viewbox 3
-        self.viewbox3 = ViewBox() # create viewbox
-        self.plot.scene().addItem(self.viewbox3) # add viewbox to scene
-        self.viewbox3.setXLink(self.plot) # link x axis of viewbox to x axis of plot
-        # axis 3
-        self.axis3 = AxisItem('right') # create third axis
-        self.plot.layout.addItem(self.axis3, 2, 4) # add axis to plot
-        self.axis3.setLabel(value_names[2], units=unit_names[2], color=colors[2]) # set label
-        self.set_axis_style(self.axis3, colors[2]) # set axis style
-        self.axis3.linkToView(self.viewbox3) # link axis to viewbox
-        # curve 3
-        self.curve3 = PlotCurveItem(pen=colors[2], connect="finite") # create curve 3
-        self.viewbox3.addItem(self.curve3) # add curve 3 to viewbox 3
-
-        # create list of viewboxes
-        self.viewboxes = [self.viewbox1, self.viewbox2, self.viewbox3]
-
-        # connect viewbox resize event to updateViews function
-        self.plot.vb.sigResized.connect(self.updateViews)
-        # call updateViews function to set viewboxes to same size
-        self.updateViews()
-        
-        # use automatic downsampling and clipping to reduce the drawing load
-        self.plot.setDownsampling(mode='peak')
-        self.plot.setClipToView(True)
-    
-    # handle view resizing
-    # called when plot widget (or window) is resized
-    # source: https://stackoverflow.com/questions/42931474/how-can-i-have-multiple-left-axisitems-with-the-same-alignment-position-using-py
-    def updateViews(self):
-        # set viewbox geometry to plot geometry
-        for viewbox in self.viewboxes[1:]: # exclude viewbox 1
-            viewbox.setGeometry(self.plot.vb.sceneBoundingRect())
-            # update linked axes
-            viewbox.linkedViewChanged(self.plot.vb, viewbox.XAxis)
-
-    def set_axis_style(self, axis, color):
-        axis.setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
-        axis.setPen(color)
-        axis.setTextPen(color)
-        axis.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
-        axis.enableAutoSIPrefix(enable=False) # disable auto SI prefix
-
-class AFMPlot(GraphicsLayoutWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-
-        # define value names, units and colors
-        value_names = ["Flow", "Standard flow", "RH", "T", "P"]
-        unit_names = ["lpm", "slpm", "%", "°C", "Pa"]
-        colors = [(255,255,255), (255,100,255), (100,188,255), (255, 100, 100), (255, 255, 100)]
-
-        # create plot item and hide its default axes
-        self.plot = PlotItem()
-        self.plot.hideAxis('left')
-        self.plot.hideAxis('bottom')
-        # add plot to widget column 2, leave space for left axes
-        self.addItem(self.plot, row=0, col=2)
-
-        # create viewboxes for each axis
-        self.viewboxes = []
-        # store default viewbox
-        self.viewboxes.append(self.plot.getViewBox())
-        # create 4 additional viewboxes
-        for i in range(4):
-            viewbox = ViewBox() # create viewbox
-            self.plot.scene().addItem(viewbox) # add viewbox to scene
-            viewbox.setXLink(self.plot) # link x axis of viewbox to x axis of plot
-            self.viewboxes.append(viewbox) # store viewbox to list
-        
-        # create axes for each viewbox
-        self.axes = []
-        for i in range(2):
-            axis = AxisItem('left') # create left axis
-            self.axes.append(axis) # store axis to list
-            self.addItem(axis, row=0, col=i) # add axis to widget
-        for i in range(3):
-            axis = AxisItem('right') # create right axis
-            self.axes.append(axis) # store axis to list
-            self.addItem(axis, row=0, col=i+3) # add axis to widget, skip left axes and plot
-        
-        # link axes to viewboxes
-        for i in range(5):
-            self.axes[i].linkToView(self.viewboxes[i])
-        
-        # set axis labels and styles
-        for i in range(5):
-            # set label
-            self.axes[i].setLabel(value_names[i], units=unit_names[i], color=colors[i])
-            # set style
-            self.axes[i].setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
-            self.axes[i].setPen(colors[i])
-            self.axes[i].setTextPen(colors[i])
-            self.axes[i].label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
-            self.axes[i].enableAutoSIPrefix(enable=False) # disable auto SI prefix
-        
-        # create bottom time axis
-        self.axis_time = DateAxisItem('bottom')
-        # link time axis to viewbox
-        self.axis_time.linkToView(self.viewboxes[0])
-        # set botton axis label and style
-        self.axis_time.setLabel("Time")
-        self.axis_time.setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
-        self.axis_time.setPen('w')
-        self.axis_time.setTextPen('w')
-        self.axis_time.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
-        self.axis_time.enableAutoSIPrefix(enable=False) # disable auto SI prefix
-
-        # add bottom time axis to widget, same column as plot but on next row
-        self.addItem(self.axis_time, row=1, col=2)
-
-        # create curves for each viewbox
-        self.curves = []
-        for i in range(5):
-            curve = PlotCurveItem(pen=colors[i], connect="finite") # create curve
-            self.curves.append(curve) # store curve to list
-            self.viewboxes[i].addItem(curve) # add curve to viewbox
-        
-        # use automatic downsampling and clipping to reduce the drawing load
-        self.plot.setDownsampling(mode='peak')
-        self.plot.setClipToView(True)
-        
-        # connect viewbox resize event to updateViews function
-        self.plot.vb.sigResized.connect(self.updateViews)
-        # call updateViews function to set viewboxes to same size
-        self.updateViews()
-    
-    def updateViews(self):
-        # set viewbox geometry to plot geometry
-        for viewbox in self.viewboxes[1:]: # exclude first viewbox
-            viewbox.setGeometry(self.plot.vb.sceneBoundingRect())
-            # update linked axes
-            viewbox.linkedViewChanged(self.plot.vb, viewbox.XAxis)
-
-class ElectrometerPlot(GraphicsLayoutWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-
-        # list for storing references to plots
-        self.plots = []
-        # create plots and curves
-        # Voltage 1
-        self.plot1 = self.addPlot()
-        self.curve1 = self.plot1.plot(pen="g", connect="finite")
-        self.plots.append(self.plot1)
-        self.nextRow()
-        # Voltage 2
-        self.plot2 = self.addPlot()
-        self.curve2 = self.plot2.plot(pen="r", connect="finite")
-        self.plots.append(self.plot2)
-        self.nextRow()
-        # Voltage 3
-        self.plot3 = self.addPlot()
-        self.curve3 = self.plot3.plot(pen="b", connect="finite")
-        self.plots.append(self.plot3)
-        # set up plots
-        for i in range(3):
-            label = "Voltage " + str(i+1)
-            self.plots[i].setLabel('left', label, units='V') # set y-axis label
-            self.plots[i].setLabel('bottom', "Time") # set time axis label
-            self.plots[i].setAxisItems({'bottom':DateAxisItem()})
-            #self.plots[i].getAxis('left').enableAutoSIPrefix(enable=False) # disable auto SI prefix
-            self.plots[i].getAxis('bottom').enableAutoSIPrefix(enable=False) # disable auto SI prefix
-            self.plots[i].showGrid(x=True, y=True) # show grid by default
-            self.plots[i].setDownsampling(mode='peak')
-            self.plots[i].setClipToView(True)
-
-# single plot widget containing plot
-class SinglePlot(GraphicsLayoutWidget):
-    def __init__(self, device_type, *args, **kwargs):
-        super().__init__()
-
-        # create plot and curve
-        self.plot = self.addPlot() # create plot by adding it to widget
-        self.curve = self.plot.plot(pen="w", connect="finite") # create plot curve
-
-        # plot settings
-        self.plot.setAxisItems({'bottom':DateAxisItem()}) # set time axis to bottom
-        self.plot.getAxis('bottom').enableAutoSIPrefix(enable=False) # disable auto SI prefix 
-        self.plot.setLabel('bottom', "Time") # set time axis label
-        self.plot.showGrid(x=True, y=True) # show grid by default
-        self.plot.getAxis('left').enableAutoSIPrefix(enable=False) # disable auto SI prefix
-        # use automatic downsampling and clipping to reduce the drawing load
-        self.plot.setDownsampling(mode='peak')
-        self.plot.setClipToView(True)
-
-        # set y-axis label and units based on device type
-        if device_type == CPC:
-            self.plot.setLabel('left', "Concentration", units='#/cc')
-        elif device_type == PSM:
-            self.plot.setLabel('left', "Saturator flow", units='lpm')
-        elif device_type == CO2_SENSOR:
-            self.plot.setLabel('left', "CO2", units='ppm')
-        elif device_type == EDILUTER:
-            self.plot.setLabel('left', "eDiluter temperature", units='°C')
-        elif device_type == AFM:
-            self.plot.setLabel('left', "Flow", units='lpm')
-        elif device_type == EXAMPLE_DEVICE:
-            self.plot.setLabel('left', "Example device", units='units')
-        
-        self.viewbox = self.plot.getViewBox() # store viewbox to variable
-
-# CPC widget containing CPC related GUI elements as tabs
-class CPCWidget(QTabWidget):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__()
-        self.device_parameter = device_parameter # store device parameter tree reference
-        self.name = device_parameter.name() # store device name
-        # create set tab widget for cpc settings
-        self.set_tab = CPCSetTab()
-        self.addTab(self.set_tab, "Set")
-        # create status tab widget showing CPC values
-        self.status_tab = CPCStatusTab()
-        self.addTab(self.status_tab, "Status")
-        # create plot widget for Concentration
-        self.plot_tab = SinglePlot(device_type=CPC)
-        self.addTab(self.plot_tab, "Concentration")
-        # create pulse quality widget for CPC pulse quality monitoring
-        self.pulse_quality = PulseQuality()
-        self.addTab(self.pulse_quality, "Pulse quality")
-
-        # create list of widget references for updating gui with cpc system status
-        self.cpc_status_widgets = [
-            self.status_tab.temp_optics, self.status_tab.temp_saturator,
-            self.status_tab.temp_condenser, self.status_tab.pres_inlet,
-            self.status_tab.pres_nozzle, self.status_tab.laser_power,
-            self.status_tab.liquid_level, self.status_tab.temp_cabin,
-            self.status_tab.pres_critical_orifice, self.status_tab.pulse_quality
-        ]
-
-    # convert CPC status hex to binary and update error label colors
-    def update_errors(self, status_hex, cabin_p_error):
-        widget_amount = len(self.cpc_status_widgets) # get amount of widgets
-        status_bin = bin(int(status_hex, 16)) # convert hex to int and int to binary
-        status_bin = status_bin[2:].zfill(widget_amount) # remove 0b from string and fill with 0s
-        total_errors = status_bin.count("1") # count number of 1s in status_bin
-        inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
-        for i in range(widget_amount): # iterate through all status widgets
-            # change color of error label according to error bit
-            self.cpc_status_widgets[i].change_color(inverted_status_bin[i])
-        # update cabin pressure label color according to error status
-        if cabin_p_error:
-            self.status_tab.pres_cabin.change_color(1)
-            total_errors += 1
-        else:
-            self.status_tab.pres_cabin.change_color(0)
-        
-        return total_errors # return total number of errors
-    
-    def update_settings(self, settings):
-        # update GUI set values if they differ from CPC set values
-        # TODO remove repetition
-
-        # saturator temperature
-        if self.set_tab.set_saturator_temp.value_spinbox.value() != settings[8]:
-            # update value
-            self.set_tab.set_saturator_temp.value_spinbox.setValue(settings[8])
-            # if saturator temperature is nan, clear visible value
-            if str(settings[8]) == 'nan':
-                self.set_tab.set_saturator_temp.value_spinbox.clear()
-            # if text is empty (without suffix), set text with value
-            # TODO ? change this to text().split(" ")[0] == ""
-            elif self.set_tab.set_saturator_temp.value_spinbox.text()[:-3] == "":
-                self.set_tab.set_saturator_temp.value_spinbox.lineEdit().setText(str(settings[8]))
-
-        # condenser temperature
-        if self.set_tab.set_condenser_temp.value_spinbox.value() != settings[6]:
-            # update value
-            self.set_tab.set_condenser_temp.value_spinbox.setValue(settings[6])
-            # if condenser temperature is nan, clear visible value
-            if str(settings[6]) == 'nan':
-                self.set_tab.set_condenser_temp.value_spinbox.clear()
-            # if text is empty (without suffix), set text with value
-            elif self.set_tab.set_condenser_temp.value_spinbox.text()[:-3] == "":
-                self.set_tab.set_condenser_temp.value_spinbox.lineEdit().setText(str(settings[6]))
-
-        # averaging time
-        if self.set_tab.set_averaging_time.value_spinbox.value() != settings[5]:
-            # update value
-            if str(settings[5]) == 'nan': # if nan, set to 0
-                self.set_tab.set_averaging_time.value_spinbox.setValue(0)
-            else: # else update value
-                self.set_tab.set_averaging_time.value_spinbox.setValue(settings[5])
-            # if averaging time is nan, clear visible value
-            if str(settings[5]) == 'nan':
-                self.set_tab.set_averaging_time.value_spinbox.clear()
-            # if text is empty (without suffix), update value set text with value
-            elif self.set_tab.set_averaging_time.value_spinbox.text()[:-2] == "":
-                self.set_tab.set_averaging_time.value_spinbox.lineEdit().setText(str(settings[5]))
-        
-        # update mode settings
-        self.set_tab.autofill.update_state(settings[1]) # autofill
-        self.set_tab.water_removal.update_state(settings[4]) # water removal
-        self.set_tab.drain.update_state(settings[2]) # drain
-    
-    # update all data values in status tab
-    def update_values(self, current_list):
-        # update temperature values
-        self.status_tab.temp_optics.change_value(str(current_list[5]) + " °C")
-        self.status_tab.temp_saturator.change_value(str(current_list[3]) + " °C")
-        self.status_tab.temp_condenser.change_value(str(current_list[4]) + " °C")
-        # update pressure values
-        self.status_tab.pres_inlet.change_value(str(current_list[7]) + " kPa")
-        self.status_tab.pres_nozzle.change_value(str(current_list[9]) + " kPa")
-        self.status_tab.pres_critical_orifice.change_value(str(current_list[8]) + " kPa")
-        self.status_tab.pres_cabin.change_value(str(current_list[10]) + " kPa")
-        # update misc values
-        if current_list[11] == 0:
-            self.status_tab.liquid_level.change_value("LOW")
-        elif current_list[11] == 1:
-            self.status_tab.liquid_level.change_value("OK")
-        elif current_list[11] == 2:
-            self.status_tab.liquid_level.change_value("OVERFILL")
-        self.status_tab.temp_cabin.change_value(str(current_list[6]) + " °C")
-
-# PSM widget
-class PSMWidget(QTabWidget):
-    def __init__(self, device_parameter, device_type, *args, **kwargs):
-        super().__init__()
-        self.device_parameter = device_parameter # store device parameter tree reference
-        self.name = device_parameter.name() # store device name
-        self.device_type = device_type # store device type (PSM or PSM 2.0)
-        # create set tab for PSM
-        self.set_tab = PSMSetTab(device_type)
-        self.addTab(self.set_tab, "Set")
-        # create status tab for PSM
-        self.status_tab = PSMStatusTab(device_type)
-        self.addTab(self.status_tab, "Status")
-        # create mode tab for PSM
-        self.measure_tab = PSMMeasureTab()
-        self.addTab(self.measure_tab, "Measure")
-        # create plot widget for PSM
-        self.plot_tab = SinglePlot(device_type=PSM)
-        self.addTab(self.plot_tab, "PSM plot")
-
-        # create list of PSM status widgets, used in update_errors
-        self.psm_status_widgets = [
-            self.status_tab.temp_growth_tube, self.status_tab.temp_saturator,
-            self.status_tab.flow_saturator, self.status_tab.temp_heater,
-            self.status_tab.temp_inlet, "mix1_press", "mix2_press",
-            self.status_tab.pressure_inlet, self.status_tab.flow_excess,
-            "drain_level", self.status_tab.temp_cabin, self.status_tab.temp_drainage,
-            self.status_tab.pressure_critical_orifice, "mfc_temp"
-        ]
-        # if PSM 2.0, add vacuum flow widget to list
-        if device_type == PSM2:
-            self.psm_status_widgets.append(self.status_tab.flow_vacuum)
-
-    # convert PSM status hex to binary and update error label colors
-    def update_errors(self, status_hex):
-        widget_amount = len(self.psm_status_widgets) # get amount of widgets in list
-        status_bin = bin(int(status_hex, 16)) # convert hex to int and int to binary
-        status_bin = status_bin[2:].zfill(widget_amount) # remove 0b from string and fill with 0s to length of widget_amount
-        total_errors = status_bin.count("1") # count number of 1s in status_bin
-        inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
-        for i in range(widget_amount): # iterate through all status widgets
-            if type(self.psm_status_widgets[i]) != str: # filter placeholder strings
-                # change color of error label according to error bit
-                self.psm_status_widgets[i].change_color(inverted_status_bin[i])
-        
-        return total_errors # return total number of errors
-    
-    # convert PSM notes hex to binary and update liquid mode settings
-    def update_notes(self, note_hex):
-        liquid_errors = 0 # increment if liquid errors occur
-        note_length = 7 # if new note bits are added in firmware, change this value accordingly
-        note_bin = bin(int(note_hex, 16)) # convert hex to int and int to binary
-        note_bin = note_bin[2:].zfill(note_length) # remove 0b from string and fill with 0s
-        total_notes = note_bin.count("1") # count number of 1s in note_bin
-        inverted_note_bin = note_bin[::-1] # invert note_bin for liquid setting parsing
-        # update liquid mode settings in GUI
-        # 0 = autofill on, 1 = autofill off
-        if inverted_note_bin[5] == "0":
-            self.set_tab.autofill.update_state(1)
-        elif inverted_note_bin[5] == "1":
-            self.set_tab.autofill.update_state(0)
-        # 0 = drying off, 1 = drying on
-        self.set_tab.drying.update_state(int(inverted_note_bin[4]))
-        # 0 = drain on, 1 = drain off
-        if inverted_note_bin[3] == "0":
-            self.set_tab.drain.update_state(1)
-        elif inverted_note_bin[3] == "1":
-            self.set_tab.drain.update_state(0)
-        # 0 = saturator liquid level OK, 1 = saturator liquid level LOW
-        self.status_tab.liquid_saturator.change_color(inverted_note_bin[6])
-        if inverted_note_bin[6] == "1":
-            liquid_errors += 1
-        # 0 = drain liquid level OK, 1 = drain liquid level HIGH
-        self.status_tab.liquid_drain.change_color(inverted_note_bin[0])
-        if inverted_note_bin[0] == "1":
-            liquid_errors += 1
-
-        return liquid_errors # return total number of liquid errors
-
-    def update_settings(self, settings):
-        self.set_tab.set_growth_tube_temp.value_spinbox.setValue(float(settings[1]))
-        self.set_tab.set_saturator_temp.value_spinbox.setValue(float(settings[2]))
-        self.set_tab.set_inlet_temp.value_spinbox.setValue(float(settings[3]))
-        self.set_tab.set_heater_temp.value_spinbox.setValue(float(settings[4]))
-        self.set_tab.set_drainage_temp.value_spinbox.setValue(float(settings[5]))
-        self.set_tab.set_cpc_inlet_flow.value_spinbox.setValue(float(settings[6]))
-    
-    # update all data values in status tab
-    def update_values(self, current_list):
-        # update temperature values
-        self.status_tab.temp_growth_tube.change_value(str(current_list[2]) + " °C")
-        self.status_tab.temp_saturator.change_value(str(current_list[3]) + " °C")
-        self.status_tab.temp_inlet.change_value(str(current_list[4]) + " °C")
-        self.status_tab.temp_heater.change_value(str(current_list[5]) + " °C")
-        self.status_tab.temp_drainage.change_value(str(current_list[6]) + " °C")
-        self.status_tab.temp_cabin.change_value(str(current_list[7]) + " °C")
-        # update flow values
-        # self.status.flow_cpc is updated in PSMWidget's update_settings()
-        self.status_tab.flow_saturator.change_value(str(current_list[0]) + " lpm")
-        self.status_tab.flow_excess.change_value(str(current_list[1]) + " lpm")
-        # self.status_tab.flow_inlet is updated in update_plot_data()
-        # update pressure values
-        self.status_tab.pressure_inlet.change_value(str(current_list[9]) + " kPa")
-        self.status_tab.pressure_critical_orifice.change_value(str(current_list[12]) + " kPa")
-        # update vacuum flow if PSM 2.0
-        if self.device_type == PSM2:
-            self.status_tab.flow_vacuum.change_value(str(current_list[13]) + " lpm")
-        # liquid level values are updated in PSMWidget's update_notes()
-
-class PSMSetTab(QSplitter):
-    def __init__(self, device_type, *args, **kwargs):
-        super().__init__()
-        # split tab vertically
-        self.setOrientation(Qt.Vertical)
-
-        # TODO check device type and create widgets accordingly
-
-        # horizontal splitter containing upper half of tab - set widgets
-        upper_splitter = QSplitter(Qt.Horizontal)
-        self.set_growth_tube_temp = SetWidget("Growth tube T", " °C")
-        upper_splitter.addWidget(self.set_growth_tube_temp)
-        self.set_saturator_temp = SetWidget("Saturator T", " °C")
-        upper_splitter.addWidget(self.set_saturator_temp)
-        self.set_inlet_temp = SetWidget("Inlet T", " °C")
-        upper_splitter.addWidget(self.set_inlet_temp)
-        self.set_heater_temp = SetWidget("Heater T", " °C")
-        upper_splitter.addWidget(self.set_heater_temp)
-        self.set_drainage_temp = SetWidget("Drainage T", " °C")
-        upper_splitter.addWidget(self.set_drainage_temp)
-        # horizontal splitter containing middle half of tab - set widgets
-        middle_splitter = QSplitter(Qt.Horizontal)
-        self.set_cpc_inlet_flow = SetWidget("CPC inlet flow rate\n(used in dilution correction)", " lpm", decimals=3)
-        middle_splitter.addWidget(self.set_cpc_inlet_flow)
-        self.set_cpc_sample_flow = SetWidget("CPC sample flow rate\n(used in concentration calculation)", " lpm", decimals=3)
-        middle_splitter.addWidget(self.set_cpc_sample_flow)
-        if device_type == PSM: # if PSM, add CO flow rate set widget
-            self.set_co_flow = SetWidget("CO flow rate", " lpm", decimals=3)
-            middle_splitter.addWidget(self.set_co_flow)
-        # horizontal splitter containing lower half of tab - mode widgets
-        lower_splitter = QSplitter(Qt.Horizontal)
-        self.autofill = ToggleButton("Autofill")
-        lower_splitter.addWidget(self.autofill)
-        self.drain = ToggleButton("Drain")
-        lower_splitter.addWidget(self.drain)
-        self.drying = ToggleButton("Drying")
-        lower_splitter.addWidget(self.drying)
-        # set splitter's relative widget sizes and add to tab
-        upper_splitter.setSizes([1000, 1000, 1000, 1000, 1000])
-        self.addWidget(upper_splitter)
-        middle_splitter.setSizes([1000, 1000, 1000])
-        self.addWidget(middle_splitter)
-        lower_splitter.setSizes([1000, 1000, 1000])
-        self.addWidget(lower_splitter)
-        # add line edit for command input
-        if device_type == PSM: # if PSM
-            self.command_widget = CommandWidget("PSM Retrofit")
-        elif device_type == PSM2: # if PSM 2.0
-            self.command_widget = CommandWidget("PSM 2.0")
-        self.addWidget(self.command_widget)
-        # set relative sizes in tab splitter
-        self.setSizes([1000, 1000, 1000, 1000])
-    
-class PSMStatusTab(QWidget):
-    def __init__(self, device_type, *args, **kwargs):
-        super().__init__()
-
-        layout = QGridLayout() # create layout
-
-        # TODO check device type and create widgets accordingly
-
-        # temperature indicators
-        self.temp_growth_tube = IndicatorWidget("Growth tube temperature")
-        layout.addWidget(self.temp_growth_tube, 0, 0)
-        self.temp_saturator = IndicatorWidget("Saturator temperature")
-        layout.addWidget(self.temp_saturator, 1, 0)
-        self.temp_inlet = IndicatorWidget("Inlet temperature")
-        layout.addWidget(self.temp_inlet, 2, 0)
-        self.temp_heater = IndicatorWidget("Heater temperature")
-        layout.addWidget(self.temp_heater, 3, 0)
-        self.temp_drainage = IndicatorWidget("Drainage temperature")
-        layout.addWidget(self.temp_drainage, 4, 0)
-        self.temp_cabin = IndicatorWidget("Cabin temperature")
-        layout.addWidget(self.temp_cabin, 0, 1)
-
-        # flow indicators
-        self.flow_cpc = IndicatorWidget("CPC inlet flow")
-        layout.addWidget(self.flow_cpc, 1, 1)
-        self.flow_saturator = IndicatorWidget("Saturator flow")
-        layout.addWidget(self.flow_saturator, 2, 1)
-        self.flow_excess = IndicatorWidget("Excess flow") # TODO change name to heater flow?
-        layout.addWidget(self.flow_excess, 3, 1)
-        self.flow_inlet = IndicatorWidget("Inlet flow")
-        layout.addWidget(self.flow_inlet, 4, 1)
-        if device_type == PSM2: # if PSM 2.0, add vacuum flow indicator
-            self.flow_vacuum = IndicatorWidget("Vacuum flow")
-            layout.addWidget(self.flow_vacuum, 4, 2)
-
-        # pressure indicators
-        self.pressure_inlet = IndicatorWidget("Inlet pressure")
-        layout.addWidget(self.pressure_inlet, 0, 2)
-        if device_type == PSM: # if PSM, add critical orifice pressure indicator
-            self.pressure_critical_orifice = IndicatorWidget("Critical orifice pressure")
-            layout.addWidget(self.pressure_critical_orifice, 1, 2)
-        elif device_type == PSM2: # if PSM 2.0, add vacuum line pressure indicator
-            # TODO name variable accordingly?
-            self.pressure_critical_orifice = IndicatorWidget("Vacuum line pressure")
-            layout.addWidget(self.pressure_critical_orifice, 1, 2)
-
-        # liquid level indicators
-        self.liquid_saturator = IndicatorWidget("Saturator liquid level")
-        layout.addWidget(self.liquid_saturator, 2, 2)
-        self.liquid_drain = IndicatorWidget("Drain liquid level")
-        layout.addWidget(self.liquid_drain, 3, 2)
-
-        self.setLayout(layout)
-
-class PSMMeasureTab(QWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-
-        layout = QGridLayout() # create layout
-
-        # scan mode widgets
-        self.scan = StartButton("Scan")
-        layout.addWidget(self.scan, 0, 0)
-        self.set_minimum_flow = SetWidget("Minimum flow", " lpm")
-        self.set_minimum_flow.value_spinbox.setValue(0.15)
-        layout.addWidget(self.set_minimum_flow, 1, 0)
-        self.set_max_flow = SetWidget("Maximum flow", " lpm")
-        self.set_max_flow.value_spinbox.setValue(1.9)
-        layout.addWidget(self.set_max_flow, 2, 0)
-        self.set_scan_time = SetWidget("Scan time", " s", integer=True)
-        self.set_scan_time.value_spinbox.setValue(240)
-        layout.addWidget(self.set_scan_time, 3, 0)
-
-        # step mode widgets
-        self.step = StartButton("Step")
-        layout.addWidget(self.step, 0, 1)
-        self.step_time = SetWidget("Step time", " s", integer=True)
-        self.step_time.value_spinbox.setValue(30)
-        layout.addWidget(self.step_time, 1, 1)
-        self.steps = StepsWidget()
-        self.steps.text_box.setText("0.1\n0.7\n1.3\n1.9")
-        layout.addWidget(self.steps, 2, 1, 2, 1)
-
-        # fixed mode widgets
-        self.fixed = StartButton("Fixed")
-        layout.addWidget(self.fixed, 0, 2)
-        self.set_flow = SetWidget("Saturator flow", " lpm")
-        self.set_flow.value_spinbox.setValue(1.9)
-        layout.addWidget(self.set_flow, 1, 2)
-
-        # 10 hz logging button
-        self.ten_hz = StartButton("10 Hz logging")
-        layout.addWidget(self.ten_hz, 4, 0, 1, 3)
-        # set button size policy to minimum
-        self.ten_hz.setSizePolicy(QSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum))
-
-        self.setLayout(layout)
-    
-    def compile_scan(self): # compile scan command
-        scan_time = self.set_scan_time.value_spinbox.value()
-        if scan_time % 2 == 0: # if scan time is even
-            time = int((scan_time - 20) / 2)
-            parameters = [10, time, 10, time]
-        else: # if scan time is odd
-            time = int((scan_time - 21) / 2)
-            parameters = [11, time, 10, time]
-        # add minimum flow to parameters
-        parameters.append(round(self.set_minimum_flow.value_spinbox.value(), 3))
-        # add maximum flow to parameters
-        parameters.append(round(self.set_max_flow.value_spinbox.value(), 3))
-        scan_string = ":SET:FLOW:SCAN " + ",".join(map(str, parameters))
-        print(scan_string)
-        return scan_string
-    
-    def compile_step(self): # compile step command
-        step_list = self.steps.text_box.toPlainText().split("\n") # get list of steps
-        while "" in step_list:
-            step_list.remove("") # remove empty rows
-        error_flag = False
-        self.steps.text_box.clear()
-        self.steps.text_box.setTextColor(self.steps.default_color)
-        for step in step_list: # remove non-float values from list
-            try:
-                float(step) # check if float
-                self.steps.text_box.append(step)
-            except ValueError:
-                # write rows containing errors with red text
-                self.steps.text_box.setTextColor(QColor(255, 0, 0))
-                self.steps.text_box.append(step)
-                self.steps.text_box.setTextColor(self.steps.default_color)
-                error_flag = True # set error flag
-        if error_flag: # if there are errors
-            return None
-        else:
-            step_amount = len(step_list)
-            step_times = [self.step_time.value_spinbox.value()] * step_amount
-            step_string = ":SET:FLOW:STEP " + str(step_amount) + "," + ",".join(map(str, step_times)) + "," + ",".join(map(str, step_list))
-            return step_string
-
-    def compile_fixed(self): # compile fixed command
-        # append saturator flow value to command
-        fixed_string = ":SET:FLOW:FXD " + str(round(self.set_flow.value_spinbox.value(), 3))
-        return fixed_string
-    
-    # change color of active mode
-    def change_mode_color(self, command):
-        # TODO only update if command is different from current
-        if command == ":MEAS:SCAN":
-            self.scan.change_color(1)
-            self.step.change_color(0)
-            self.fixed.change_color(0)
-        if command == ":MEAS:STEP":
-            self.scan.change_color(0)
-            self.step.change_color(1)
-            self.fixed.change_color(0)
-        if command == ":MEAS:FIXD":
-            self.scan.change_color(0)
-            self.step.change_color(0)
-            self.fixed.change_color(1)
-
-# used in PSMMeasureTab
-class StepsWidget(QWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-        layout = QVBoxLayout()
-        font = self.font() # get current global font
-        font.setPointSize(16) # set font size
-        label = QLabel("Steps (lpm)", objectName="label")
-        label.setFont(font)
-        label.setAlignment(Qt.AlignCenter) # center label
-        self.text_box = FloatTextEdit(objectName="text_edit")
-        self.default_color = self.text_box.palette().color(QPalette.Text) # get default text color
-        self.text_box.setFont(font)
-        # add widgets to layout
-        layout.addWidget(label)
-        layout.addWidget(self.text_box)
-        self.setLayout(layout)
-
-# used in StepsWidget
-class FloatTextEdit(QTextEdit):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # override keyPressEvent to only allow certain keys
-        self.allowed_keys = [Qt.Key_Backspace, Qt.Key_Delete, Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down, 
-                        Qt.Key_Home, Qt.Key_End, Qt.Key_Period, Qt.Key_Return, Qt.Key_Enter,
-                        Qt.Key_0, Qt.Key_1, Qt.Key_2, Qt.Key_3, Qt.Key_4, Qt.Key_5, Qt.Key_6,
-                        Qt.Key_7, Qt.Key_8, Qt.Key_9]
-    def keyPressEvent(self, event):
-        if event.key() in self.allowed_keys:
-            super().keyPressEvent(event)
-
-# ELECTROMETER widget
-class ElectrometerWidget(QTabWidget):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__()
-        self.device_parameter = device_parameter # store device parameter tree reference
-        self.name = device_parameter.name() # store device name
-        # create plot widget for Electrometer
-        self.plot_tab = ElectrometerPlot()
-        self.addTab(self.plot_tab, "Electrometer plot")
-
-# CO2 widget
-class CO2Widget(QTabWidget):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__()
-        self.device_parameter = device_parameter # store device parameter tree reference
-        self.name = device_parameter.name() # store device name
-        # create plot widget for CO2
-        self.plot_tab = SinglePlot(device_type=CO2_SENSOR)
-        self.addTab(self.plot_tab, "CO2 plot")
-
-# RHTP widget
-class RHTPWidget(QTabWidget):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__()
-        self.device_parameter = device_parameter # store device parameter tree reference
-        self.name = device_parameter.name() # store device name
-        # create plot widget for RHTP
-        self.plot_tab = TriplePlot(device_type=RHTP)
-        self.addTab(self.plot_tab, "RHTP plot")
-
-# AFM widget
-class AFMWidget(QTabWidget):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__()
-        self.device_parameter = device_parameter # store device parameter tree reference
-        self.name = device_parameter.name() # store device name
-        # create plot widget for AFM
-        self.plot_tab = AFMPlot()
-        self.addTab(self.plot_tab, "AFM plot")
-
-# eDiluter widget
-class eDiluterWidget(QTabWidget):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__()
-        self.device_parameter = device_parameter # store device parameter tree reference
-        self.name = device_parameter.name() # store device name
-        self.current_mode = None # used for storing current mode
-        # create set tab for eDiluter
-        self.set_tab = eDiluterSetTab()
-        self.addTab(self.set_tab, "Set")
-        # create status tab for eDiluter
-        self.status_tab = eDiluterStatusTab()
-        self.addTab(self.status_tab, "Status")
-        # create plot widget for eDiluter
-        self.plot_tab = SinglePlot(device_type=EDILUTER)
-        self.addTab(self.plot_tab, "eDiluter plot")
-        # create dictionary with mode names and corresponding widgets
-        self.mode_dict = {"INIT": self.set_tab.init, "WARMUP": self.set_tab.warmup,
-                          "STANDBY": self.set_tab.standby, "MEASUREMENT": self.set_tab.measurement}
-    
-    # update all data values in status tab and set tab
-    # current list: Status, P1, P2, T1, T2, T3, T4, T5, T6, DF1, DF2, DFTot
-    def update_values(self, current_list):
-        # update temperature values
-        self.status_tab.t1.change_value(str(current_list[3]) + " °C")
-        self.status_tab.t2.change_value(str(current_list[4]) + " °C")
-        self.status_tab.t3.change_value(str(current_list[5]) + " °C")
-        self.status_tab.t4.change_value(str(current_list[6]) + " °C")
-        self.status_tab.t5.change_value(str(current_list[7]) + " °C")
-        self.status_tab.t6.change_value(str(current_list[8]) + " °C")
-        # update pressure values
-        self.status_tab.p1.change_value(str(current_list[1]) + " mbar")
-        self.status_tab.p2.change_value(str(current_list[2]) + " mbar")
-        # update dilution factor values
-        self.set_tab.df_1.indicator.change_value(str(current_list[9]))
-        self.set_tab.df_2.indicator.change_value(str(current_list[10]))
-        self.set_tab.df_tot.change_value(str(current_list[11])) # total DF in set tab
-        self.status_tab.df_tot.change_value(str(current_list[11])) # total DF in status tab
-        # change color of active mode if it differs from current mode
-        if current_list[0] != self.current_mode:
-            # change color of all mode buttons to default
-            for mode in self.mode_dict:
-                self.mode_dict[mode].change_color(0)
-            # if current mode is not nan
-            if str(current_list[0]) != "nan":
-                # change color of active mode button
-                self.mode_dict[current_list[0]].change_color(1)
-                self.current_mode = current_list[0] # update current mode
-
-# TSI CPC widget
-class TSIWidget(QTabWidget):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__()
-        self.device_parameter = device_parameter # store device parameter tree reference
-        self.name = device_parameter.name() # store device name
-        # create plot widget for TSI CPC
-        self.plot_tab = SinglePlot(device_type=CPC)
-        self.addTab(self.plot_tab, "TSI CPC plot")
-
-# Example device widget
-class ExampleDeviceWidget(QTabWidget):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__()
-        self.device_parameter = device_parameter # store device parameter tree reference
-        self.name = device_parameter.name() # store device name
-        # create plot widget for CO2
-        self.plot_tab = SinglePlot(device_type=EXAMPLE_DEVICE)
-        self.addTab(self.plot_tab, "Example device plot")
-
-class eDiluterSetTab(QWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-
-        layout = QVBoxLayout() # create vertical layout
-
-        # horizontal layout for mode settings
-        # INIT, WARMUP, STANDBY, MEASUREMENT
-        mode_layout = QHBoxLayout()
-        self.init = StartButton("Init")
-        mode_layout.addWidget(self.init)
-        self.warmup = StartButton("Warmup")
-        mode_layout.addWidget(self.warmup)
-        self.standby = StartButton("Standby")
-        mode_layout.addWidget(self.standby)
-        self.measurement = StartButton("Measurement")
-        mode_layout.addWidget(self.measurement)
-        layout.addLayout(mode_layout) # add mode_layout to main vertical layout
-
-        # horizontal layout for dilution factor settings
-        df_layout = QHBoxLayout()
-        self.df_1 = DFSetWidget("Dilution factor 1")
-        df_layout.addWidget(self.df_1)
-        self.df_2 = DFSetWidget("Dilution factor 2")
-        df_layout.addWidget(self.df_2)
-        self.df_tot = IndicatorWidget("Total dilution factor")
-        df_layout.addWidget(self.df_tot)
-        layout.addLayout(df_layout) # add df_layout to main vertical layout
-
-        # add line edit for command input
-        self.command_widget = CommandWidget("eDiluter")
-        layout.addWidget(self.command_widget)
-
-        self.setLayout(layout) # add layout to widget
-
-class DFSetWidget(QWidget):
-    def __init__(self, name, *args, **kwargs):
-        super().__init__()
-        layout = QHBoxLayout() # create horizontal layout
-
-        # create previous button
-        self.prev_button = QPushButton("<", objectName="button_widget")
-        # create indicator widget for displaying name and value
-        self.indicator = IndicatorWidget(name)
-        # create next button
-        self.next_button = QPushButton(">", objectName="button_widget")
-
-        # add widgets to layout
-        layout.addWidget(self.prev_button) # previous button
-        layout.addWidget(self.indicator) # indicator widget
-        layout.addWidget(self.next_button) # next button
-
-        self.setLayout(layout) # add layout to widget
-
-class eDiluterStatusTab(QWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-
-        layout = QGridLayout() # create layout
-
-        # temperature indicators (unit = °C)
-        self.t1 = IndicatorWidget("Dilution air temperature") # T1
-        layout.addWidget(self.t1, 0, 0)
-        self.t2 = IndicatorWidget("Ext 1 temperature") # T2
-        layout.addWidget(self.t2, 1, 0)
-        self.t3 = IndicatorWidget("Ext 2 temperature") # T3
-        layout.addWidget(self.t3, 2, 0)
-        self.t6 = IndicatorWidget("Internal temperature") # T6
-        layout.addWidget(self.t6, 0, 1)
-        self.t4 = IndicatorWidget("Aux 1 temperature") # T4
-        layout.addWidget(self.t4, 1, 1)
-        self.t5 = IndicatorWidget("Aux 2 temperature") # T5
-        layout.addWidget(self.t5, 2, 1)
-
-        # pressure indicators (unit = mbar)
-        self.p1 = IndicatorWidget("Inlet pressure") # P1
-        layout.addWidget(self.p1, 0, 2)
-        self.p2 = IndicatorWidget("Ambient pressure") # P2
-        layout.addWidget(self.p2, 1, 2)
-
-        # dilution factor indicator
-        self.df_tot = IndicatorWidget("Total dilution factor") # DFTot
-        layout.addWidget(self.df_tot, 2, 2)
-        
-        self.setLayout(layout) # set layout
-
-# set tab widget containing settings and message input
-# used in CPCWidget
-class CPCSetTab(QWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-
-        layout = QGridLayout() # create grid layout
-
-        self.set_saturator_temp = SetWidget("Saturator temperature", " °C")
-        layout.addWidget(self.set_saturator_temp, 0, 0)
-        self.set_condenser_temp = SetWidget("Condenser temperature", " °C")
-        layout.addWidget(self.set_condenser_temp, 0, 1)
-        self.set_averaging_time = SetWidget("Averaging time", " s")
-        layout.addWidget(self.set_averaging_time, 0, 2)
-        
-        self.autofill = ToggleButton("Autofill")
-        layout.addWidget(self.autofill, 1, 0)
-        self.water_removal = ToggleButton("Water removal")
-        layout.addWidget(self.water_removal, 1, 1)
-        self.drain = ToggleButton("Drain")
-        layout.addWidget(self.drain, 1, 2)
-        
-        # add line edit for command input
-        self.command_widget = CommandWidget("CPC")
-        layout.addWidget(self.command_widget, 2, 0, 1, 3)
-
-        layout.setRowStretch(0, 1) # set stretch factor of row 0
-        layout.setRowStretch(1, 1) # set stretch factor of row 1
-        layout.setRowStretch(2, 2) # set stretch factor of row 2
-
-        self.setLayout(layout) # add layout to widget
-
-# used in CPCSetTab and PSMSetTab
-class CommandWidget(QWidget):
-    def __init__(self, device_type, *args, **kwargs):
-        super().__init__()
-        layout = QVBoxLayout()
-        label = QLabel("Send serial command message to " + device_type, objectName="label")
-        self.command_input = QLineEdit(objectName="line_edit")
-        self.command_input.setPlaceholderText("Enter command")
-        self.text_box = QTextEdit(readOnly=True, objectName="text_edit")
-        # add widgets to layout
-        layout.addWidget(label)
-        layout.addWidget(self.command_input)
-        layout.addWidget(self.text_box)
-        self.setLayout(layout)
-
-    def update_text_box(self, text):
-        time_stamp = dt.now().strftime("%d.%m.%Y %H:%M:%S - ") # get time stamp
-        self.text_box.append(time_stamp + text) # append text box with time stamp and text
-    
-    def disable_command_input(self):
-        self.command_input.setReadOnly(True)
-        self.command_input.setPlaceholderText("Command input disabled")
-    
-    def enable_command_input(self):
-        self.command_input.setReadOnly(False)
-        self.command_input.setPlaceholderText("Enter command")
-
-# used in CPCSetTab and PSMSetTab
-class SetWidget(QWidget):
-    def __init__(self, name, suffix, *args, integer=False, **kwargs):
-        super().__init__()
-        layout = QVBoxLayout()
-        font = self.font() # get current global font
-        font.setPointSize(16) # set font size
-        # create label for widget name
-        self.name = name
-        name_label = QLabel(self.name, objectName="label")
-        name_label.setAlignment(Qt.AlignCenter)
-        name_label.setFont(font) # apply font to label
-        layout.addWidget(name_label)
-        # create normal / double spin box for setting value
-        self.is_integer = integer
-        if integer: # if value is integer, use spin box (int)
-            self.value_spinbox = SpinBox(objectName="spin_box", maximum=9999)
-            validator = QIntValidator() # create int validator
-        else: # if not integer, use double spin box (float)
-            if "decimals" in kwargs: # if decimals are specified in kwargs
-                self.value_spinbox = DoubleSpinBox(objectName="double_spin_box", singleStep=0.1, maximum=9999, decimals=kwargs["decimals"])
-            else:
-                self.value_spinbox = DoubleSpinBox(objectName="double_spin_box", singleStep=0.1, maximum=9999)
-            locale = QLocale(QLocale.C) # create locale to use dot as decimal separator
-            validator = QDoubleValidator() # create double validator 
-            validator.setLocale(locale) # set validator locale
-            self.value_spinbox.setLocale(locale) # set spinbox locale
-        self.value_spinbox.setSuffix(suffix) # set suffix
-        self.value_spinbox.lineEdit().setReadOnly(True) # make line edit read only
-        self.value_spinbox.lineEdit().setAlignment(Qt.AlignCenter) # align text in line edit
-        layout.addWidget(self.value_spinbox) # add widget to layout
-        # add line edit for value input
-        self.value_input = QLineEdit(objectName="line_edit")
-        self.value_input.setPlaceholderText("Enter value")
-        self.value_input.setValidator(validator) # set validator, only allow int or float
-        self.value_input.returnPressed.connect(self.value_input_return_pressed)
-        layout.addWidget(self.value_input)
-        # set layout
-        self.setLayout(layout)
-        # store default stylesheet
-        self.stylesheet = self.styleSheet()
-        # create error variable for storing error state
-        self.error = False
-    # function that handles value text input
-    def value_input_return_pressed(self):
-        value = self.value_input.text()
-        try:
-            if self.is_integer:
-                self.value_spinbox.setValue(int(value))
-            else:
-                self.value_spinbox.setValue(float(value))
-        except Exception as e:
-            print(e)
-        QTimer.singleShot(50, self.clear_input)
-    # function that clears value input line edit after single shot timer
-    def clear_input(self):
-        self.value_input.clear()
-    def set_red_color(self):
-        if self.error == False:
-            self.value_spinbox.setStyleSheet("QDoubleSpinBox { background-color : red }")
-            self.error = True
-    def set_default_color(self):
-        if self.error == True:
-            self.value_spinbox.setStyleSheet(self.stylesheet)
-            self.error = False
-
-# custom spin box class with signal for value change
-# https://stackoverflow.com/questions/47874952/qspinbox-signal-for-arrow-buttons
-class SpinBox(QSpinBox):
-    stepChanged = pyqtSignal(int)
-    # override stepBy function to emit signal when value changes
-    def stepBy(self, step):
-        value = self.value()
-        super(SpinBox, self).stepBy(step)
-        if self.value() != value:
-            self.stepChanged.emit(self.value())
-
-class DoubleSpinBox(QDoubleSpinBox):
-    stepChanged = pyqtSignal(float)
-    # override stepBy function to emit signal when value changes
-    def stepBy(self, step):
-        value = self.value()
-        super(DoubleSpinBox, self).stepBy(step)
-        if self.value() != value:
-            self.stepChanged.emit(self.value())
-
-class ToggleButton(QPushButton):
-    def __init__(self, name, *args, **kwargs):
-        super().__init__()
-        self.name = name
-        self.state = 0
-        # create specific command messages for drying toggle
-        if self.name == "Drying":
-            self.messages = {0: ":SET:RUN", 1: ":SET:DRY"}
-        self.setObjectName("button_widget")
-        self.setCheckable(True)
-        self.clicked.connect(self.toggle)
-        self.setText(self.name)
-        self.stylesheet = self.styleSheet() # save default stylesheet
-        font = self.font() # get current global font
-        font.setPointSize(16) # set font size
-        self.setFont(font) # apply font
-        # set size policy to expanding
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.toggle() # toggle button to set initial state
-    
-    def toggle(self):
-        if self.isChecked(): # if button is checked
-            self.setText(self.name + "\nON")
-            self.setStyleSheet("QPushButton { background-color : green }")
-            self.state = 1
-        else: # if button is not checked
-            self.setText(self.name + "\nOFF")
-            self.setStyleSheet(self.stylesheet)
-            self.state = 0
-
-    def update_state(self, state):
-        # if received state is different from current state
-        if state != self.state:
-            if str(state) == 'nan': # if state is nan
-                return # do nothing
-            self.setChecked(int(state)) # set button checked state
-            self.toggle() # toggle button
-
-class StartButton(QPushButton):
-    def __init__(self, name, *args, **kwargs):
-        super().__init__()
-        self.name = name
-        self.state = 0
-        self.setObjectName("button_widget")
-        self.setText(self.name)
-        self.stylesheet = self.styleSheet() # save default stylesheet
-        font = self.font() # get current global font
-        font.setPointSize(16) # set font size
-        self.setFont(font) # apply font
-        # set size policy to expanding
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-    
-    def change_color(self, state):
-        if state != self.state:
-            if state == 1: # if this measure mode is on
-                self.setStyleSheet("QPushButton { background-color : green }")
-                self.state = 1
-            else: # if this measure mode is off
-                self.setStyleSheet(self.stylesheet)
-                self.state = 0
-
-# status tab containing status indicator widgets
-# used in CPCWidget
-class CPCStatusTab(QWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-
-        layout = QGridLayout() # create layout
-
-        # temperature indicators
-        self.temp_optics = IndicatorWidget("Optics temperature") # create optics temperature indicator
-        layout.addWidget(self.temp_optics, 0, 0)
-        self.temp_saturator = IndicatorWidget("Saturator temperature") # create saturator temperature indicator
-        layout.addWidget(self.temp_saturator, 1, 0)
-        self.temp_condenser = IndicatorWidget("Condenser temperature") # create condenser temperature indicator
-        layout.addWidget(self.temp_condenser, 2, 0)
-        self.temp_cabin = IndicatorWidget("Cabin temperature") # create cabin temp indicator
-        layout.addWidget(self.temp_cabin, 3, 0)
-
-        # pressure indicators
-        self.pres_inlet = IndicatorWidget("Inlet pressure") # create inlet pressure indicator
-        layout.addWidget(self.pres_inlet, 0, 1)
-        self.pres_nozzle = IndicatorWidget("Nozzle pressure") # create nozzle pressure indicator
-        layout.addWidget(self.pres_nozzle, 1, 1)
-        self.pres_critical_orifice = IndicatorWidget("Critical orifice pressure") # create nozzle pressure indicator
-        layout.addWidget(self.pres_critical_orifice, 2, 1)
-        self.pres_cabin = IndicatorWidget("Cabin pressure") # create cabin pressure indicator
-        layout.addWidget(self.pres_cabin, 3, 1)
-
-        # misc indicators
-        self.laser_power = IndicatorWidget("Laser power") # create laser power indicator
-        layout.addWidget(self.laser_power, 0, 2, 1, 1)
-        self.liquid_level = IndicatorWidget("Liquid level") # create liquid level indicator
-        layout.addWidget(self.liquid_level, 1, 2, 1, 1)
-        self.pulse_quality = IndicatorWidget("Pulse quality") # create pulse quality indicator
-        layout.addWidget(self.pulse_quality, 2, 2, 1, 1)
-
-        self.setLayout(layout)
-
-# status indicator widget
-# used in CPCStatusTab and PSMStatusTab
-class IndicatorWidget(QWidget):
-    def __init__(self, name, *args, **kwargs):
-        super().__init__()
-        layout = QVBoxLayout() # create widget layout
-        self.name = name # save name
-        self.ok_error_indicators = ["Laser power", "Saturator liquid level", "Drain liquid level", "Pulse quality"]
-        self.value_label = QLabel(self.name + "\n", objectName="label") # create value label
-
-        self.default_color = self.value_label.styleSheet() # save default color
-
-        font = self.font() # get current global font
-        font.setPointSize(16) # set font size
-        self.value_label.setFont(font) # apply font to value label
-        self.value_label.setAlignment(Qt.AlignCenter) # center label
-
-        layout.addWidget(self.value_label) # add value label to layout
-        self.setLayout(layout) # apply layout
-    # change indicator value, called by main window's update_values function
-    def change_value(self, value):
-        self.value_label.setText(self.name + "\n" + value)
-    # change background color of value, called by main window's update_errors function
-    def change_color(self, bit):
-        if int(bit) == 1: # if bit is 1 (error), set background color to red
-            self.value_label.setStyleSheet("QLabel { background-color : red }")
-            if self.name == "Laser power":
-                self.change_value("ERROR")
-            elif self.name == "Saturator liquid level":
-                self.change_value("LOW")
-            elif self.name == "Drain liquid level":
-                self.change_value("HIGH")
-            elif self.name == "Pulse quality":
-                self.change_value("ERROR")
-        else: # if bit is 0 (no error), set background color to normal
-            self.value_label.setStyleSheet(self.default_color)
-            if self.name in self.ok_error_indicators:
-                self.change_value("OK")
-
-class PulseQuality(QWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-
-        layout = QGridLayout() # create layout
-        self.setLayout(layout) # set layout
-
-        # PULSE MONITOR
-
-        # average time and history time values
-        self.average_time = 0
-        self.history_time = 0
-
-        # pulse monitor graphics layout and plot
-        pm_graphics = GraphicsLayoutWidget()
-        layout.addWidget(pm_graphics, 0, 0)
-        pm_plot = pm_graphics.addPlot()
-        pm_viewbox = pm_plot.getViewBox()
-        pm_viewbox.setDefaultPadding(padding=0.2) # set default padding
-        # set graphics layout size to square
-        #pm_graphics.setFixedSize(500, 500)
-        # use automatic downsampling and clipping to reduce the drawing load
-        pm_plot.setDownsampling(mode='peak')
-        pm_plot.setClipToView(True)
-        # create color zones (yellow, black, green)
-        yellow_zone = QGraphicsRectItem(-40000, -10, 80000, 20) # x, y, w, h
-        yellow_zone.setPen(mkPen(0, 0, 0))
-        yellow_zone.setBrush(mkBrush(150, 150, 0))
-        pm_viewbox.addItem(yellow_zone, ignoreBounds=True)
-        black_zone = QGraphicsRectItem(0, 0.8, 800, 0.25) # x, y, w, h
-        black_zone.setPen(mkPen(0, 0, 0)) # black pen
-        black_zone.setBrush(mkBrush(0, 0, 0)) # black brush
-        pm_viewbox.addItem(black_zone, ignoreBounds=True)
-        green_zone = QGraphicsRectItem(150, 0.95, 500, 0.1) # x, y, w, h
-        green_zone.setPen(mkPen(0, 0, 0))
-        green_zone.setBrush(mkBrush(0, 130, 0))
-        pm_viewbox.addItem(green_zone, ignoreBounds=True)
-        # create data points, average point and current point plots
-        self.data_points = pm_plot.plot(pen=None, symbol='o', symbolPen=None, symbolSize=8, symbolBrush=(255, 255, 255, 50))
-        self.average_point = pm_plot.plot(pen=None, symbol='o', symbolPen={'color':(255, 0, 255), 'width':3}, symbolSize=14, symbolBrush=None)
-        self.current_point = pm_plot.plot(pen=None, symbol='o', symbolPen={'color':(0, 0, 0), 'width':2}, symbolSize=14, symbolBrush=(255, 255, 255))
-        # set up axis labels and styles
-        y_axis = pm_plot.getAxis('left')
-        y_axis.setLabel('Pulse ratio', color='w')
-        y_axis.enableAutoSIPrefix(False)
-        self.set_axis_style(y_axis, 'w')
-        x_axis = pm_plot.getAxis('bottom')
-        x_axis.setLabel('Pulse duration', units='ns', color='w')
-        x_axis.enableAutoSIPrefix(False)
-        self.set_axis_style(x_axis, 'w')
-        # create legend and add items
-        self.legend = LegendItem(offset=(-1, 1), labelTextColor='w', labelTextSize='8pt')
-        self.legend.setParentItem(pm_plot.graphicsItem())
-
-        # pulse monitor options layout
-        pm_options = QGridLayout()
-        layout.addLayout(pm_options, 1, 0)
-        # set font for main labels
-        label_font = self.font() # get current global font
-        label_font.setPointSize(12) # set font size
-        # add values label
-        values_label = QLabel("Values", objectName="label")
-        values_label.setAlignment(Qt.AlignCenter)
-        values_label.setFont(label_font) # apply font to value label
-        pm_options.addWidget(values_label, 0, 0, 1, 2)
-        # current values
-        pm_options.addWidget(QLabel("Pulse duration (ns)", objectName="label"), 1, 0)
-        self.current_duration = QLabel("", objectName="value-label")
-        self.current_duration.setWordWrap(True)
-        pm_options.addWidget(self.current_duration, 1, 1)
-        pm_options.addWidget(QLabel("Pulse ratio", objectName="label"), 2, 0)
-        self.current_ratio = QLabel("", objectName="value-label")
-        self.current_ratio.setWordWrap(True)
-        pm_options.addWidget(self.current_ratio, 2, 1)
-        # average values
-        self.average_duration_label = QLabel("", objectName="label")
-        pm_options.addWidget(self.average_duration_label, 3, 0)
-        self.average_duration = QLabel("", objectName="value-label")
-        pm_options.addWidget(self.average_duration, 3, 1)
-        self.average_ratio_label = QLabel("", objectName="label")
-        pm_options.addWidget(self.average_ratio_label, 4, 0)
-        self.average_ratio = QLabel("", objectName="value-label")
-        pm_options.addWidget(self.average_ratio, 4, 1)
-        # add options label
-        options_label = QLabel("Options", objectName="label")
-        options_label.setAlignment(Qt.AlignCenter)
-        options_label.setFont(label_font)
-        pm_options.addWidget(options_label, 5, 0, 1, 2)
-        # history time selection dropdown
-        pm_options.addWidget(QLabel("History draw limit", objectName="label"), 6, 0)
-        self.history_time_select = QComboBox(objectName="combo_box")
-        self.history_time_select.addItems(["1h", "2h", "6h", "12h", "24h"])
-        self.history_time_select.setCurrentIndex(0)
-        self.history_time_select.currentIndexChanged.connect(self.update_pm_labels)
-        pm_options.addWidget(self.history_time_select, 6, 1)
-        # average time selection dropdown
-        pm_options.addWidget(QLabel("Average time", objectName="label"), 7, 0)
-        self.average_time_select = QComboBox(objectName="combo_box")
-        self.average_time_select.addItems(["1h", "2h", "6h", "12h", "24h"])
-        self.average_time_select.setCurrentIndex(0)
-        self.average_time_select.currentIndexChanged.connect(self.update_pm_labels)
-        pm_options.addWidget(self.average_time_select, 7, 1)
-
-        # update legend and labels
-        self.update_pm_labels()
-
-        # PULSE ANALYSIS
-
-        # pulse analysis graphics layout and plot
-        pa_graphics = GraphicsLayoutWidget()
-        layout.addWidget(pa_graphics, 0, 1)
-        pa_plot = pa_graphics.addPlot()
-        pa_viewbox = pa_plot.getViewBox()
-        pa_plot.setDownsampling(mode='peak')
-        pa_plot.setClipToView(True)
-        pa_plot.showGrid(x=True, y=True, alpha=0.5)
-        # create analysis plot and values list
-        self.analysis_points = pa_plot.plot(pen=None, symbol='o', symbolPen=(0, 0, 0), symbolSize=10, symbolBrush=(255, 255, 255))
-        self.analysis_values = [] # list for storing analysis values as tuples (x = duration, y = threshold)
-        # set up axis labels and styles
-        y_axis = pa_plot.getAxis('left')
-        y_axis.setLabel('Threshold', units='mV', color='w')
-        y_axis.enableAutoSIPrefix(False)
-        self.set_axis_style(y_axis, 'w')
-        x_axis = pa_plot.getAxis('bottom')
-        x_axis.setLabel('Pulse duration', units='ns', color='w')
-        x_axis.enableAutoSIPrefix(False)
-        self.set_axis_style(x_axis, 'w')
-        # set fixed plot scaling
-        pa_viewbox.setRange(xRange=[0, 600], yRange=[0, 1500], padding=0.1)
-        pa_viewbox.setMouseEnabled(x=False, y=False) # disable mouse interaction
-        pa_plot.hideButtons() # remove autorange button
-
-        # pulse analysis options layout
-        pa_options = QGridLayout()
-        layout.addLayout(pa_options, 1, 1)
-        # start analysis button
-        self.start_analysis = QPushButton("Start pulse analysis", objectName="button_widget")
-        font = self.start_analysis.font() # get current font
-        font.setPointSize(12) # set font size
-        self.start_analysis.setFont(font) # apply font
-        pa_options.addWidget(self.start_analysis, 0, 0, 1, 2)
-        # current threshold
-        pa_options.addWidget(QLabel("Current threshold (mV)", objectName="label"), 1, 0)
-        self.current_threshold = QLabel("", objectName="value-label")
-        pa_options.addWidget(self.current_threshold, 1, 1)
-        # dummy widget to balance layout
-        pa_options.addWidget(QWidget(), 2, 0, 2, 2)
-
-        # update pulse analysis status
-        self.update_pa_status(False)
-
-        # TESTING
-
-        # self.add_analysis_point(500, 150)
-        # self.add_analysis_point(300, 500)
-        # self.add_analysis_point(200, 800)
-        # self.add_analysis_point(120, 1150)
-        # self.add_analysis_point(100, 1500)
-
-        # import numpy as np
-        # # create test data arrays and plot them
-        # test_size = 86400 # h = 3600, 24h = 86400
-        # #test_cutoff = 3600
-        # test_cutoff = 600
-        # #test_x = [1, 2, 3, 4, 5]
-        # #test_y = [2, 2, 1, 5, 3]
-        # test_x = np.random.normal(loc=400, scale=75, size=test_size)
-        # test_y = np.random.normal(loc=0.95, scale=0.02, size=test_size)
-        # # plot test data, average point and current point
-        # self.data_points.setData(test_x[(-1*test_cutoff):], test_y[(-1*test_cutoff):])
-        # self.average_point.setData([np.average(test_x)], [np.average(test_y)])
-        # self.current_point.setData([test_x[-1]], [test_y[-1]])
-        # #self.current_point.setData([], []) # set empty data
-    
-    def set_axis_style(self, axis, color):
-        axis.setStyle(tickFont=QFont("Arial", 12, QFont.Normal), tickLength=-20)
-        axis.setPen(color)
-        axis.setTextPen(color)
-        axis.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
-    
-    # update pulse monitor labels and legend
-    def update_pm_labels(self):
-        history_str = self.history_time_select.currentText() + " history"
-        average_str = self.average_time_select.currentText() + " avg"
-        self.legend.clear()
-        self.legend.addItem(self.data_points, name=history_str)
-        self.legend.addItem(self.average_point, name=average_str)
-        self.legend.addItem(self.current_point, name="Current value")
-        self.average_duration_label.setText(average_str + " pulse duration (ns)")
-        self.average_ratio_label.setText(average_str + " pulse ratio")
-        # update average and history time values
-        self.history_time = int(self.history_time_select.currentText().replace("h", ""))
-        self.average_time = int(self.average_time_select.currentText().replace("h", ""))
-    
-    def update_pa_status(self, flag):
-        if flag:
-            self.start_analysis.setDisabled(True)
-            self.start_analysis.setText("Analysis in progress...")
-        else:
-            self.start_analysis.setDisabled(False)
-            self.start_analysis.setText("Start pulse analysis")
-    
-    def add_analysis_point(self, pulse_duration, threshold_value):
-        # add analysis point to list of values as tuple
-        self.analysis_values.append((pulse_duration, threshold_value))
-        # trim nan pulse durations from list
-        trimmed_values = [n for n in self.analysis_values if not isnan(n[0])]
-        # update plot with new values
-        x_values = [n[0] for n in trimmed_values]
-        y_values = [n[1] for n in trimmed_values]
-        self.analysis_points.setData(x_values, y_values)
-        # update current threshold value
-        self.current_threshold.setText(str(threshold_value))
-    
-    def clear_analysis_points(self):
-        # clear list of analysis values
-        self.analysis_values.clear()
-        # clear plot with empty data
-        self.analysis_points.setData([], [])
-        # clear current threshold value
-        self.current_threshold.setText("")
-        
-# widget showing measurement and saving status
-# displayed under parameter tree
-class StatusLights(QSplitter):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-        font = self.font() # get current global font
-        font.setPointSize(20) # set font size
-        # create OK light widget
-        self.error_light = QLabel(objectName="label")
-        self.error_light.setFont(font) # apply font to label
-        self.error_light.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter) # align text in center
-        self.error_light.setAutoFillBackground(True) # automatically fill the background with color
-        self.addWidget(self.error_light) # add widget to splitter
-        # create saving light widget
-        self.saving_light = QLabel(objectName="label")
-        self.saving_light.setFont(font) # apply font to label
-        self.saving_light.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
-        self.saving_light.setAutoFillBackground(True)
-        self.addWidget(self.saving_light)
-        # set relative sizes of widgets in splitter
-        self.setSizes([100, 100])
-
-    # set the color and text of ok light according to error flag, 1 = errors, 0 = no errors
-    def set_error_light(self, flag):
-        if flag == 1:
-            self.error_light.setStyleSheet("QLabel { background-color : red }")
-            self.error_light.setText("Error")
-        else:
-            self.error_light.setStyleSheet("QLabel { background-color : green }")
-            self.error_light.setText("OK")
-    # set the color and text of saving light, 1 = saving, 0 = saving off
-    def set_saving_light(self, flag):
-        if flag == 1:
-            self.saving_light.setStyleSheet("QLabel { background-color : green }")
-            self.saving_light.setText("Saving")
-        else:
-            self.saving_light.setStyleSheet("QLabel { background-color : red }")
-            self.saving_light.setText("Saving off")
 
 # application format
 if __name__ == '__main__': # protects from accidentally invoking the script when not intended
