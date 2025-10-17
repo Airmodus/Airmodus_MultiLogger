@@ -1928,66 +1928,64 @@ class MainWindow(QMainWindow):
         self.com_descriptions = {} # reset com descriptions
     
     def list_com_ports(self):
-        # get list of available ports as serial objects
+        # get list of current available serial ports as ListPortInfo objects
         ports = list_ports.comports()
         # check if ports list has changed from stored ports
         # if ports != self.current_ports: # if ports have changed, set flag for a specific time
         #     self.set_inquiry_flag()
         # self.current_ports = ports # store current ports for comparison
-        com_port_list = [] # list of port addresses
-        new_ports = {} # dictionary for new ports, ports are added after *IDN? send
-        # go through current ports
-        for port in sorted(ports):
-            # add comport to list of com port addresses
-            com_port_list.append(port[0])
-            # if port is not in com_descriptions
-            if port[0] not in self.com_descriptions:
-                # add port to com_descriptions with default descripion
-                self.com_descriptions[port[0]] = port[1]
-            # if inquiry flag is True, inquire IDN from ports that haven't been inquired yet
-            if self.inquiry_flag == True:
-                # inquire IDN from ports with default description
-                # if port has default description, port *IDN? hasn't been acquired
-                if self.com_descriptions[port[0]] == port[1]:
-                    try:
-                        # open port
-                        serial_connection = Serial(str(port[0]), 115200, timeout=0.2)
-                        # inquire device type - delay makes sure ESP32 init is done
-                        self.idn_inquiry(serial_connection)
-                        # add serial_connection to new_ports dictionary, port address : serial object
-                        # new_ports dictionary is sent to update_com_ports after delay
-                        new_ports[port[0]] = serial_connection
-                    # if port cannot be opened, look for serial number in device parameters
-                    except SerialException:
-                        for dev in self.params.child('Device settings').children():
-                            if osx_mode:
-                                if port[0] == dev.child('COM port').value():
-                                    # set description according to device's serial number parameter
-                                    self.com_descriptions[port[0]] = dev.child('Serial number').value()
-                            else:
-                                if port[0] == 'COM' + str(dev.child('COM port').value()):
-                                    # set description according to device's serial number parameter
-                                    self.com_descriptions[port[0]] = dev.child('Serial number').value()
-                    except Exception as e:
-                        print(traceback.format_exc())
-                        logging.exception(e)
-        # remove port descriptions for physically disconnected devices
-        remove_ports = []
-        for port in self.com_descriptions.keys():
-            if port not in com_port_list:
-                remove_ports.append(port)
-        for port in remove_ports:
-            self.com_descriptions.pop(port)
-        # if inquiry flag is True, check timeout
-        if self.inquiry_flag == True:
-            # if inquiry has timed out - if current time is bigger than inquiry_time + timeout (seconds)
-            if time() > self.inquiry_time + 3:
-                self.inquiry_flag = False # set inquiry flag to False
+        com_port_list = [] # list of current port device names (like 'COM3')
+        new_ports = {} # dictionary of new identified ports with active connections
 
-        # trigger update_com_ports with delay
-        # reads responses from opened ports and prints devices to GUI
+        # go over sorted ports by device name
+        for port in sorted(ports, key=lambda p: p.device):
+            com_port_list.append(port.device)
+
+            # add new port description if not previously known
+            if port.device not in self.com_descriptions:
+                self.com_descriptions[port.device] = port.description
+
+            # if inquiry flag is set, inquire identity from ports not yet identified
+            if self.inquiry_flag and self.com_descriptions[port.device] == port.description:
+                try:
+                    # attempt to open port with timeout and baud rate (throughput as bits per second)
+                    serial_connection = Serial(str(port.device), 115200, timeout=0.2)
+                    # do device identity inquiry (delay makes sure device state init is done with ESP32)
+                    self.idn_inquiry(serial_connection)
+                    # store the serial connection for later usage with port name as the key
+                    # new_ports dictionary is sent to update_com_ports after delay
+                    new_ports[port.device] = serial_connection
+
+                except SerialException:
+                    # on failure try to update desc using device serial number from params
+                    for dev in self.params.child('Device settings').children():
+                        if osx_mode:
+                            if port.device == dev.child('COM port').value():
+                                # set description according to device's serial number parameter
+                                self.com_descriptions[port.device] = dev.child('Serial number').value()
+                        else:
+                            if port.device == 'COM' + str(dev.child('COM port').value()):
+                                # set description according to device's serial number parameter
+                                self.com_descriptions[port.device] = dev.child('Serial number').value()
+                except Exception as e:
+                    # log unexpected errors while trying to inquire the device
+                    print(traceback.format_exc())
+                    logging.exception(e)
+
+        # remove descriptions of ports that are no longer connected
+        disconnected_ports = [p for p in self.com_descriptions if p not in com_port_list]
+        for port in disconnected_ports:
+            self.com_descriptions.pop(port)
+
+        # if inquiry flag is True, check timeout
+        # manage inquiry flag timeout after 3 seconds
+        if self.inquiry_flag and time() > self.inquiry_time + 3:
+            self.inquiry_flag = False
+
+        # schedule update_com_ports to process new ports after a short delay
         QTimer.singleShot(800, lambda: self.update_com_ports(new_ports, com_port_list)) # delay increased from 600 to 800
-        # return list of port addresses
+
+        # return list of current port device names
         return com_port_list
     
     def update_com_ports(self, new_ports, com_port_list):
