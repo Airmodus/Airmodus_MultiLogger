@@ -4,7 +4,7 @@ from PyQt5.QtCore import QTimer
 from serial import Serial
 from serial.tools import list_ports
 from serial.serialutil import SerialException
-from config import osx_mode, TSI_CPC 
+from config import osx_mode, TSI_CPC, CPC
 
 class SerialDeviceConnection():
     def __init__(self):
@@ -64,14 +64,14 @@ class SerialDeviceConnection():
     
     def send_multiple_messages(self, device_type, ten_hz=False):
 
-        if device_type == 1: # CPC
+        if device_type == CPC:
             self.send_message(":MEAS:ALL")
             QTimer.singleShot(150, lambda: self.send_message(":SYST:PRNT"))
             QTimer.singleShot(300, lambda: self.send_message(":SYST:PALL"))
             if ten_hz:
                 QTimer.singleShot(450, lambda: self.send_message(":MEAS:OPC_CONC_LOG"))
         
-        elif device_type == TSI_CPC: # TSI CPC
+        elif device_type == TSI_CPC:
             self.send_message("RD") # read concentration
             QTimer.singleShot(150, lambda: self.send_message("RIE")) # read instrument errors
     
@@ -82,7 +82,7 @@ class SerialDeviceConnection():
     
     # --- CPC & PSM set/command functions ---
 
-    # # send set message
+    # send set message
     def send_set(self, message):
         if message == None:
             # if message is None, do nothing

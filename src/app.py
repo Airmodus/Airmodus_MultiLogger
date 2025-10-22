@@ -68,6 +68,10 @@ from devices import (
     ExampleDeviceWidget
 )
 
+from managers import (
+    DataHolder
+)
+
 from serial_connection import SerialDeviceConnection
 from params import ScalableGroup, params, p
 
@@ -83,7 +87,7 @@ class MainWindow(QMainWindow):
         self.config_file_path = "" # path to the configuration file
 
         # Extracted inits
-        self._init_data_structs()
+        self.data_holder = DataHolder()
         self._setup_parameter_tree()
         self._setup_gui()
         self._connect_signals()
@@ -92,42 +96,6 @@ class MainWindow(QMainWindow):
         self.startTimer()
         # load ini file if available
         self.load_ini()
-
-
-    def _init_data_structs(self):
-        """Initialize all dicts/lists (data, plots, devices, etc.)."""
-        # data related
-        self.latest_data = {} # contains latest values
-        self.latest_settings = {} # contains latest CPC and PSM settings
-        self.latest_psm_prnt = {} # contains latest PSM prnt values
-        self.latest_poly_correction = {} # contains latest polynomial correction values from PSM
-        self.latest_command = {} # contains latest user entered command message
-        self.latest_ten_hz = {} # contains latest 10 hz OPC concentration log values
-        self.extra_data = {} # contains extra data, used when multiple data prints are received at once
-        self.extra_data_counter = {} # contains extra data counter, used to determine when extra data buffer is safe to clear
-        self.partial_data = {} # contains partial data, used when incomplete messages are received
-        self.pulse_analysis_index = {} # contains CPC pulse analysis index, used for pulse analysis progress tracking
-        self.psm_dilution = {} # contains PSM dilution parameters
-        # plot related
-        self.plot_data = {} # contains plotted values
-        self.curve_dict = {} # contains curve objects for main plot
-        self.start_times = {} # contains start times of measurements
-        # device related
-        self.current_ports = [] # contains current available ports as serial objects
-        self.com_descriptions = {} # contains com port descriptions
-        self.device_widgets = {} # contains device widgets, appended in device_added function
-        # filenames
-        self.dat_filenames = {} # contains filenames of .dat files
-        self.par_filenames = {} # contains filenames of .par files (CPC and PSM)
-        self.ten_hz_filenames = {} # contains filenames of 10 hz OPC concentration log files (CPC)
-        self.pulse_analysis_filenames = {} # contains filenames of pulse analysis files (CPC)
-        # flags
-        self.par_updates = {} # contains .par update flags: 1 = update, 0 = no update
-        self.psm_settings_updates = {} # contains PSM settings update flags: 1 = update, 0 = no update
-        self.device_errors = {} # contains device error flags: 0 = ok, 1 = errors
-        self.idn_inquiry_devices = [] # contains IDs of devices that need IDN inquiry
-        # dictionary of device names matching device type
-        self.device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', ELECTROMETER: 'Electrometer', CO2_SENSOR: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', EDILUTER: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', EXAMPLE_DEVICE: 'Example device'}
 
     def _setup_parameter_tree(self):
         """Create and configure the ParameterTree."""
@@ -191,8 +159,8 @@ class MainWindow(QMainWindow):
         self.params.child('Data settings').child('Save data').sigValueChanged.connect(self.save_changed)
         # connect file path parameter to filepath_changed function
         self.params.child('Data settings').child('File path').sigValueChanged.connect(self.filepath_changed)
-        # connect file tag parameter to reset_filenames function
-        self.params.child('Data settings').child('File tag').sigValueChanged.connect(self.reset_filenames)
+        # connect file tag parameter to reset_all_filenames function
+        self.params.child('Data settings').child('File tag').sigValueChanged.connect(self.data_holder.reset_all_filenames)
         # connect com port update button
         self.params.child('Serial ports').child('Update serial ports').sigActivated.connect(self.set_inquiry_flag)
 
@@ -222,7 +190,7 @@ class MainWindow(QMainWindow):
         # initialize saving status flag, set to 0 in write_data function if saving not on or fails
         self.saving_status = 1 # 0 = not saving, 1 = saving
         # set all device errors to False, individually set to True when errors encountered
-        self.device_errors = {key: False for key in self.device_errors}
+        self.data_holder.device_errors = {key: False for key in self.data_holder.device_errors}
         self.connection_test() # check if devices are connected
         if self.first_connection: # if first connection has been made
             self.get_dev_data() # send read commands to connected serial devices
@@ -237,7 +205,7 @@ class MainWindow(QMainWindow):
         self.update_figures_and_menus() # update figures and menus
         self.compare_day() # check if day has changed and create new files if necessary
         self.write_data() # write data to files
-        self.update_error_icons() # set error icons according to device_errors dict
+        self.update_error_icons() # set error icons according to data_holder.device_errors dict
         self.status_lights.set_error_light(self.error_status) # update error status light according to error_status flag
         self.status_lights.set_saving_light(self.saving_status) # update saving status light according to saving_status flag
         if self.time_counter < MAX_TIME_SEC - 1: # if time counter has not reached MAX_TIME_SEC - 1
@@ -305,27 +273,26 @@ class MainWindow(QMainWindow):
             # this ensures serial number is up to date if device changes
             if dev.child('Device type').value() in [CPC, PSM, PSM2, CO2_SENSOR, RHTP, AFM]:
                 if connected and dev.child('Connected').value() == False:
-                    if dev.child('DevID').value() not in self.idn_inquiry_devices:
-                        self.idn_inquiry_devices.append(dev.child('DevID').value())
+                    if dev.child('DevID').value() not in self.data_holder.idn_inquiry_devices:
+                        self.data_holder.idn_inquiry_devices.append(dev.child('DevID').value())
                     # if device is PSM, reset firmware version and dilution parameters to ensure they are updated
                     if dev.child('Device type').value() in [PSM, PSM2]:
                         dev.child('Firmware version').setValue("") # reset firmware version
-                        if dev.child('DevID').value() in self.psm_dilution:
-                            del self.psm_dilution[dev.child('DevID').value()] # reset dilution parameters
+                        if dev.child('DevID').value() in self.data_holder.psm_dilution:
+                            del self.data_holder.psm_dilution[dev.child('DevID').value()] # reset dilution parameters
                         # set settings update flag
-                        self.psm_settings_updates[dev.child('DevID').value()] = True
                     if dev.child('Device type').value() in [CPC, PSM, PSM2, EDILUTER]:
                         # set text to normal using CSS ID
-                        self.device_widgets[dev.child('DevID').value()].setObjectName("connected")
-                        self.device_widgets[dev.child('DevID').value()].setStyleSheet("")
+                        self.data_holder.device_widgets[dev.child('DevID').value()].setObjectName("connected")
+                        self.data_holder.device_widgets[dev.child('DevID').value()].setStyleSheet("")
 
             # print disconnected message when device is disconnected
             if dev.child('Device type').value() in [CPC, PSM, PSM2, EDILUTER]:
                 if connected == False and dev.child('Connected').value() == True:
-                    self.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box("Device disconnected.")
+                    self.data_holder.device_widgets[dev.child('DevID').value()].set_tab.command_widget.update_text_box("Device disconnected.")
                     # set text to grey using CSS ID
-                    self.device_widgets[dev.child('DevID').value()].setObjectName("disconnected")
-                    self.device_widgets[dev.child('DevID').value()].setStyleSheet("")
+                    self.data_holder.device_widgets[dev.child('DevID').value()].setObjectName("disconnected")
+                    self.data_holder.device_widgets[dev.child('DevID').value()].setStyleSheet("")
             
             # set the connection state according to connected value
             dev.child('Connected').setValue(connected)
@@ -344,10 +311,10 @@ class MainWindow(QMainWindow):
 
                     if device_type in [CPC, TSI_CPC]: # CPC
                         # send multiple messages to device according to type
-                        if device_type == CPC and dev.child('DevID').value() in self.pulse_analysis_index:
+                        if device_type == CPC and dev.child('DevID').value() in self.data_holder.pulse_analysis_index:
                             # if pulse analysis is in progress, send pulse analysis messages
-                            if self.pulse_analysis_index[dev.child('DevID').value()] is not None: # when index is None, analysis has reached its end
-                                threshold = PULSE_ANALYSIS_THRESHOLDS[self.pulse_analysis_index[dev.child('DevID').value()]]
+                            if self.data_holder.pulse_analysis_index[dev.child('DevID').value()] is not None: # when index is None, analysis has reached its end
+                                threshold = PULSE_ANALYSIS_THRESHOLDS[self.data_holder.pulse_analysis_index[dev.child('DevID').value()]]
                                 dev.child('Connection').value().send_pulse_analysis_messages(threshold)
                         elif device_type == CPC and dev.child('10 hz').value() == True:
                             dev.child('Connection').value().send_multiple_messages(device_type, ten_hz=True)
@@ -356,11 +323,11 @@ class MainWindow(QMainWindow):
 
                     elif device_type in [PSM, PSM2]: # PSM
                         # if settings update flag is True, fetch set points from PSM and update GUI
-                        if self.psm_settings_updates[dev.child('DevID').value()] == True:
+                        if self.data_holder.psm_settings_updates[dev.child('DevID').value()] == True:
                             # send message to device to get settings
                             dev.child('Connection').value().send_message(":SYST:PRNT")
                         # if dilution parameters have not been fetched, send message
-                        if dev.child('DevID').value() not in self.psm_dilution:
+                        if dev.child('DevID').value() not in self.data_holder.psm_dilution:
                             dev.child('Connection').value().send_delayed_message(":SYST:VCMP", 150)
 
                     elif device_type == ELECTROMETER: # ELECTROMETER
@@ -380,7 +347,7 @@ class MainWindow(QMainWindow):
 
                     if device_type in [CPC, PSM, PSM2, CO2_SENSOR, RHTP, AFM]: # CPC, PSM, CO2, RHTP, AFM
                         # if device is in IDN inquiry list, send IDN inquiry with delay
-                        if dev.child('DevID').value() in self.idn_inquiry_devices:
+                        if dev.child('DevID').value() in self.data_holder.idn_inquiry_devices:
                             self.idn_inquiry(dev.child('Connection').value().connection)
                         # if Serial number has been acquired, check if Firmware version is empty
                         elif device_type in [PSM, PSM2]:
@@ -407,29 +374,19 @@ class MainWindow(QMainWindow):
             if dev.child('Connected').value():
                 # store device ID for convenience
                 dev_id = dev.child('DevID').value()
+                dev_type = dev.child('Device type').value() 
 
-                if dev.child('Device type').value() == CPC: # CPC
+                if dev_type == CPC: # CPC
 
                     # check if there's data from last round in extra_data dictionary
                     # if no extra data, start with nan lists
-                    if dev_id in self.extra_data:
-                        self.latest_data[dev_id] = self.extra_data.pop(dev_id)
-                    else:
-                        self.latest_data[dev_id] = full(15, nan)
-                    if str(dev_id)+":prnt" in self.extra_data:
-                        prnt_list = self.extra_data.pop(str(dev_id)+":prnt")
-                    else:
-                        prnt_list = full(13, nan)
-                    if str(dev_id)+":pall" in self.extra_data:
-                        pall_list = self.extra_data.pop(str(dev_id)+":pall")
-                    else:
-                        pall_list = full(28, nan)
+                    self.data_holder.latest_data[dev_id] = self.data_holder.extra_data.pop(dev_id, self.data_holder.get_default_data_array(dev_type))
+
+                    prnt_list = self.data_holder.extra_data.pop(str(dev_id) + ":prnt", full(13, nan))
+                    pall_list = self.data_holder.extra_data.pop(str(dev_id) + ":pall", full(28, nan))
                     # if 10 hz is True, initialize 10 hz data with extra data or nan list
                     if dev.child('10 hz').value() == True:
-                        if str(dev_id)+":10hz" in self.extra_data:
-                            self.latest_ten_hz[dev_id] = self.extra_data.pop(str(dev_id)+":10hz")
-                        else:
-                            self.latest_ten_hz[dev_id] = full(10, nan)
+                        self.data_holder.latest_ten_hz[dev_id] = self.data_holder.extra_data.pop(str(dev_id) + ":10hz", self.data_holder.latest_ten_hz[dev_id])
 
                     try:
                         readings = dev.child('Connection').value().connection.read_all()
@@ -450,7 +407,7 @@ class MainWindow(QMainWindow):
                                 else:
                                     cabin_p_error = False
                                 # update widget error colors and store total errors
-                                total_errors = self.device_widgets[dev_id].update_errors(status_hex, cabin_p_error)
+                                total_errors = self.data_holder.device_widgets[dev_id].update_errors(status_hex, cabin_p_error)
                                 
                                 # set error_status flag if total errors is not 0
                                 if total_errors != 0:
@@ -461,17 +418,17 @@ class MainWindow(QMainWindow):
                                 meas_list = list(map(float,data[:-1])) # convert to float without status hex
                                 # compile data list
                                 # if latest_data is nan, store data normally
-                                if isnan(self.latest_data[dev_id][0]):
-                                    self.latest_data[dev_id] = compile_cpc_data(meas_list, status_hex, total_errors)
+                                if isnan(self.data_holder.latest_data[dev_id][0]):
+                                    self.data_holder.latest_data[dev_id] = compile_cpc_data(meas_list, status_hex, total_errors)
                                 else: # if not nan, store data to extra_data dictionary
-                                    self.extra_data[dev_id] = compile_cpc_data(meas_list, status_hex, total_errors)
+                                    self.data_holder.extra_data[dev_id] = compile_cpc_data(meas_list, status_hex, total_errors)
 
                             elif command == ":SYST:PRNT":
                                 # if prnt_list is nan, store data normally
                                 if isnan(prnt_list[0]):
                                     prnt_list = list(map(float,data)) # convert to float
                                 else: # if not nan, store data to extra_data dictionary
-                                    self.extra_data[str(dev_id)+":prnt"] = list(map(float,data))
+                                    self.data_holder.extra_data[str(dev_id)+":prnt"] = list(map(float,data))
 
                             elif command == ":SYST:PALL":
                                 data[22] = "NaN" # set device id and firmware variant letter to NaN before float conversion
@@ -480,33 +437,33 @@ class MainWindow(QMainWindow):
                                 if isnan(pall_list[0]): # TODO make sure this value (inlet press lower limit) is never nan in valid data
                                     pall_list = list(map(float,data))
                                 else: # if not nan, store data to extra_data dictionary
-                                    self.extra_data[str(dev_id)+":pall"] = list(map(float,data))
+                                    self.data_holder.extra_data[str(dev_id)+":pall"] = list(map(float,data))
                             
                             elif command == ":MEAS:OPC_CONC_LOG":
                                 del data[0] # remove first item (timestamp)
                                 # if latest_ten_hz is nan, store data normally
-                                if isnan(float(self.latest_ten_hz[dev_id][0])):
-                                    self.latest_ten_hz[dev_id] = data
+                                if isnan(float(self.data_holder.latest_ten_hz[dev_id][0])):
+                                    self.data_holder.latest_ten_hz[dev_id] = data
                                 else: # if not nan, store data to extra_data dictionary
-                                    self.extra_data[str(dev_id)+":10hz"] = data
+                                    self.data_holder.extra_data[str(dev_id)+":10hz"] = data
                             
                             elif command == ":STAT:SELF:LOG":
                                 error_length = len(CPC_ERRORS) # get amount of CPC errors
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 status_bin = bin(int(data[0], 16)) # convert hex to int and int to binary
                                 status_bin = status_bin[2:].zfill(error_length) # remove 0b from string and fill with 0s
                                 # print self test error binary
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
                                 inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
                                 # print error indices
                                 for i in range(error_length): # loop through errors
                                     if inverted_status_bin[i] == "1":
-                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(i))
-                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + CPC_ERRORS[i])
+                                        self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(i))
+                                        self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + CPC_ERRORS[i])
 
                             elif command == ":SELF:ERR":
                                 try:
-                                    self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                    self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                     error_code = int(data[0])
                                     print("self test error: " + CPC_ERRORS[error_code])
                                 except Exception as e:
@@ -514,7 +471,7 @@ class MainWindow(QMainWindow):
                                     logging.exception(e)
                             
                             elif command == "*IDN":
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 serial_number = data[0]
                                 serial_number = serial_number.strip("\n")
                                 serial_number = serial_number.strip("\r")
@@ -524,11 +481,11 @@ class MainWindow(QMainWindow):
                                     # update PSM 'Connected CPC' list
                                     self.params.child('Device settings').update_cpc_dict()
                                 # remove device from IDN inquiry list
-                                if dev_id in self.idn_inquiry_devices:
-                                    self.idn_inquiry_devices.remove(dev_id)
+                                if dev_id in self.data_holder.idn_inquiry_devices:
+                                    self.data_holder.idn_inquiry_devices.remove(dev_id)
 
                             else: # print these to command widget text box
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 #logging.warning("readIndata - unknown command: %s", command)
 
                     except Exception as e: # if reading fails, print error message
@@ -536,9 +493,9 @@ class MainWindow(QMainWindow):
                         logging.exception(e)
                     
                     # update CPC widget data values
-                    self.device_widgets[dev_id].update_values(self.latest_data[dev_id])
+                    self.data_holder.device_widgets[dev_id].update_values(self.data_holder.latest_data[dev_id])
                     # update CPC widget set values
-                    self.device_widgets[dev_id].update_settings(prnt_list)
+                    self.data_holder.device_widgets[dev_id].update_settings(prnt_list)
 
                     # set settings update flag if both lists are successfully read
                     if str(prnt_list[0]) != "nan" and str(pall_list[0]) != "nan": # if both lists are not nan (checks first item only)
@@ -548,59 +505,47 @@ class MainWindow(QMainWindow):
                     
                     # if pulse analysis is in progress, skip settings update
                     # this keeps the original threshold value intact in latest_settings dictionary
-                    if dev_id in self.pulse_analysis_index:
+                    if dev_id in self.data_holder.pulse_analysis_index:
                         settings_update = False
                     
                     # update settings if settings are valid
                     if settings_update == True: # if settings are valid, not nan
                         
-                        # if device doesn't yet exist in latest_settings dictionary, add as nan list
-                        if dev_id not in self.latest_settings:
-                            self.latest_settings[dev_id] = full(13, nan)
-                        
                         # get previous settings form latest_settings dictionary
-                        previous_settings = self.latest_settings[dev_id]
+                        previous_settings = self.data_holder.latest_settings[dev_id]
                         # compile settings list
                         settings = compile_cpc_settings(prnt_list, pall_list)
 
                         if not array_equal(settings, previous_settings, equal_nan=True): # if values have changed
                             # update latest settings
-                            self.latest_settings[dev_id] = settings
+                            self.data_holder.latest_settings[dev_id] = settings
                             # set .par update flag
-                            self.par_updates[dev_id] = 1
+                            self.data_holder.par_updates[dev_id] = 1
                         else:
                             # clear .par update flag
-                            self.par_updates[dev_id] = 0
+                            self.data_holder.par_updates[dev_id] = 0
                     
                     else: # if settings are not valid, clear .par update flag
-                        self.par_updates[dev_id] = 0
+                        self.data_holder.par_updates[dev_id] = 0
                 
-                if dev.child('Device type').value() in [PSM, PSM2]: # PSM
+                if dev_type in [PSM, PSM2]: # PSM
 
                     # clear extra data buffer after 60 seconds of consecutive buffering
                     # this ensures data is real time and not delayed by 1 second
-                    if dev_id in self.extra_data and self.extra_data_counter[dev_id] >= 60:
-                        del self.extra_data[dev_id]
+                    if dev_id in self.data_holder.extra_data and self.data_holder.extra_data_counter[dev_id] >= 60:
+                        del self.data_holder.extra_data[dev_id]
                         logging.info("PSM %s extra data buffer cleared", dev.child('Serial number').value())
                     
-                    # check if there is extra data from last round
-                    if dev_id in self.extra_data:
-                        # if there is extra data, store it to latest_data dictionary
-                        self.latest_data[dev_id] = self.extra_data.pop(dev_id)
-                        # increment extra data counter
-                        self.extra_data_counter[dev_id] += 1
+                    default_nan = self.data_holder.get_default_data_array(dev_type)
+                    was_present = dev_id in self.data_holder.extra_data  # Check BEFORE pop
+                    self.data_holder.latest_data[dev_id] = self.data_holder.extra_data.pop(dev_id, default_nan)
+                    if was_present:
+                        self.data_holder.extra_data_counter[dev_id] += 1
                     else:
-                        # if no extra data, initialize latest_data with nan list
-                        # convert from array to list to allow string insertion (CPC status hex)
-                        if dev.child('Device type').value() == PSM:
-                            self.latest_data[dev_id] = full(33, nan).tolist()
-                        elif dev.child('Device type').value() == PSM2:
-                            self.latest_data[dev_id] = full(34, nan).tolist()
-                        # reset extra data counter
-                        self.extra_data_counter[dev_id] = 0
+                        self.data_holder.extra_data_counter[dev_id] = 0  # Add reset
 
                     # clear par update flag
-                    self.par_updates[dev_id] = 0
+                    self.data_holder.par_updates[dev_id] = 0
 
                     # set settings_fetched flag to False
                     # flag is set to True when settings are successfully fetched
@@ -613,20 +558,20 @@ class MainWindow(QMainWindow):
                         readings = readings.decode().split("\r")
 
                         # check if first message is expected as second half of partial message
-                        if dev_id in self.partial_data:
+                        if dev_id in self.data_holder.partial_data:
                             # add stored partial message to the front of first message
-                            readings[0] = self.partial_data[dev_id] + readings[0]
+                            readings[0] = self.data_holder.partial_data[dev_id] + readings[0]
                             # remove partial message from dictionary
-                            del self.partial_data[dev_id]
+                            del self.data_holder.partial_data[dev_id]
                             #logging.info("PSM %s combined message: %s", dev.child('Serial number').value(), readings[0])
 
                         # check if last message is empty or partial
                         if readings[-1] == "": # if empty, remove it from readings
                             readings = readings[:-1]
                         else: # if not empty, store partial message and remove it from readings
-                            self.partial_data[dev_id] = readings[-1]
+                            self.data_holder.partial_data[dev_id] = readings[-1]
                             readings = readings[:-1]
-                            #logging.info("PSM %s partial message: %s", dev.child('Serial number').value(), self.partial_data[dev_id])
+                            #logging.info("PSM %s partial message: %s", dev.child('Serial number').value(), self.data_holder.partial_data[dev_id])
                         
                         # loop through messages
                         for message in readings:
@@ -640,14 +585,14 @@ class MainWindow(QMainWindow):
                             if command == ":MEAS:SCAN" or command == ":MEAS:STEP" or command == ":MEAS:FIXD":
                                 
                                 # update PSM widget data values in GUI
-                                self.device_widgets[dev_id].update_values(data)
+                                self.data_holder.device_widgets[dev_id].update_values(data)
                                 # update active measure mode color
-                                self.device_widgets[dev_id].measure_tab.change_mode_color(command)
+                                self.data_holder.device_widgets[dev_id].measure_tab.change_mode_color(command)
                                 # status hex handling
                                 status_hex = data[-2]
                                 try:
                                     # update widget errors colors
-                                    total_errors = self.device_widgets[dev_id].update_errors(status_hex)
+                                    total_errors = self.data_holder.device_widgets[dev_id].update_errors(status_hex)
                                     # set error_status flag if total errors is not 0
                                     if total_errors != 0:
                                         self.error_status = 1
@@ -659,14 +604,14 @@ class MainWindow(QMainWindow):
                                 # note hex handling
                                 note_hex = data[-1]
                                 # update widget liquid states with note hex
-                                liquid_errors = self.device_widgets[dev_id].update_notes(note_hex)
+                                liquid_errors = self.data_holder.device_widgets[dev_id].update_notes(note_hex)
                                 # set error flags if liquid errors is not 0
                                 if liquid_errors != 0:
                                     self.error_status = 1
                                     # set device error flag
                                     self.set_device_error(dev_id, True)
                                 # store polynomial correction value as float to dictionary
-                                self.latest_poly_correction[dev_id] = float(data[14])
+                                self.data_holder.latest_poly_correction[dev_id] = float(data[14])
 
                                 scan_status = "9" # set scan status to 9 (undefined) as default
                                 # check firmware number to determine if scan status is included in data
@@ -674,13 +619,13 @@ class MainWindow(QMainWindow):
                                     if dev.child('Firmware version').value() != "":
                                         firmware_version = dev.child('Firmware version').value().split(".")
                                         # Retrofit: version >= 0.5.5
-                                        if dev.child('Device type').value() == PSM:
+                                        if dev_type == PSM:
                                             if int(firmware_version[1]) > 5:
                                                 scan_status = data[15]
                                             elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 5:
                                                 scan_status = data[15]
                                         # PSM 2.0: version >= 0.6.8
-                                        elif dev.child('Device type').value() == PSM2:
+                                        elif dev_type == PSM2:
                                             if int(firmware_version[1]) > 6:
                                                 scan_status = data[15]
                                             elif int(firmware_version[1]) == 6 and int(firmware_version[2]) >= 8:
@@ -690,48 +635,48 @@ class MainWindow(QMainWindow):
                                     logging.exception(e)
                                 
                                 # compile psm data
-                                compiled_data = compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev.child('Device type').value())
+                                compiled_data = compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev_type)
                                 # if latest_data is nan, store data normally
-                                if isnan(float(self.latest_data[dev_id][2])): # check saturator flow rate value (index 2)
-                                    self.latest_data[dev_id] = compiled_data
+                                if isnan(float(self.data_holder.latest_data[dev_id][2])): # check saturator flow rate value (index 2)
+                                    self.data_holder.latest_data[dev_id] = compiled_data
                                 else: # if not nan, store data to extra_data dictionary
-                                    self.extra_data[dev_id] = compiled_data
+                                    self.data_holder.extra_data[dev_id] = compiled_data
                                     #logging.info("PSM %s extra data: %s", dev.child('Serial number').value(), str(compiled_data))
                             
                             elif command == ":SYST:PRNT":
                                 # update GUI set points
-                                self.device_widgets[dev_id].update_settings(data)
+                                self.data_holder.device_widgets[dev_id].update_settings(data)
                                 # store settings to latest PSM prnt dictionary with device id as key
-                                self.latest_psm_prnt[dev_id] = data
+                                self.data_holder.latest_psm_prnt[dev_id] = data
                                 # print settings to command widget text box
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 # set settings_fetched flag to True
                                 settings_fetched = True
                             
                             elif command == ":STAT:SELF:LOG":
                                 error_length = len(PSM_ERRORS) # get amount of PSM errors
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 status_bin = bin(int(data[0], 16)) # convert hex to int and int to binary
                                 status_bin = status_bin[2:].zfill(error_length) # remove 0b from string and fill with 0s
                                 # print self test error binary
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
                                 inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
                                 # print error indices
                                 for i in range(error_length): # loop through binary digits
                                     if inverted_status_bin[i] == "1":
-                                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(i))
+                                        self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(i))
                                         # if error is MFC_HEATER / MFC_EXCESS, check device type
-                                        if i == 27 and dev.child('Device type').value() == PSM: # Retrofit has different error at index 27
-                                            self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + "ERROR_SELFTEST_MFC_EXCESS")
+                                        if i == 27 and dev_type == PSM: # Retrofit has different error at index 27
+                                            self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + "ERROR_SELFTEST_MFC_EXCESS")
                                         else:
-                                            self.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + PSM_ERRORS[i])
+                                            self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + PSM_ERRORS[i])
                             
                             elif command == ":SELF:ERR":
                                 try:
-                                    self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                    self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                     error_code = int(data[0])
                                     # if error is MFC_HEATER / MFC_EXCESS, check device type
-                                    if error_code == 27 and dev.child('Device type').value() == PSM:
+                                    if error_code == 27 and dev_type == PSM:
                                         print("self test error: " + "ERROR_SELFTEST_MFC_EXCESS")
                                     else:
                                         print("self test error: " + PSM_ERRORS[int(error_code)])
@@ -740,7 +685,7 @@ class MainWindow(QMainWindow):
                                     logging.exception(e)
                             
                             elif command == "*IDN":
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 serial_number = data[0]
                                 serial_number = serial_number.strip("\n")
                                 serial_number = serial_number.strip("\r")
@@ -748,34 +693,34 @@ class MainWindow(QMainWindow):
                                 if dev.child('Serial number').value() != serial_number:
                                     dev.child('Serial number').setValue(serial_number)
                                 # remove device from IDN inquiry list
-                                if dev_id in self.idn_inquiry_devices:
-                                    self.idn_inquiry_devices.remove(dev_id)
+                                if dev_id in self.data_holder.idn_inquiry_devices:
+                                    self.data_holder.idn_inquiry_devices.remove(dev_id)
                             
                             elif command == "Firmware":
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 if "version: " in data[0]:
                                     firmware_version = data[0].split(": ")[1]
                                     if dev.child('Firmware version').value() != firmware_version:
                                         dev.child('Firmware version').setValue(firmware_version)
                             
                             elif command == ":SYST:VCMP":
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
                                 if len(data) == 6: # make sure data is valid
                                     # store dilution parameters to dictionary
-                                    self.psm_dilution[dev_id] = data
+                                    self.data_holder.psm_dilution[dev_id] = data
                                 else:
                                     print("PSM dilution parameters invalid:", data)
                             
                             else: # print other messages to command widget text box
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
 
                     except Exception as e:
                         print(traceback.format_exc())
                         logging.exception(e)
                         # update widget error colors
-                        self.device_widgets[dev_id].measure_tab.scan.change_color(0)
-                        self.device_widgets[dev_id].measure_tab.step.change_color(0)
-                        self.device_widgets[dev_id].measure_tab.fixed.change_color(0)
+                        self.data_holder.device_widgets[dev_id].measure_tab.scan.change_color(0)
+                        self.data_holder.device_widgets[dev_id].measure_tab.step.change_color(0)
+                        self.data_holder.device_widgets[dev_id].measure_tab.fixed.change_color(0)
                         try:
                             # print message_string to log
                             logging.info("PSM message_string: %s", message_string)
@@ -783,43 +728,43 @@ class MainWindow(QMainWindow):
                             print(traceback.format_exc())
                     
                     # compile settings list if update flag is True, settings_fetched is True and dilution parameters have been fetched
-                    if self.psm_settings_updates[dev_id] == True and settings_fetched == True and dev_id in self.psm_dilution:
+                    if self.data_holder.psm_settings_updates[dev_id] == True and settings_fetched == True and dev_id in self.data_holder.psm_dilution:
                         try:
-                            psm_version = dev.child('Device type').value()
+                            psm_version = dev_type
                             if psm_version == PSM:
                                 # get CO flow rate from PSM widget
-                                co_flow = round(self.device_widgets[dev_id].set_tab.set_co_flow.value_spinbox.value(), 3)
+                                co_flow = round(self.data_holder.device_widgets[dev_id].set_tab.set_co_flow.value_spinbox.value(), 3)
                             elif psm_version == PSM2:
                                 # set nan as placeholder
                                 co_flow = "nan"
-                            dilution_parameters = self.psm_dilution[dev_id]
+                            dilution_parameters = self.data_holder.psm_dilution[dev_id]
                             # compile settings with latest PSM prnt settings and CO flow rate
-                            settings = compile_psm_settings(self.latest_psm_prnt[dev_id], co_flow, dilution_parameters, psm_version)
+                            settings = compile_psm_settings(self.data_holder.latest_psm_prnt[dev_id], co_flow, dilution_parameters, psm_version)
                             # store settings to latest settings dictionary with device id as key
-                            self.latest_settings[dev_id] = settings
+                            self.data_holder.latest_settings[dev_id] = settings
                             # add par update flag
-                            self.par_updates[dev_id] = 1
+                            self.data_holder.par_updates[dev_id] = 1
                             # remove update settings flag once settings have been updated and compiled
-                            self.psm_settings_updates[dev_id] = False
+                            self.data_holder.psm_settings_updates[dev_id] = False
                         except Exception as e:
                             print(traceback.format_exc())
                             logging.exception(e)
                 
-                if dev.child('Device type').value() == ELECTROMETER: # ELECTROMETER
+                if dev_type == ELECTROMETER: # ELECTROMETER
                     try: # try to read data, decode, split and convert to float
                         readings = dev.child('Connection').value().connection.read_until(b'\r\n').decode()
                         readings = list(map(float,readings.split(";")))
                         # store to latest_data dictionary with device id as key
-                        self.latest_data[dev_id] = readings
+                        self.data_holder.latest_data[dev_id] = readings
                     except Exception as e: # if reading fails, store nan values to latest_data
                         print(traceback.format_exc())
-                        self.latest_data[dev_id] = full(3, nan)
+                        self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
                         logging.exception(e)
 
-                if dev.child('Device type').value() == CO2_SENSOR: # CO2 sensor TODO make CO2 process similar to RHTP?
+                if dev_type == CO2_SENSOR: # CO2 sensor TODO make CO2 process similar to RHTP?
                     try:
                         # if device is in IDN inquiry list, look for *IDN
-                        if dev_id in self.idn_inquiry_devices:
+                        if dev_id in self.data_holder.idn_inquiry_devices:
                             # read all data from buffer
                             messages = dev.child('Connection').value().connection.read_all().decode().split("\r\n")
                             # go through messages
@@ -835,10 +780,10 @@ class MainWindow(QMainWindow):
                                         if dev.child('Serial number').value() != serial_number:
                                             dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
                                         # remove device from IDN inquiry list
-                                        if dev_id in self.idn_inquiry_devices:
-                                            self.idn_inquiry_devices.remove(dev_id)
+                                        if dev_id in self.data_holder.idn_inquiry_devices:
+                                            self.data_holder.idn_inquiry_devices.remove(dev_id)
                             # store nan values to latest_data
-                            self.latest_data[dev_id] = full(3, nan)
+                            self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
 
                         # if Serial number has been acquired, read data normally
                         else:
@@ -847,22 +792,19 @@ class MainWindow(QMainWindow):
                             readings = list(map(float,readings.split(";")))
                             if readings[0] != 0: # if data is something else than 0
                                 # store to latest_data dictionary with device id as key
-                                self.latest_data[dev_id] = readings
+                                self.data_holder.latest_data[dev_id] = readings
                             else: # if data is 0, not valid
-                                self.latest_data[dev_id] = full(3, nan)
+                                self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type) 
 
                     except Exception as e: # if reading fails, store nan values to latest_data
                         print(traceback.format_exc())
-                        self.latest_data[dev_id] = full(3, nan)
+                        self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type) 
                         logging.exception(e)
                 
-                if dev.child('Device type').value() == RHTP: # RHTP
+                if dev_type == RHTP: # RHTP
                     try:
-                        # start with nan list
-                        self.latest_data[dev_id] = full(3, nan)
-
                         # if device is in IDN inquiry list, look for *IDN
-                        if dev_id in self.idn_inquiry_devices:
+                        if dev_id in self.data_holder.idn_inquiry_devices:
                             # read all data from buffer
                             messages = dev.child('Connection').value().connection.read_all().decode().split("\r\n")
                             # go through messages
@@ -878,8 +820,8 @@ class MainWindow(QMainWindow):
                                         if dev.child('Serial number').value() != serial_number:
                                             dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
                                         # remove device from IDN inquiry list
-                                        if dev_id in self.idn_inquiry_devices:
-                                            self.idn_inquiry_devices.remove(dev_id)
+                                        if dev_id in self.data_holder.idn_inquiry_devices:
+                                            self.data_holder.idn_inquiry_devices.remove(dev_id)
                         
                         # if Serial number has been acquired, read data normally
                         else:
@@ -893,7 +835,7 @@ class MainWindow(QMainWindow):
                             # check if data is valid and store to latest_data
                             # readings length should be 3 (RH, T, P)
                             if len(readings) == 3:
-                                self.latest_data[dev_id] = readings
+                                self.data_holder.latest_data[dev_id] = readings
 
                             # check if there's extra data in buffer
                             # max message length is 23 (normal 20 + 2 \r\n + 1 if negative T)
@@ -909,19 +851,17 @@ class MainWindow(QMainWindow):
                                 extra_data = extra_data.strip('\r\n').split(", ")
                                 # use extra data as latest_data if valid
                                 if len(extra_data) == 3:
-                                    self.latest_data[dev_id] = extra_data
+                                    self.data_holder.latest_data[dev_id] = extra_data
 
                     except Exception as e:
                         print(traceback.format_exc())
+                        self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
                         logging.exception(e)
                 
-                if dev.child('Device type').value() == AFM: # AFM
+                if dev_type == AFM: # AFM
                     try:
-                        # start with nan list
-                        self.latest_data[dev_id] = full(5, nan)
-
                         # if device is in IDN inquiry list, look for *IDN
-                        if dev_id in self.idn_inquiry_devices:
+                        if dev_id in self.data_holder.idn_inquiry_devices:
                             # read all data from buffer
                             messages = dev.child('Connection').value().connection.read_all().decode().split("\r\n")
                             # go through messages
@@ -937,8 +877,8 @@ class MainWindow(QMainWindow):
                                         if dev.child('Serial number').value() != serial_number:
                                             dev.child('Serial number').setValue(serial_number)
                                         # remove device from IDN inquiry list
-                                        if dev_id in self.idn_inquiry_devices:
-                                            self.idn_inquiry_devices.remove(dev_id)
+                                        if dev_id in self.data_holder.idn_inquiry_devices:
+                                            self.data_holder.idn_inquiry_devices.remove(dev_id)
                         
                         # if Serial number has been acquired, read data normally
                         else:
@@ -952,7 +892,7 @@ class MainWindow(QMainWindow):
                             # check if data is valid and store to latest_data
                             # readings length should be 5 (volumetric flow, standard flow, RH, T, P)
                             if len(readings) == 5:
-                                self.latest_data[dev_id] = readings
+                                self.data_holder.latest_data[dev_id] = readings
 
                             # check if there's extra data in buffer
                             # max message length is 39 (normal 34 + 2 \r\n + 1 if negative T + 2 if flow values >= 10)
@@ -968,24 +908,23 @@ class MainWindow(QMainWindow):
                                 extra_data = extra_data.strip('\r\n').split(", ")
                                 # use extra data as latest_data if valid
                                 if len(extra_data) == 5:
-                                    self.latest_data[dev_id] = extra_data
+                                    self.data_holder.latest_data[dev_id] = extra_data
                     
                     except Exception as e:
                         print(traceback.format_exc())
+                        self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type) 
                         logging.exception(e)
                 
-                if dev.child('Device type').value() == EDILUTER: # eDiluter
+                if dev_type == EDILUTER: # eDiluter
                     try:
-                        # store nan values to latest_data in case reading fails
-                        self.latest_data[dev_id] = full(12, nan)
                         # flag indicating if data has already been received, used for handling extra data
                         data_received = False
                         # check if there's extra data from last round
-                        if dev_id in self.extra_data:
+                        if dev_id in self.data_holder.extra_data:
                             # store extra data to latest_data
-                            self.latest_data[dev_id] = self.extra_data[dev_id]
+                            self.data_holder.latest_data[dev_id] = self.data_holder.extra_data[dev_id]
                             # remove extra data from dictionary
-                            del self.extra_data[dev_id]
+                            del self.data_holder.extra_data[dev_id]
                         # read all data from buffer
                         readings = dev.child('Connection').value().connection.read_all()
                         # decode, separate messages and remove last empty message
@@ -1009,11 +948,11 @@ class MainWindow(QMainWindow):
                                     # if data has already been received
                                     if data_received == True:
                                         # store extra data to extra_data dictionary for next round
-                                        self.extra_data[dev_id] = data
+                                        self.data_holder.extra_data[dev_id] = data
                                     # if data has not been received yet
                                     else:
                                         # store data to latest_data dictionary with device id as key
-                                        self.latest_data[dev_id] = data
+                                        self.data_holder.latest_data[dev_id] = data
                                         # set data received flag to True
                                         data_received = True
                                 else: # if message is not full
@@ -1024,33 +963,34 @@ class MainWindow(QMainWindow):
                             # if message starts with "SUCCESS:" - command message response
                             elif message.split(" ")[0] == "SUCCESS:":
                                 # append device's command widget text box
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message)
                             
                             # if message starts with "ERROR:" - command message response
                             elif message.split(" ")[0] == "ERROR:":
                                 # append device's command widget text box
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message)
                             
                             else: # if message is not recognized
                                 logging.error("readIndata - eDiluter unknown message: %s", message)
                                 # append device's command widget text box
-                                self.device_widgets[dev_id].set_tab.command_widget.update_text_box(message)
+                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message)
                         
                     except Exception as e:
                         print(traceback.format_exc())
+                        self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
                         logging.exception(e)
                     
                     # update eDiluter status tab values
-                    self.device_widgets[dev_id].update_values(self.latest_data[dev_id])
+                    self.data_holder.device_widgets[dev_id].update_values(self.data_holder.latest_data[dev_id])
                 
-                if dev.child('Device type').value() == TSI_CPC:
+                if dev_type == TSI_CPC:
                     try: # try to read data, decode and split
                         readings = dev.child('Connection').value().connection.read_all()
                         readings = readings.decode().split("\r")[:-1]
                         readings[0] = float(readings[0]) # convert concentration to float
 
                         # store to latest data dictionary
-                        self.latest_data[dev_id] = readings
+                        self.data_holder.latest_data[dev_id] = readings
 
                         # set error_status flag if instrument errors is not equal to 0
                         if int(readings[1], 16) != 0:
@@ -1060,8 +1000,8 @@ class MainWindow(QMainWindow):
                     
                     except Exception as e: # if reading fails, store nan values to latest_data
                         print(traceback.format_exc())
+                        self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
                         logging.exception(e)
-                        self.latest_data[dev_id] = full(2, nan)
 
     # check and update 10 hz settings
     def ten_hz_check(self):
@@ -1076,7 +1016,7 @@ class MainWindow(QMainWindow):
                         # if device is connected
                         if dev.child('Connected').value() == True:
                             # if TAVG is not 0.1, set it to 0.1
-                            if self.latest_settings[dev.child('DevID').value()][0] != 0.1:
+                            if self.data_holder.latest_settings[dev.child('DevID').value()][0] != 0.1:
                                 dev.child('Connection').value().send_message(":SET:TAVG 0.1")
                         # check if CPC is still connected to PSM with 10 hz on
                         ten_hz_connected = False
@@ -1094,7 +1034,7 @@ class MainWindow(QMainWindow):
                         # if device is connected
                         if dev.child('Connected').value() == True:
                             # if TAVG is smaller than 1, set it to 1
-                            if self.latest_settings[dev.child('DevID').value()][0] < 1:
+                            if self.data_holder.latest_settings[dev.child('DevID').value()][0] < 1:
                                 dev.child('Connection').value().send_message(":SET:TAVG 1")
                 
                 # if device is PSM and 10 hz is on, check if connected CPC has 10 hz on
@@ -1131,7 +1071,7 @@ class MainWindow(QMainWindow):
                     cpc_id = dev.child('Connected CPC').value()
 
                     # if connected CPC is not 'None' and CPC is not in pulse analysis mode
-                    if cpc_id != 'None' and cpc_id not in self.pulse_analysis_index:
+                    if cpc_id != 'None' and cpc_id not in self.data_holder.pulse_analysis_index:
                         
                         # get connected CPC device parameter
                         for cpc in self.params.child('Device settings').children():
@@ -1141,58 +1081,58 @@ class MainWindow(QMainWindow):
 
                         # if CPC is connected, calculate missing values
                         if cpc_device.child('Connected').value() == True:
-                            cpc_data = self.latest_data[cpc_id]
+                            cpc_data = self.data_holder.latest_data[cpc_id]
 
                             # Inlet flow = (CPC flow + CO flow) - Saturator flow - Excess flow
 
                             # get cpc flow rate from PSM latest_settings
-                            cpc_flow = float(self.latest_settings[psm_id][5])
+                            cpc_flow = float(self.data_holder.latest_settings[psm_id][5])
 
                             if dev.child('Device type').value() == PSM:
                                 # get co flow rate from PSM widget
-                                co_flow = round(self.device_widgets[psm_id].set_tab.set_co_flow.value_spinbox.value(), 3)
+                                co_flow = round(self.data_holder.device_widgets[psm_id].set_tab.set_co_flow.value_spinbox.value(), 3)
                                 if co_flow == 0: # if co flow is 0, not set by user
-                                    self.device_widgets[psm_id].set_tab.set_co_flow.set_red_color() # set CO flow rate widget to red
+                                    self.data_holder.device_widgets[psm_id].set_tab.set_co_flow.set_red_color() # set CO flow rate widget to red
                                     self.error_status = 1 # set error_status flag to 1
                                 else:
-                                    self.device_widgets[psm_id].set_tab.set_co_flow.set_default_color()
-                                inlet_flow = cpc_flow + co_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
+                                    self.data_holder.device_widgets[psm_id].set_tab.set_co_flow.set_default_color()
+                                inlet_flow = cpc_flow + co_flow - float(self.data_holder.latest_data[psm_id][2]) - float(self.data_holder.latest_data[psm_id][3])
                             
                             elif dev.child('Device type').value() == PSM2:
                                 # get vacuum mfc flow rate from latest data
-                                vacuum_flow = float(self.latest_data[psm_id][15])
+                                vacuum_flow = float(self.data_holder.latest_data[psm_id][15])
                                 # TODO vacuum flow GUI value is updated in PSMWidget's update_values, check if it works and remove line below
-                                #self.device_widgets[psm_id].status_tab.flow_vacuum.change_value(str(round(vacuum_flow, 3)))
-                                inlet_flow = cpc_flow + vacuum_flow - float(self.latest_data[psm_id][2]) - float(self.latest_data[psm_id][3])
-                                inlet_flow0 = cpc_flow + vacuum_flow - 4 + float(self.latest_data[psm_id][2]) + float(self.latest_data[psm_id][3])
+                                #self.data_holder.device_widgets[psm_id].status_tab.flow_vacuum.change_value(str(round(vacuum_flow, 3)))
+                                inlet_flow = cpc_flow + vacuum_flow - float(self.data_holder.latest_data[psm_id][2]) - float(self.data_holder.latest_data[psm_id][3])
+                                inlet_flow0 = cpc_flow + vacuum_flow - 4 + float(self.data_holder.latest_data[psm_id][2]) + float(self.data_holder.latest_data[psm_id][3])
                             
                             # store inlet flow into PSM latest_settings, rounded to 3 decimals
-                            self.latest_settings[psm_id][6] = round(inlet_flow, 3)
+                            self.data_holder.latest_settings[psm_id][6] = round(inlet_flow, 3)
                             # show inlet flow in PSM widget
-                            self.device_widgets[psm_id].status_tab.flow_inlet.change_value(str(round(inlet_flow, 3)))
+                            self.data_holder.device_widgets[psm_id].status_tab.flow_inlet.change_value(str(round(inlet_flow, 3)))
 
                             # if received polynomial correction is 0 (placeholder)
-                            if self.latest_poly_correction[psm_id] == 0:
+                            if self.data_holder.latest_poly_correction[psm_id] == 0:
                                 # calculate polynomial correction factor
                                 if dev.child('Device type').value() == PSM:
                                     pcor = array([-0.0272052, 0.11394213, -0.08959011, -0.20675596, 0.24343024, 1.10531145])
                                 elif dev.child('Device type').value() == PSM2:
                                     pcor = array([0.12949491, -0.50587616, 0.57214191, 0.76108161])
-                                poly_correction  = polyval(pcor, float(self.latest_data[psm_id][2]))
+                                poly_correction  = polyval(pcor, float(self.data_holder.latest_data[psm_id][2]))
                             else: # if received polynomial correction is other than 0, use received value
-                                poly_correction = self.latest_poly_correction[psm_id]
+                                poly_correction = self.data_holder.latest_poly_correction[psm_id]
 
                             # calculate dilution correction factor
                             # Dilution ratio = (inlet flow + Excess flow + Saturator flow) / Inlet flow
-                            dilution_correction_factor = (inlet_flow + float(self.latest_data[psm_id][3]) + float(self.latest_data[psm_id][2])) / inlet_flow
+                            dilution_correction_factor = (inlet_flow + float(self.data_holder.latest_data[psm_id][3]) + float(self.data_holder.latest_data[psm_id][2])) / inlet_flow
                             if dev.child('Device type').value() == PSM2:
-                                dilution_correction_factor = (inlet_flow + 4 - float(self.latest_data[psm_id][3]) - float(self.latest_data[psm_id][2])) / inlet_flow0
+                                dilution_correction_factor = (inlet_flow + 4 - float(self.data_holder.latest_data[psm_id][3]) - float(self.data_holder.latest_data[psm_id][2])) / inlet_flow0
                             
                             # calculate concentration from PSM
                             # Concentration from PSM = CPC concentration * Dilution ratio / Polynomial correction
-                            concentration_from_psm = float(self.latest_data[cpc_id][0]) * dilution_correction_factor / poly_correction
+                            concentration_from_psm = float(self.data_holder.latest_data[cpc_id][0]) * dilution_correction_factor / poly_correction
                             # add to PSM latest_data
-                            self.latest_data[psm_id][0] = round(concentration_from_psm, 2)
+                            self.data_holder.latest_data[psm_id][0] = round(concentration_from_psm, 2)
 
                             # if Connected CPC is Airmodus CPC, add CPC data to PSM latest_data
                             if cpc_device.child('Device type').value() == CPC:
@@ -1205,11 +1145,11 @@ class MainWindow(QMainWindow):
                                     cpc_data[13], cpc_data[14] # number of errors, system status (hex)
                                 ]
                                 # replace PSM's latest_data CPC placeholders with connected CPC data
-                                self.latest_data[psm_id][-16:-2] = connected_cpc_data # 14 values before status hex and note hex
+                                self.data_holder.latest_data[psm_id][-16:-2] = connected_cpc_data # 14 values before status hex and note hex
                             # if Connected device is TSI CPC, add concentration and dilution correction factor to PSM latest_data
                             elif cpc_device.child('Device type').value() == TSI_CPC:
-                                self.latest_data[psm_id][-16] = cpc_data[0] # concentration
-                                self.latest_data[psm_id][-15] = round(dilution_correction_factor, 3) # dilution correction factor
+                                self.data_holder.latest_data[psm_id][-16] = cpc_data[0] # concentration
+                                self.data_holder.latest_data[psm_id][-15] = round(dilution_correction_factor, 3) # dilution correction factor
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -1240,56 +1180,52 @@ class MainWindow(QMainWindow):
                     elif dev_type == AFM:
                         types = [':f', ':sf', ':rh', ':t', ':p'] # flow, standard flow, RH, T, P
                     
-                    # if device is not yet in plot_data dict, add it
-                    if str(dev_id)+types[0] not in self.plot_data:
+                    # if device is not yet in data_holder.plot_data dict, add it
+                    if str(dev_id)+types[0] not in self.data_holder.plot_data:
                         # make the new lists the same size as x_time_list
                         for i in types:
-                            self.plot_data[str(dev_id)+i] = full(len(self.x_time_list), nan)
+                            self.data_holder.plot_data[str(dev_id)+i] = full(len(self.x_time_list), nan)
 
                     # Manage all arrays for this device type in one go
                     for i in types:
-                        self.plot_data[str(dev_id)+i] = _manage_plot_array(self.plot_data[str(dev_id)+i], self.time_counter, max_reached=self.max_reached)
+                        self.data_holder.plot_data[str(dev_id)+i] = _manage_plot_array(self.data_holder.plot_data[str(dev_id)+i], self.time_counter, max_reached=self.max_reached)
                 
                 # other devices
                 else:
-                    # if device is not yet in plot_data dict, add it
-                    if dev_id not in self.plot_data:
+                    # if device is not yet in data_holder.plot_data dict, add it
+                    if dev_id not in self.data_holder.plot_data:
                         # make the new list the same size as x_time_list
-                        self.plot_data[dev_id] = full(len(self.x_time_list), nan)
-                    self.plot_data[dev_id] = _manage_plot_array(self.plot_data[dev_id], self.time_counter, max_reached=self.max_reached)
+                        self.data_holder.plot_data[dev_id] = full(len(self.x_time_list), nan)
+                    self.data_holder.plot_data[dev_id] = _manage_plot_array(self.data_holder.plot_data[dev_id], self.time_counter, max_reached=self.max_reached)
                 
                 # create lists for pulse duration and pulse ratio if they don't exist yet
                 if dev_type == CPC:
                     key_pd = str(dev_id)+':pd'
-                    if key_pd not in self.plot_data:
-                        self.plot_data[key_pd] = full(86400, nan) # 24 hours in seconds
-                    self.plot_data[key_pd] = _roll_pulse_array(self.plot_data[key_pd])
+                    self.data_holder.plot_data[key_pd] = _roll_pulse_array(self.data_holder.plot_data[key_pd])
                     key_pr = str(dev_id)+':pr'
-                    if key_pr not in self.plot_data:
-                        self.plot_data[key_pr] = full(86400, nan)
-                    self.plot_data[key_pr] = _roll_pulse_array(self.plot_data[key_pr])
+                    self.data_holder.plot_data[key_pr] = _roll_pulse_array(self.data_holder.plot_data[key_pr])
                 
-                # if device is connected, add latest_values data to plot_data according to device
+                # if device is connected, add latest_values data to data_holder.plot_data according to device
                 if dev.child('Connected').value():
                     if dev_type in [CPC, TSI_CPC]: # CPC
                         
                         # if CPC is in pulse analysis mode, update pulse analysis plot data instead of normal plot data
-                        if dev_id in self.pulse_analysis_index:
-                            if self.pulse_analysis_index[dev_id] is not None: # when index is None, analysis has reached its end
+                        if dev_id in self.data_holder.pulse_analysis_index:
+                            if self.data_holder.pulse_analysis_index[dev_id] is not None: # when index is None, analysis has reached its end
                                 try:
                                     # calculate current pulse duration
-                                    dead_time = self.latest_data[dev_id][1]
-                                    number_of_pulses = self.latest_data[dev_id][2]
+                                    dead_time = self.data_holder.latest_data[dev_id][1]
+                                    number_of_pulses = self.data_holder.latest_data[dev_id][2]
                                     if number_of_pulses == 0:
                                         pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
                                     else:
                                         # pulse duration = dead time * 1000 (micro to nano) / number of pulses
                                         pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
-                                    # get current threshold value with pulse_analysis_index
-                                    threshold_value = PULSE_ANALYSIS_THRESHOLDS[self.pulse_analysis_index[dev_id]]
+                                    # get current threshold value with data_holder.pulse_analysis_index
+                                    threshold_value = PULSE_ANALYSIS_THRESHOLDS[self.data_holder.pulse_analysis_index[dev_id]]
                                     #print(f"threshold: {threshold_value} pulse duration: {pulse_duration} dead time: {dead_time} number of pulses: {number_of_pulses}")
                                     # add analysis point to pulse quality widget
-                                    self.device_widgets[dev_id].pulse_quality.add_analysis_point(pulse_duration, threshold_value)
+                                    self.data_holder.device_widgets[dev_id].pulse_quality.add_analysis_point(pulse_duration, threshold_value)
                                 except Exception as e:
                                     print(traceback.format_exc())
                                     logging.exception(e)
@@ -1302,76 +1238,76 @@ class MainWindow(QMainWindow):
                             for psm in self.params.child('Device settings').children():
                                 if psm.child('Device type').value() in [PSM, PSM2] and psm.child('Connected').value():
                                     if psm.child('Connected CPC').value() == dev_id:
-                                        # if PSM connection exists, add latest PSM concentration value to plot_data
-                                        self.plot_data[str(dev_id)][self.time_counter] = self.latest_data[psm.child('DevID').value()][0]
+                                        # if PSM connection exists, add latest PSM concentration value to data_holder.plot_data
+                                        self.data_holder.plot_data[str(dev_id)][self.time_counter] = self.data_holder.latest_data[psm.child('DevID').value()][0]
                                         psm_connection = True
                                         break
-                            # if not connected to PSM, add CPC concentration value to plot_data
+                            # if not connected to PSM, add CPC concentration value to data_holder.plot_data
                             if psm_connection == False:
-                                self.plot_data[str(dev_id)][self.time_counter] = self.latest_data[dev_id][0]
-                            # add raw concentration value to plot_data
-                            self.plot_data[str(dev_id)+':raw'][self.time_counter] = self.latest_data[dev_id][0]
+                                self.data_holder.plot_data[str(dev_id)][self.time_counter] = self.data_holder.latest_data[dev_id][0]
+                            # add raw concentration value to data_holder.plot_data
+                            self.data_holder.plot_data[str(dev_id)+':raw'][self.time_counter] = self.data_holder.latest_data[dev_id][0]
                             
                             # update pulse duration and pulse ratio lists
                             if dev.child('Device type').value() == CPC:
                                 try:
                                     #print("concentration", self.latest_data[dev_id][0], "* sample flow", self.latest_settings[dev_id][2], "=", self.latest_data[dev_id][0] * self.latest_settings[dev_id][2])
                                     # check if (concentration * sample flow) is above 50 and below 5000 (valid)
-                                    check_value = self.latest_data[dev_id][0] * self.latest_settings[dev_id][2]
+                                    check_value = self.data_holder.latest_data[dev_id][0] * self.data_holder.latest_settings[dev_id][2]
                                     if check_value > 50 and check_value < 5000:
                                         # calculate pulse duration
-                                        if self.latest_data[dev_id][2] == 0:
+                                        if self.data_holder.latest_data[dev_id][2] == 0:
                                             pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
                                         else:
                                             # pulse duration = dead time * 1000 (micro to nano) / number of pulses
-                                            pulse_duration = round(self.latest_data[dev_id][1] * 1000 / self.latest_data[dev_id][2], 2)
-                                        # store pulse duration and pulse ratio values to plot_data
-                                        self.plot_data[str(dev_id)+':pd'][-1] = pulse_duration
-                                        self.plot_data[str(dev_id)+':pr'][-1] = self.latest_data[dev_id][12]
+                                            pulse_duration = round(self.data_holder.latest_data[dev_id][1] * 1000 / self.data_holder.latest_data[dev_id][2], 2)
+                                        # store pulse duration and pulse ratio values to data_holder.plot_data
+                                        self.data_holder.plot_data[str(dev_id)+':pd'][-1] = pulse_duration
+                                        self.data_holder.plot_data[str(dev_id)+':pr'][-1] = self.data_holder.latest_data[dev_id][12]
                                     else: # if concentration is outside range (invalid)
-                                        # store nan values to plot_data
-                                        self.plot_data[str(dev_id)+':pd'][-1] = nan
-                                        self.plot_data[str(dev_id)+':pr'][-1] = nan
+                                        # store nan values to data_holder.plot_data
+                                        self.data_holder.plot_data[str(dev_id)+':pd'][-1] = nan
+                                        self.data_holder.plot_data[str(dev_id)+':pr'][-1] = nan
                                 except Exception as e:
                                     print(traceback.format_exc())
                                     logging.exception(e)
-                                    # store nan values to plot_data
-                                    self.plot_data[str(dev_id)+':pd'][-1] = nan
-                                    self.plot_data[str(dev_id)+':pr'][-1] = nan
+                                    # store nan values to data_holder.plot_data
+                                    self.data_holder.plot_data[str(dev_id)+':pd'][-1] = nan
+                                    self.data_holder.plot_data[str(dev_id)+':pr'][-1] = nan
 
                     elif dev_type in [PSM, PSM2]: # PSM
-                        # add latest saturator flow rate value to time_counter index of plot_data
-                        self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][2]
+                        # add latest saturator flow rate value to time_counter index of data_holder.plot_data
+                        self.data_holder.plot_data[dev_id][self.time_counter] = self.data_holder.latest_data[dev_id][2]
                     elif dev_type == ELECTROMETER: # ELECTROMETER
-                        # add latest voltage values to time_counter index of plot_data
-                        self.plot_data[str(dev_id)+':1'][self.time_counter] = self.latest_data[dev_id][0]
-                        self.plot_data[str(dev_id)+':2'][self.time_counter] = self.latest_data[dev_id][1]
-                        self.plot_data[str(dev_id)+':3'][self.time_counter] = self.latest_data[dev_id][2]
+                        # add latest voltage values to time_counter index of data_holder.plot_data
+                        self.data_holder.plot_data[str(dev_id)+':1'][self.time_counter] = self.data_holder.latest_data[dev_id][0]
+                        self.data_holder.plot_data[str(dev_id)+':2'][self.time_counter] = self.data_holder.latest_data[dev_id][1]
+                        self.data_holder.plot_data[str(dev_id)+':3'][self.time_counter] = self.data_holder.latest_data[dev_id][2]
                     elif dev_type == CO2_SENSOR: # CO2 sensor
-                        # add latest CO2 value to time_counter index of plot_data
-                        self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][0]
+                        # add latest CO2 value to time_counter index of data_holder.plot_data
+                        self.data_holder.plot_data[dev_id][self.time_counter] = self.data_holder.latest_data[dev_id][0]
                     elif dev_type == RHTP: # RHTP
-                        # add latest values (RH, T, P) to time_counter index of plot_data
-                        self.plot_data[str(dev_id)+':rh'][self.time_counter] = self.latest_data[dev_id][0]
-                        self.plot_data[str(dev_id)+':t'][self.time_counter] = self.latest_data[dev_id][1]
-                        self.plot_data[str(dev_id)+':p'][self.time_counter] = self.latest_data[dev_id][2]
+                        # add latest values (RH, T, P) to time_counter index of data_holder.plot_data
+                        self.data_holder.plot_data[str(dev_id)+':rh'][self.time_counter] = self.data_holder.latest_data[dev_id][0]
+                        self.data_holder.plot_data[str(dev_id)+':t'][self.time_counter] = self.data_holder.latest_data[dev_id][1]
+                        self.data_holder.plot_data[str(dev_id)+':p'][self.time_counter] = self.data_holder.latest_data[dev_id][2]
                     elif dev_type == AFM: # AFM
-                        # add latest values (flow, RH, T, P) to time_counter index of plot_data
-                        self.plot_data[str(dev_id)+':f'][self.time_counter] = self.latest_data[dev_id][0]
-                        self.plot_data[str(dev_id)+':sf'][self.time_counter] = self.latest_data[dev_id][1]
-                        self.plot_data[str(dev_id)+':rh'][self.time_counter] = self.latest_data[dev_id][2]
-                        self.plot_data[str(dev_id)+':t'][self.time_counter] = self.latest_data[dev_id][3]
-                        self.plot_data[str(dev_id)+':p'][self.time_counter] = self.latest_data[dev_id][4]
+                        # add latest values (flow, RH, T, P) to time_counter index of data_holder.plot_data
+                        self.data_holder.plot_data[str(dev_id)+':f'][self.time_counter] = self.data_holder.latest_data[dev_id][0]
+                        self.data_holder.plot_data[str(dev_id)+':sf'][self.time_counter] = self.data_holder.latest_data[dev_id][1]
+                        self.data_holder.plot_data[str(dev_id)+':rh'][self.time_counter] = self.data_holder.latest_data[dev_id][2]
+                        self.data_holder.plot_data[str(dev_id)+':t'][self.time_counter] = self.data_holder.latest_data[dev_id][3]
+                        self.data_holder.plot_data[str(dev_id)+':p'][self.time_counter] = self.data_holder.latest_data[dev_id][4]
                     elif dev_type == EDILUTER: # eDiluter
-                        # add latest T1 value to time_counter index of plot_data
-                        self.plot_data[dev_id][self.time_counter] = self.latest_data[dev_id][3]
+                        # add latest T1 value to time_counter index of data_holder.plot_data
+                        self.data_holder.plot_data[dev_id][self.time_counter] = self.data_holder.latest_data[dev_id][3]
                 if dev_type == -1: # Example device
                     # generate random value for plotting and logging
                     random_value = round(random.random() * 100, 2) # 0-100
-                    # add random value to time_counter index of plot_data
-                    self.plot_data[dev_id][self.time_counter] = random_value
+                    # add random value to time_counter index of data_holder.plot_data
+                    self.data_holder.plot_data[dev_id][self.time_counter] = random_value
                     # add random value to latest_data as list object
-                    self.latest_data[dev_id] = [random_value]
+                    self.data_holder.latest_data[dev_id] = [random_value]
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -1391,47 +1327,47 @@ class MainWindow(QMainWindow):
 
                 # MAIN PLOT
 
-                # if device is not yet in curve_dict, add it
+                # if device is not yet in data_holder.curve_dict, add it
                 # used when plotting to main plot
-                if dev.child('DevID').value() not in self.curve_dict:
+                if dev.child('DevID').value() not in self.data_holder.curve_dict:
                     # create curve
-                    self.curve_dict[dev_id] = PlotCurveItem(pen=dev_id, connect="finite")
-                    #self.curve_dict[dev_id] = PlotCurveItem(pen={'color':dev_id, 'width':2}, connect="finite")
+                    self.data_holder.curve_dict[dev_id] = PlotCurveItem(pen=dev_id, connect="finite")
+                    #self.data_holder.curve_dict[dev_id] = PlotCurveItem(pen={'color':dev_id, 'width':2}, connect="finite")
                     # add curve to viewbox according to device type
                     if dev_type == PSM2: # if PSM2, add to PSM viewbox
-                        self.main_plot.viewboxes[PSM].addItem(self.curve_dict[dev_id])
+                        self.main_plot.viewboxes[PSM].addItem(self.data_holder.curve_dict[dev_id])
                     elif dev_type == TSI_CPC: # if TSI CPC, add to CPC viewbox
-                        self.main_plot.viewboxes[CPC].addItem(self.curve_dict[dev_id])
+                        self.main_plot.viewboxes[CPC].addItem(self.data_holder.curve_dict[dev_id])
                     else: # other devices
-                        self.main_plot.viewboxes[dev_type].addItem(self.curve_dict[dev_id])
+                        self.main_plot.viewboxes[dev_type].addItem(self.data_holder.curve_dict[dev_id])
                 
                 # if device type is RHTP or AFM, update main plot according to selected value
                 if dev_type in [RHTP, AFM]: # RHTP or AFM
                     if dev.child("Plot to main").value() == None:
-                        self.curve_dict[dev_id].setData(x=[], y=[])
+                        self.data_holder.curve_dict[dev_id].setData(x=[], y=[])
                     elif dev.child("Plot to main").value() == 'RH':
-                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':rh'][:self.time_counter+1])
+                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':rh'][:self.time_counter+1])
                     elif dev.child("Plot to main").value() == 'T':
-                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':t'][:self.time_counter+1])
+                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':t'][:self.time_counter+1])
                     elif dev.child("Plot to main").value() == 'P':
-                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':p'][:self.time_counter+1])
+                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':p'][:self.time_counter+1])
                     elif dev_type == AFM and dev.child("Plot to main").value() == 'Flow':
-                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':f'][:self.time_counter+1])
+                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':f'][:self.time_counter+1])
                     elif dev_type == AFM and dev.child("Plot to main").value() == 'Standard flow':
-                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':sf'][:self.time_counter+1])
+                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':sf'][:self.time_counter+1])
 
                 # other devices: update main plot if 'Plot to main' is enabled
                 elif dev.child("Plot to main").value():
                     # if device is CPC, get plot data with str(dev_id) key
                     if dev_type in [CPC, TSI_CPC]: # CPC
-                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)][:self.time_counter+1])
+                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)][:self.time_counter+1])
                     # if device is Electrometer, plot Voltage 2
                     elif dev_type == ELECTROMETER: # ELECTROMETER
-                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':2'][:self.time_counter+1])
+                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':2'][:self.time_counter+1])
                     else: # other devices
-                        self.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[dev_id][:self.time_counter+1])
+                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[dev_id][:self.time_counter+1])
                 else: # if 'Plot to main' is off, hide curve from main plot (set empty data)
-                    self.curve_dict[dev_id].setData(x=[], y=[])
+                    self.data_holder.curve_dict[dev_id].setData(x=[], y=[])
                 
                 # scale x-axis range if Follow is on
                 if self.params.child('Plot settings').child('Follow').value():
@@ -1445,64 +1381,64 @@ class MainWindow(QMainWindow):
                     # store current time counter value as start time in dictionary if not yet stored
                     # start time is stored when first non-nan value is received
                     # start time is used to crop plot data to only show non-nan values
-                    if dev_id not in self.start_times:
+                    if dev_id not in self.data_holder.start_times:
                         # CPC
                         if dev_type in [CPC, TSI_CPC]:
-                            if str(self.plot_data[str(dev_id)+':raw'][self.time_counter]) != "nan":
-                                self.start_times[dev_id] = self.time_counter
+                            if str(self.data_holder.plot_data[str(dev_id)+':raw'][self.time_counter]) != "nan":
+                                self.data_holder.start_times[dev_id] = self.time_counter
                         # ELECTROMETER
                         elif dev_type == ELECTROMETER:
-                            if str(self.plot_data[str(dev_id)+':1'][self.time_counter]) != "nan":
-                                self.start_times[dev_id] = self.time_counter
+                            if str(self.data_holder.plot_data[str(dev_id)+':1'][self.time_counter]) != "nan":
+                                self.data_holder.start_times[dev_id] = self.time_counter
                         # RHTP or AFM
                         elif dev_type in [RHTP, AFM]:
-                            if str(self.plot_data[str(dev_id)+':rh'][self.time_counter]) != "nan":
-                                self.start_times[dev_id] = self.time_counter
+                            if str(self.data_holder.plot_data[str(dev_id)+':rh'][self.time_counter]) != "nan":
+                                self.data_holder.start_times[dev_id] = self.time_counter
                         # other devices
-                        elif str(self.plot_data[dev_id][self.time_counter]) != "nan":
-                            self.start_times[dev_id] = self.time_counter
+                        elif str(self.data_holder.plot_data[dev_id][self.time_counter]) != "nan":
+                            self.data_holder.start_times[dev_id] = self.time_counter
 
                     # if device is in start times dictionary, update plot
-                    if dev_id in self.start_times:
+                    if dev_id in self.data_holder.start_times:
                         # get start time from dictionary to determine plot start index
-                        start_time = self.start_times[dev_id]
+                        start_time = self.data_holder.start_times[dev_id]
                         # update plot in device widget
                         # TODO start times removed from curve setData, problems with array shift index - add back later if compatible
-                        #self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[start_time:self.time_counter+1], y=self.plot_data[dev_id][start_time:self.time_counter+1])
+                        #self.data_holder.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[start_time:self.time_counter+1], y=self.data_holder.plot_data[dev_id][start_time:self.time_counter+1])
                         if dev_type in [CPC, TSI_CPC]: # CPC
                             # update plot with raw CPC concentration
-                            self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':raw'][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':raw'][:self.time_counter+1])
                             # update CPC pulse quality tab view (scatter plot and labels)
                             if dev_type == CPC:
                                 self.pulse_quality_update(dev_id)
 
                         elif dev_type == ELECTROMETER: # ELECTROMETER
                             # update Electrometer plot with all 3 values
-                            self.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':1'][:self.time_counter+1])
-                            self.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':2'][:self.time_counter+1])
-                            self.device_widgets[dev_id].plot_tab.curve3.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':3'][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':1'][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':2'][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curve3.setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':3'][:self.time_counter+1])
                         elif dev_type == RHTP: # RHTP
                             # update RHTP plot with all 3 values
-                            self.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':rh'][:self.time_counter+1])
-                            self.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':t'][:self.time_counter+1])
-                            self.device_widgets[dev_id].plot_tab.curve3.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':p'][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':rh'][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':t'][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curve3.setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':p'][:self.time_counter+1])
                         elif dev_type == AFM: # AFM
                             # update AFM plot with all 5 values
-                            self.device_widgets[dev_id].plot_tab.curves[0].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':f'][:self.time_counter+1])
-                            self.device_widgets[dev_id].plot_tab.curves[1].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':sf'][:self.time_counter+1])
-                            self.device_widgets[dev_id].plot_tab.curves[2].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':rh'][:self.time_counter+1])
-                            self.device_widgets[dev_id].plot_tab.curves[3].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':t'][:self.time_counter+1])
-                            self.device_widgets[dev_id].plot_tab.curves[4].setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[str(dev_id)+':p'][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curves[0].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':f'][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curves[1].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':sf'][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curves[2].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':rh'][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curves[3].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':t'][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curves[4].setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':p'][:self.time_counter+1])
                         else: # other devices
-                            self.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.plot_data[dev_id][:self.time_counter+1])
+                            self.data_holder.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.time_counter+1], y=self.data_holder.plot_data[dev_id][:self.time_counter+1])
                         
                         # scale x-axis range if Follow is on
                         if self.params.child('Plot settings').child('Follow').value():
                             if dev_type == ELECTROMETER: # if ELECTROMETER, update all 3 plots
-                                for plot in self.device_widgets[dev_id].plot_tab.plots:
+                                for plot in self.data_holder.device_widgets[dev_id].plot_tab.plots:
                                     plot.setXRange(self.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.current_time, padding=0)
                             else: # other devices
-                                self.device_widgets[dev_id].plot_tab.plot.setXRange(self.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.current_time, padding=0)
+                                self.data_holder.device_widgets[dev_id].plot_tab.plot.setXRange(self.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.current_time, padding=0)
 
                 # PSM CPC FLOW CHECK
                 # warn if no CPC is connected or update Set tab's CPC sample flow value
@@ -1512,10 +1448,10 @@ class MainWindow(QMainWindow):
                     # if no CPC is connected
                     if dev.child('Connected CPC').value() == 'None':
                         # update status_tab flow_cpc widget value and color
-                        if self.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != "Not connected":
+                        if self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != "Not connected":
                             # set status_tab flow_cpc color to red and change text
-                            self.device_widgets[dev_id].status_tab.flow_cpc.change_color(1) # change color to red
-                            self.device_widgets[dev_id].status_tab.flow_cpc.change_value("Not connected") # update value on status_tab as well
+                            self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_color(1) # change color to red
+                            self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_value("Not connected") # update value on status_tab as well
                         # set error_status flag to 1
                         self.error_status = 1
                         # set device error flag
@@ -1531,16 +1467,16 @@ class MainWindow(QMainWindow):
                                 break
                         # if connected CPC is Airmodus CPC, check if connected CPC sample flow has changed
                         if cpc_device.child('Device type').value() == CPC:
-                            cpc_sample_flow = float(self.latest_settings[cpc_id][2])
+                            cpc_sample_flow = float(self.data_holder.latest_settings[cpc_id][2])
                             # if CPC sample flow is different from value displayed in Set tab, update displayed value
-                            if self.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.value() != cpc_sample_flow:
-                                self.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.setValue(cpc_sample_flow)
+                            if self.data_holder.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.value() != cpc_sample_flow:
+                                self.data_holder.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.setValue(cpc_sample_flow)
                         
                         # if CPC inlet flow is different from value displayed in Status tab, update displayed value
-                        if self.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != str(self.latest_settings[dev_id][5]) + " lpm":
+                        if self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != str(self.data_holder.latest_settings[dev_id][5]) + " lpm":
                             # set status_tab flow_cpc color to normal and change text
-                            self.device_widgets[dev_id].status_tab.flow_cpc.change_color(0)
-                            self.device_widgets[dev_id].status_tab.flow_cpc.change_value(str(self.latest_settings[dev_id][5]) + " lpm")
+                            self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_color(0)
+                            self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_value(str(self.data_holder.latest_settings[dev_id][5]) + " lpm")
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -1567,7 +1503,7 @@ class MainWindow(QMainWindow):
                 if dev.child('Device type').value() == TSI_CPC:
                     pass
                 # if device is in pulse analysis mode, do nothing
-                elif dev.child('DevID').value() in self.pulse_analysis_index:
+                elif dev.child('DevID').value() in self.data_holder.pulse_analysis_index:
                     pass
 
                 # if device is connected OR example device
@@ -1577,8 +1513,8 @@ class MainWindow(QMainWindow):
                         # store device id to variable for clarity
                         dev_id = dev.child('DevID').value()
 
-                        # if device is not yet in dat_filenames dict, create .dat file and add filename to dict
-                        if dev_id not in self.dat_filenames:
+                        # if device is not yet in data_holder.dat_filenames dict, create .dat file and add filename to dict
+                        if dev_id not in self.data_holder.dat_filenames:
                             # format timestamp for filename
                             timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
                             # get serial number from device settings
@@ -1588,7 +1524,7 @@ class MainWindow(QMainWindow):
                                 serial_number = '_' + serial_number
                             # get device type from device settings
                             device_type = dev.child('Device type').value() # device type number
-                            device_type_name = self.device_names[device_type] # device type name
+                            device_type_name = self.data_holder.device_names[device_type] # device type name
                             # get device nickname from device settings
                             device_nickname = dev.child('Device nickname').value()
                             # if nickname is not empty, add underscore to beginning
@@ -1599,30 +1535,30 @@ class MainWindow(QMainWindow):
                             # if file tag is not empty, add underscore to beginning
                             if file_tag != "":
                                 file_tag = '_' + file_tag
-                            # compile filename and add to dat_filenames
+                            # compile filename and add to data_holder.dat_filenames
                             if osx_mode:
                                 filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.dat'
                             else:
                                 filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.dat'
-                            self.dat_filenames[dev_id] = filename
+                            self.data_holder.dat_filenames[dev_id] = filename
                             with open(self.filePath + filename ,"w",encoding='UTF-8'):
                                 pass
                             
-                            # if CPC or PSM, create .par file and add filename to par_filenames
+                            # if CPC or PSM, create .par file and add filename to data_holder.par_filenames
                             if dev.child('Device type').value() in [CPC, PSM, PSM2]:
                                 if osx_mode:
                                     filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.par'
                                 else:
                                     filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.par'
-                                self.par_filenames[dev_id] = filename
+                                self.data_holder.par_filenames[dev_id] = filename
                                 with open(self.filePath + filename ,"w",encoding='UTF-8'):
                                     pass
-                                self.par_updates[dev.child('DevID').value()] = 1 # set .par update flag, ensuring new .par file is updated at start
+                                self.data_holder.par_updates[dev.child('DevID').value()] = 1 # set .par update flag, ensuring new .par file is updated at start
                         
                         # check if device is Airmodus CPC and 10hz parameter is on
                         if dev.child('Device type').value() == CPC and dev.child('10 hz').value():
-                            # if device is not in ten_hz_filenames dict, create .csv file and add filename to ten_hz_filenames
-                            if dev_id not in self.ten_hz_filenames:
+                            # if device is not in data_holder.ten_hz_filenames dict, create .csv file and add filename to data_holder.ten_hz_filenames
+                            if dev_id not in self.data_holder.ten_hz_filenames:
                                 # format timestamp for filename
                                 timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
                                 # get serial number from device settings
@@ -1632,7 +1568,7 @@ class MainWindow(QMainWindow):
                                     serial_number = '_' + serial_number
                                 # get device type from device settings
                                 device_type = dev.child('Device type').value() # device type number
-                                device_type_name = self.device_names[device_type] # device type name
+                                device_type_name = self.data_holder.device_names[device_type] # device type name
                                 # get device nickname from device settings
                                 device_nickname = dev.child('Device nickname').value()
                                 # if nickname is not empty, add underscore to beginning
@@ -1643,19 +1579,19 @@ class MainWindow(QMainWindow):
                                 # if file tag is not empty, add underscore to beginning
                                 if file_tag != "":
                                     file_tag = '_' + file_tag
-                                # compile filename and add to ten_hz_filenames
+                                # compile filename and add to data_holder.ten_hz_filenames
                                 if osx_mode:
                                     filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
                                 else:
                                     filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
-                                self.ten_hz_filenames[dev_id] = filename
+                                self.data_holder.ten_hz_filenames[dev_id] = filename
                                 # create file and write header
                                 with open(self.filePath + filename ,"w",encoding='UTF-8') as file:
                                     # write header
                                     file.write('YYYY.MM.DD hh:mm:ss,Concentration 1 (#/cc),Concentration 2 (#/cc),Concentration 3 (#/cc),Concentration 4 (#/cc),Concentration 5 (#/cc),Concentration 6 (#/cc),Concentration 7 (#/cc),Concentration 8 (#/cc),Concentration 9 (#/cc),Concentration 10 (#/cc)')
                             
                         # get filename from dictionary and add path to front
-                        filename = self.filePath + self.dat_filenames[dev_id]
+                        filename = self.filePath + self.data_holder.dat_filenames[dev_id]
                         
                         # Check the type and length of header
                         with open(filename, 'r', encoding='UTF-8') as file:
@@ -1702,14 +1638,14 @@ class MainWindow(QMainWindow):
                             file.write("\n") # create new line
                             file.write(timeStampStr+',') # add timestamp
                             # convert data to string
-                            write_data = ','.join(str(vals) for vals in self.latest_data[dev_id])
+                            write_data = ','.join(str(vals) for vals in self.data_holder.latest_data[dev_id])
                             # write data
                             file.write(write_data)
                         
                         # if CPC or PSM, append .par file with new settings
                         if dev.child('Device type').value() in [CPC, PSM, PSM2]:
                             # get filename from dictionary and add path to front
-                            filename = self.filePath + self.par_filenames[dev_id]
+                            filename = self.filePath + self.data_holder.par_filenames[dev_id]
 
                             # Check the type and length of header
                             with open(filename, 'r', encoding='UTF-8') as file:
@@ -1737,11 +1673,11 @@ class MainWindow(QMainWindow):
                                 update_par = 0
 
                                 # if device's .par update flag is set, write data
-                                if self.par_updates[dev_id] == 1:
+                                if self.data_holder.par_updates[dev_id] == 1:
                                     update_par = 1
                                 
                                 # else if a command has been entered, write data
-                                elif dev_id in self.latest_command:
+                                elif dev_id in self.data_holder.latest_command:
                                     update_par = 1
                                 
                                 # else check if device is PSM and if there are changes in connected CPC
@@ -1753,7 +1689,7 @@ class MainWindow(QMainWindow):
                                     # else check if connected CPC is not 'None'
                                     elif dev.child('Connected CPC').value() != 'None':
                                         # check if connected CPC is in par_updates dictionary and its .par update flag is set
-                                        if dev.child('Connected CPC').value() in self.par_updates and self.par_updates[dev.child('Connected CPC').value()] == 1:
+                                        if dev.child('Connected CPC').value() in self.data_holder.par_updates and self.data_holder.par_updates[dev.child('Connected CPC').value()] == 1:
                                             update_par = 1
                                 
                                 # if update_par flag is set
@@ -1762,7 +1698,7 @@ class MainWindow(QMainWindow):
                                     # Add timestamp
                                     file.write(timeStampStr+',')
                                     # Convert data to string                            
-                                    write_data = ','.join(str(vals) for vals in self.latest_settings[dev_id])
+                                    write_data = ','.join(str(vals) for vals in self.data_holder.latest_settings[dev_id])
                                     file.write(write_data)
 
                                     # if device type is PSM
@@ -1780,7 +1716,7 @@ class MainWindow(QMainWindow):
                                             # if CPC is connected Airmodus CPC, write connected CPC settings
                                             if cpc_device.child('Connected').value() and cpc_device.child('Device type').value() == CPC:
                                                 cpc_idn = cpc_device.child('Serial number').value()
-                                                cpc_settings = self.latest_settings[cpc_id]
+                                                cpc_settings = self.data_holder.latest_settings[cpc_id]
                                                 file.write(',') # separate PSM and CPC settings with comma
                                                 # compile connected CPC settings
                                                 connected_cpc_settings = [
@@ -1800,23 +1736,23 @@ class MainWindow(QMainWindow):
                                             file.write(',nan,nan,nan,nan,nan,nan,nan,nan,nan')
                                         
                                     # check if device is in latest_command dictionary
-                                    if dev_id in self.latest_command:
+                                    if dev_id in self.data_holder.latest_command:
                                         # write latest command to file and remove from dictionary
-                                        file.write(',' + self.latest_command.pop(dev_id))
+                                        file.write(',' + self.data_holder.latest_command.pop(dev_id))
                         
                         # check if device is Airmodus CPC and 10hz parameter is on
                         if dev.child('Device type').value() == CPC and dev.child('10 hz').value():
                             # check if device is in latest_ten_hz dictionary
-                            if dev_id in self.latest_ten_hz:
+                            if dev_id in self.data_holder.latest_ten_hz:
                                 # get filename from dictionary and add path to front
-                                filename = self.filePath + self.ten_hz_filenames[dev_id]
+                                filename = self.filePath + self.data_holder.ten_hz_filenames[dev_id]
                                 # append file with new data
                                 with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
                                     file.write("\n")
                                     # Add timestamp
                                     file.write(timeStampStr+',')
                                     # Convert data to string
-                                    write_data = ','.join(str(vals) for vals in self.latest_ten_hz[dev_id])
+                                    write_data = ','.join(str(vals) for vals in self.data_holder.latest_ten_hz[dev_id])
                                     file.write(write_data)
 
                     # if saving fails, set saving status to 0
@@ -1836,29 +1772,29 @@ class MainWindow(QMainWindow):
         # write data to pulse analysis file if pulse analysis is on
         for dev in self.params.child('Device settings').children():
             dev_id = dev.child('DevID').value()
-            if dev_id in self.pulse_analysis_index:
-                if self.pulse_analysis_index[dev_id] is not None: # when index is None, analysis has reached its end
+            if dev_id in self.data_holder.pulse_analysis_index:
+                if self.data_holder.pulse_analysis_index[dev_id] is not None: # when index is None, analysis has reached its end
                     try:
                         # calculate current pulse duration
-                        dead_time = self.latest_data[dev_id][1]
-                        number_of_pulses = self.latest_data[dev_id][2]
+                        dead_time = self.data_holder.latest_data[dev_id][1]
+                        number_of_pulses = self.data_holder.latest_data[dev_id][2]
                         if number_of_pulses == 0:
                             pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
                         else:
                             # pulse duration = dead time * 1000 (micro to nano) / number of pulses
                             pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
-                        # get current threshold value with pulse_analysis_index
-                        threshold_value = PULSE_ANALYSIS_THRESHOLDS[self.pulse_analysis_index[dev_id]]
+                        # get current threshold value with data_holder.pulse_analysis_index
+                        threshold_value = PULSE_ANALYSIS_THRESHOLDS[self.data_holder.pulse_analysis_index[dev_id]]
                         # get filename from dictionary (includes file path)
-                        filename = self.pulse_analysis_filenames[dev_id]
+                        filename = self.data_holder.pulse_analysis_filenames[dev_id]
                         # append file with new data
                         with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
                             file.write('\n') # create new line
                             file.write(str(threshold_value) + ',' + str(number_of_pulses) + ',' + str(dead_time) + ',' + str(pulse_duration))
-                        # increase pulse_analysis_index by 1
-                        self.pulse_analysis_index[dev_id] += 1
+                        # increase data_holder.pulse_analysis_index by 1
+                        self.data_holder.pulse_analysis_index[dev_id] += 1
                         # if all thresholds have been gone through, end pulse analysis
-                        if self.pulse_analysis_index[dev_id] >= len(PULSE_ANALYSIS_THRESHOLDS):
+                        if self.data_holder.pulse_analysis_index[dev_id] >= len(PULSE_ANALYSIS_THRESHOLDS):
                             self.pulse_analysis_stop(dev_id, dev)
                     except Exception as e:
                         print(traceback.format_exc())
@@ -1878,7 +1814,7 @@ class MainWindow(QMainWindow):
             self.params.child('Data settings').child('File path').setReadonly(True)
         # if saving is toggled off, reset filename dictionaries
         else:
-            self.reset_filenames()
+            self.data_holder.data_holder.reset_all_filenames()
             # disable read only file path
             self.params.child('Data settings').child('File path').setReadonly(False)
 
@@ -1886,27 +1822,19 @@ class MainWindow(QMainWindow):
         # set file path
         self.filePath = self.params.child('Data settings').child('File path').value()
         # reset filename dictionaries
-        self.reset_filenames()
+        self.data_holder.data_holder.reset_all_filenames()
     
-    # reset filename dictionaries, results in new files being created
-    def reset_filenames(self):
-        self.dat_filenames = {}
-        self.par_filenames = {}
-        self.ten_hz_filenames = {}
-        self.par_updates = {}
     
     # remove specific device from filename dictionaries, results in new files being created
     def reset_device_filenames(self, dev_id):
-        if dev_id in self.dat_filenames:
-            self.dat_filenames.pop(dev_id)
-        if dev_id in self.par_filenames:
-            self.par_filenames.pop(dev_id)
-        if dev_id in self.par_updates:
-            self.par_updates.pop(dev_id)
-        if dev_id in self.ten_hz_filenames:
-            self.ten_hz_filenames.pop(dev_id)
-
-    
+        if dev_id in self.data_holder.dat_filenames:
+            self.data_holder.dat_filenames.pop(dev_id)
+        if dev_id in self.data_holder.par_filenames:
+            self.data_holder.par_filenames.pop(dev_id)
+        if dev_id in self.data_holder.par_updates:
+            self.data_holder.par_updates.pop(dev_id)
+        if dev_id in self.data_holder.ten_hz_filenames:
+            self.data_holder.ten_hz_filenames.pop(dev_id)
 
     
     # compare current day to file start day (self.start_day defined in save_changed)
@@ -1917,7 +1845,7 @@ class MainWindow(QMainWindow):
             if self.params.child("Data settings").child('Generate daily files').value():
                 current_day = dt.fromtimestamp(self.current_time).strftime("%m%d")
                 if current_day != self.start_day:
-                    self.reset_filenames() # start new file if day has changed
+                    self.data_holder.reset_all_filenames() # start new file if day has changed
                     # update start day
                     self.start_day = current_day
     
@@ -1925,7 +1853,7 @@ class MainWindow(QMainWindow):
     def set_inquiry_flag(self):
         self.inquiry_flag = True
         self.inquiry_time = time()
-        self.com_descriptions = {} # reset com descriptions
+        self.data_holder.com_descriptions = {} # reset com descriptions
     
     def list_com_ports(self):
         """
@@ -1934,10 +1862,6 @@ class MainWindow(QMainWindow):
         """
         # get list of current available serial ports as ListPortInfo objects
         ports = list_ports.comports()
-        # check if ports list has changed from stored ports
-        # if ports != self.current_ports: # if ports have changed, set flag for a specific time
-        #     self.set_inquiry_flag()
-        # self.current_ports = ports # store current ports for comparison
         com_port_list = [] # list of current port device names (like 'COM3')
         new_ports = {} # dictionary of new identified ports with active connections
 
@@ -1946,12 +1870,12 @@ class MainWindow(QMainWindow):
             com_port_list.append(port.device)
 
             # add new port description if not previously known
-            if port.device not in self.com_descriptions:
-                self.com_descriptions[port.device] = port.description
+            if port.device not in self.data_holder.com_descriptions:
+                self.data_holder.com_descriptions[port.device] = port.description
 
             # if inquiry flag is set, inquire identity from ports not yet identified
             # (if port has a default desc so it's not yet been acquired)
-            if self.inquiry_flag and self.com_descriptions[port.device] == port.description:
+            if self.inquiry_flag and self.data_holder.com_descriptions[port.device] == port.description:
                 try:
                     # attempt to open port with timeout and baud rate (throughput as bits per second)
                     serial_connection = Serial(str(port.device), 115200, timeout=0.2)
@@ -1967,20 +1891,20 @@ class MainWindow(QMainWindow):
                         if osx_mode:
                             if port.device == dev.child('COM port').value():
                                 # set description according to device's serial number parameter
-                                self.com_descriptions[port.device] = dev.child('Serial number').value()
+                                self.data_holder.com_descriptions[port.device] = dev.child('Serial number').value()
                         else:
                             if port.device == 'COM' + str(dev.child('COM port').value()):
                                 # set description according to device's serial number parameter
-                                self.com_descriptions[port.device] = dev.child('Serial number').value()
+                                self.data_holder.com_descriptions[port.device] = dev.child('Serial number').value()
                 except Exception as e:
                     # log unexpected errors while trying to inquire the device
                     print(traceback.format_exc())
                     logging.exception(e)
 
         # remove descriptions of ports that are no longer connected
-        disconnected_ports = [p for p in self.com_descriptions if p not in com_port_list]
+        disconnected_ports = [p for p in self.data_holder.com_descriptions if p not in com_port_list]
         for port in disconnected_ports:
-            self.com_descriptions.pop(port)
+            self.data_holder.com_descriptions.pop(port)
 
         # if inquiry flag is True, check timeout
         # manage inquiry flag timeout after 3 seconds
@@ -2024,7 +1948,7 @@ class MainWindow(QMainWindow):
                     # handle *IDN response for serial number
                     if message.startswith('*IDN '):
                         serial_number = message[5:].strip()
-                        self.com_descriptions[port] = serial_number
+                        self.data_holder.com_descriptions[port] = serial_number
                         close_connection(port, serial_conn)
                         del new_ports[port]  # Remove after successful processing
                         break  # Assume one IDN response per inquiry
@@ -2034,7 +1958,7 @@ class MainWindow(QMainWindow):
                         start_idx = message.index(' ID ') + 4
                         end_idx = message.index(', Status')
                         device_id = message[start_idx:end_idx].strip()
-                        self.com_descriptions[port] = device_id
+                        self.data_holder.com_descriptions[port] = device_id
                         close_connection(port, serial_conn)
                         del new_ports[port]  # Remove after successful processing
                         break  # Assume one ID response per inquiry
@@ -2052,7 +1976,7 @@ class MainWindow(QMainWindow):
 
         # formatted text for connected ports only, sorted by port name
         connected_descriptions = {
-            key: desc for key, desc in self.com_descriptions.items()
+            key: desc for key, desc in self.data_holder.com_descriptions.items()
             if key in com_port_list
         }
         sorted_ports = sorted(connected_descriptions.items())
@@ -2141,7 +2065,7 @@ class MainWindow(QMainWindow):
                 # set n_devices to current dev_id
                 self.params.child('Device settings').n_devices = dev_id
                 # add device to the parameter tree
-                self.params.child('Device settings').addNew(self.device_names[dev_type], device_name=dev_name)
+                self.params.child('Device settings').addNew(self.data_holder.device_names[dev_type], device_name=dev_name)
         except AttributeError:
             pass
             
@@ -2163,7 +2087,7 @@ class MainWindow(QMainWindow):
                     param.setValue(values.get(param.name(), param.value()))
                     # Set CO flow value to related PSM widget
                     try:
-                        self.device_widgets[param.parent().child("DevID").value()].set_tab.set_co_flow.value_spinbox.setValue(round(float(param.value()), 3))
+                        self.data_holder.device_widgets[param.parent().child("DevID").value()].set_tab.set_co_flow.value_spinbox.setValue(round(float(param.value()), 3))
                     except ValueError:
                         pass # if value has not been saved, skip
                 # Check if parameter name is 10 hz
@@ -2173,7 +2097,7 @@ class MainWindow(QMainWindow):
                     # if device type is PSM or PSM2
                     if param.parent().child('Device type').value() in [PSM, PSM2]:
                         # Set 10 hz status (True/False) to ten_hz button
-                        self.device_widgets[param.parent().child("DevID").value()].measure_tab.ten_hz.change_color(int(values.get(param.name(), param.value())))
+                        self.data_holder.device_widgets[param.parent().child("DevID").value()].measure_tab.ten_hz.change_color(int(values.get(param.name(), param.value())))
                 else:
                     # Set the parameter value as usual
                     param.setValue(values.get(param.name(), param.value()))
@@ -2205,10 +2129,10 @@ class MainWindow(QMainWindow):
             dev_id = dev.child('DevID').value()
             dev_type = dev.child('Device type').value()
             if dev_type == ELECTROMETER:
-                for plot in self.device_widgets[dev_id].plot_tab.plots:
+                for plot in self.data_holder.device_widgets[dev_id].plot_tab.plots:
                     plot.enableAutoRange()
             else:
-                self.device_widgets[dev_id].plot_tab.plot.enableAutoRange()
+                self.data_holder.device_widgets[dev_id].plot_tab.plot.enableAutoRange()
             
     
     # set the 'Plot to main' selection of all RHTP devices to the same value
@@ -2247,8 +2171,8 @@ class MainWindow(QMainWindow):
         # check each device and add to legend if exists in curve_dict and Plot to main is enabled
         for dev in self.params.child('Device settings').children():
             dev_id = dev.child('DevID').value()
-            # if device is in curve_dict
-            if dev_id in self.curve_dict:
+            # if device is in data_holder.curve_dict
+            if dev_id in self.data_holder.curve_dict:
                 # check if device has a nickname
                 if dev.child('Device nickname').value() != "":
                     device_name = dev.child('Device nickname').value()
@@ -2260,73 +2184,73 @@ class MainWindow(QMainWindow):
                     if dev.child('Plot to main').value() != None:
                         # add curve to legend with device name and current value of chosen parameter
                         if dev.child('Plot to main').value() == "RH":
-                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':rh'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.data_holder.plot_data[str(dev_id)+':rh'][self.time_counter])
                         elif dev.child('Plot to main').value() == "T":
-                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':t'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.data_holder.plot_data[str(dev_id)+':t'][self.time_counter])
                         elif dev.child('Plot to main').value() == "P":
-                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':p'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.data_holder.plot_data[str(dev_id)+':p'][self.time_counter])
                         elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Flow":
-                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id) + ':f'][self.time_counter])
+                            legend_string = device_name + ": " + str(self.data_holder.plot_data[str(dev_id) + ':f'][self.time_counter])
                         elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Standard flow":
-                            legend_string = device_name + ": " + str(self.plot_data[str(dev_id) + ':sf'][self.time_counter])
-                        self.main_plot.legend.addItem(self.curve_dict[dev_id], legend_string)
+                            legend_string = device_name + ": " + str(self.data_holder.plot_data[str(dev_id) + ':sf'][self.time_counter])
+                        self.main_plot.legend.addItem(self.data_holder.curve_dict[dev_id], legend_string)
                     else: # if disabled
                         # remove curve from legend
-                        self.main_plot.legend.removeItem(self.curve_dict[dev_id])
+                        self.main_plot.legend.removeItem(self.data_holder.curve_dict[dev_id])
                 # other devices
                 # if Plot to main is True
                 elif dev.child('Plot to main').value():
                     # compile legend string - device name and current value
                     # if CPC, round value to 2 decimals
                     if dev.child('Device type').value() in [CPC, TSI_CPC]:
-                        legend_string = device_name + ": " + str(round(self.plot_data[str(dev_id)][self.time_counter], 2))
+                        legend_string = device_name + ": " + str(round(self.data_holder.plot_data[str(dev_id)][self.time_counter], 2))
                     # if ELECTROMETER, get Voltage 2 value
                     elif dev.child('Device type').value() == ELECTROMETER:
-                        legend_string = device_name + ": " + str(self.plot_data[str(dev_id)+':2'][self.time_counter])
+                        legend_string = device_name + ": " + str(self.data_holder.plot_data[str(dev_id)+':2'][self.time_counter])
                     # other devices
                     else:
-                        legend_string = device_name + ": " + str(self.plot_data[dev_id][self.time_counter])
+                        legend_string = device_name + ": " + str(self.data_holder.plot_data[dev_id][self.time_counter])
                     # add curve to legend with legend string
-                    self.main_plot.legend.addItem(self.curve_dict[dev_id], legend_string)
+                    self.main_plot.legend.addItem(self.data_holder.curve_dict[dev_id], legend_string)
                 else: # if False
                     # remove curve from legend
-                    self.main_plot.legend.removeItem(self.curve_dict[dev_id])
+                    self.main_plot.legend.removeItem(self.data_holder.curve_dict[dev_id])
     
     # update CPC pulse quality tab view (scatter plot and labels)
     # called in update_figures_and_menus and when pulse quality options ae changed
     def pulse_quality_update(self, device_id):
         try:
             # check selected average time and history draw limit
-            draw_limit_h = self.device_widgets[device_id].pulse_quality.history_time # hours
+            draw_limit_h = self.data_holder.device_widgets[device_id].pulse_quality.history_time # hours
             draw_limit_s = draw_limit_h * 3600 # seconds
-            avg_time = self.device_widgets[device_id].pulse_quality.average_time * 3600 # seconds
+            avg_time = self.data_holder.device_widgets[device_id].pulse_quality.average_time * 3600 # seconds
             # calculate average values (ignore nan values)
-            avg_pulse_duration = nanmean(self.plot_data[str(device_id)+':pd'][-avg_time:])
-            avg_pulse_ratio = nanmean(self.plot_data[str(device_id)+':pr'][-avg_time:])
+            avg_pulse_duration = nanmean(self.data_holder.plot_data[str(device_id)+':pd'][-avg_time:])
+            avg_pulse_ratio = nanmean(self.data_holder.plot_data[str(device_id)+':pr'][-avg_time:])
             # slice pulse duration and pulse ratio data to selected history time
             # number of points is always 3600, longer times are drawn with lower resolution
             # start at end of list, stop at negative draw limit in seconds, step size negative draw limit in hours
-            sliced_pd = self.plot_data[str(device_id)+':pd'][-1:-1*(draw_limit_s+1):-1*draw_limit_h]
-            sliced_pr = self.plot_data[str(device_id)+':pr'][-1:-1*(draw_limit_s+1):-1*draw_limit_h]
+            sliced_pd = self.data_holder.plot_data[str(device_id)+':pd'][-1:-1*(draw_limit_s+1):-1*draw_limit_h]
+            sliced_pr = self.data_holder.plot_data[str(device_id)+':pr'][-1:-1*(draw_limit_s+1):-1*draw_limit_h]
 
             # update pulse quality scatter plot and value labels
             # draw history with sliced data
-            self.device_widgets[device_id].pulse_quality.data_points.setData(sliced_pd, sliced_pr)
+            self.data_holder.device_widgets[device_id].pulse_quality.data_points.setData(sliced_pd, sliced_pr)
             # update current point and labels
             # check if (concentration * sample flow) is above 50 and below 5000 (valid)
-            check_value = self.latest_data[device_id][0] * self.latest_settings[device_id][2]
+            check_value = self.data_holder.latest_data[device_id][0] * self.data_holder.latest_settings[device_id][2]
             if check_value > 50 and check_value < 5000:
-                self.device_widgets[device_id].pulse_quality.current_point.setData(x=[self.plot_data[str(device_id)+':pd'][-1]], y=[self.plot_data[str(device_id)+':pr'][-1]])
-                self.device_widgets[device_id].pulse_quality.current_duration.setText(str(round(self.plot_data[str(device_id)+':pd'][-1], 3)))
-                self.device_widgets[device_id].pulse_quality.current_ratio.setText(str(round(self.plot_data[str(device_id)+':pr'][-1], 3)))
+                self.data_holder.device_widgets[device_id].pulse_quality.current_point.setData(x=[self.data_holder.plot_data[str(device_id)+':pd'][-1]], y=[self.data_holder.plot_data[str(device_id)+':pr'][-1]])
+                self.data_holder.device_widgets[device_id].pulse_quality.current_duration.setText(str(round(self.data_holder.plot_data[str(device_id)+':pd'][-1], 3)))
+                self.data_holder.device_widgets[device_id].pulse_quality.current_ratio.setText(str(round(self.data_holder.plot_data[str(device_id)+':pr'][-1], 3)))
             else: # if concentration is outside range (invalid)
-                self.device_widgets[device_id].pulse_quality.current_point.setData(x=[], y=[]) # set current point to empty if invalid data
-                self.device_widgets[device_id].pulse_quality.current_duration.setText("Concentration out of range")
-                self.device_widgets[device_id].pulse_quality.current_ratio.setText("Concentration out of range")
+                self.data_holder.device_widgets[device_id].pulse_quality.current_point.setData(x=[], y=[]) # set current point to empty if invalid data
+                self.data_holder.device_widgets[device_id].pulse_quality.current_duration.setText("Concentration out of range")
+                self.data_holder.device_widgets[device_id].pulse_quality.current_ratio.setText("Concentration out of range")
             # update average point and labels
-            self.device_widgets[device_id].pulse_quality.average_point.setData(x=[avg_pulse_duration], y=[avg_pulse_ratio])
-            self.device_widgets[device_id].pulse_quality.average_duration.setText(str(round(avg_pulse_duration, 2)))
-            self.device_widgets[device_id].pulse_quality.average_ratio.setText(str(round(avg_pulse_ratio, 2)))
+            self.data_holder.device_widgets[device_id].pulse_quality.average_point.setData(x=[avg_pulse_duration], y=[avg_pulse_ratio])
+            self.data_holder.device_widgets[device_id].pulse_quality.average_duration.setText(str(round(avg_pulse_duration, 2)))
+            self.data_holder.device_widgets[device_id].pulse_quality.average_ratio.setText(str(round(avg_pulse_ratio, 2)))
         except Exception as e:
             print(traceback.format_exc())
             #logging.exception(e)
@@ -2338,23 +2262,23 @@ class MainWindow(QMainWindow):
         if start == QMessageBox.No:
             return
         try:
-            # add device to pulse_analysis_index dictionary with index value 0
-            self.pulse_analysis_index[device_id] = 0
+            # add device to data_holder.pulse_analysis_index dictionary with index value 0
+            self.data_holder.pulse_analysis_index[device_id] = 0
             # update pulse analysis status
-            self.device_widgets[device_id].pulse_quality.update_pa_status(True)
+            self.data_holder.device_widgets[device_id].pulse_quality.update_pa_status(True)
             # disable command input
-            self.device_widgets[device_id].set_tab.command_widget.disable_command_input()
+            self.data_holder.device_widgets[device_id].set_tab.command_widget.disable_command_input()
 
             # get original threshold value from latest_settings
             # value should stay intact during pulse analysis, settings are not updated
-            original_threshold = self.latest_settings[device_id][7]
+            original_threshold = self.data_holder.latest_settings[device_id][7]
             # if threshold value is nan, stop pulse analysis
             if isnan(original_threshold):
                 self.pulse_analysis_stop(device_id, device_param)
                 return
 
             # clear previous pulse analysis points
-            self.device_widgets[device_id].pulse_quality.clear_analysis_points()
+            self.data_holder.device_widgets[device_id].pulse_quality.clear_analysis_points()
 
             # create file and store threshold value
             filepath = self.params.child('Data settings').child('File path').value()
@@ -2363,12 +2287,12 @@ class MainWindow(QMainWindow):
             timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
             # serial number
             serial_number = device_param.child('Serial number').value()
-            # compile filename and add to pulse_analysis_filenames dictionary
+            # compile filename and add to data_holder.pulse_analysis_filenames dictionary
             if osx_mode:
                 filename = filepath + '/' + timestamp_file + '_pulse_analysis_' + serial_number + '.csv'
             else:
                 filename = filepath + '\\' + timestamp_file + '_pulse_analysis_' + serial_number + '.csv'
-            self.pulse_analysis_filenames[device_id] = filename
+            self.data_holder.pulse_analysis_filenames[device_id] = filename
             with open(filename, 'w', newline='\n', encoding='UTF-8') as file:
                 # write info row (serial number and original threshold)
                 file.write(serial_number + ' original threshold: ' + str(original_threshold) + ' mV')
@@ -2386,37 +2310,37 @@ class MainWindow(QMainWindow):
     def pulse_analysis_stop(self, device_id, device_param):
         # restore original threshold value to device
         try:
-            device_param.child('Connection').value().send_message(":SET:OPC:THRS " + str(self.latest_settings[device_id][7]))
+            device_param.child('Connection').value().send_message(":SET:OPC:THRS " + str(self.data_holder.latest_settings[device_id][7]))
         except Exception as e:
             print(traceback.format_exc())
             logging.exception(e)
         # clear current threshold value
-        self.device_widgets[device_id].pulse_quality.current_threshold.setText("")
-        # set pulse_analysis_index to None (signaling end of pulse analysis)
-        self.pulse_analysis_index[device_id] = None
-        # remove device id from pulse_analysis_index dictionary with delay
+        self.data_holder.device_widgets[device_id].pulse_quality.current_threshold.setText("")
+        # set data_holder.pulse_analysis_index to None (signaling end of pulse analysis)
+        self.data_holder.pulse_analysis_index[device_id] = None
+        # remove device id from data_holder.pulse_analysis_index dictionary with delay
         # delay ensures CPC has time to set original threshold before measurement continues
-        QTimer.singleShot(1000, lambda: self.pulse_analysis_index.pop(device_id))
-        # remove device id from pulse_analysis_filenames dictionary
-        if device_id in self.pulse_analysis_filenames:
-            self.pulse_analysis_filenames.pop(device_id)
+        QTimer.singleShot(1000, lambda: self.data_holder.pulse_analysis_index.pop(device_id))
+        # remove device id from data_holder.pulse_analysis_filenames dictionary
+        if device_id in self.data_holder.pulse_analysis_filenames:
+            self.data_holder.pulse_analysis_filenames.pop(device_id)
 
         # TODO plot gaussian fit and calculate nRMSE
         # analysis values are stored as listed tuples (pulse duration, threshold value)
-        # analysis_values = self.device_widgets[device_id].pulse_quality.analysis_values
+        # analysis_values = self.data_holder.device_widgets[device_id].pulse_quality.analysis_values
         # pulse_durations = [x[0] for x in analysis_values]
         # thresholds = [x[1] for x in analysis_values]
 
         # enable command input
-        self.device_widgets[device_id].set_tab.command_widget.enable_command_input()
+        self.data_holder.device_widgets[device_id].set_tab.command_widget.enable_command_input()
         # update pulse analysis status
-        self.device_widgets[device_id].pulse_quality.update_pa_status(False)
+        self.data_holder.device_widgets[device_id].pulse_quality.update_pa_status(False)
     
     # set device error status in dictionary
     def set_device_error(self, device_id, error):
-        self.device_errors[device_id] = error
+        self.data_holder.device_errors[device_id] = error
     
-    # updates tab error icons according to device_errors dictionary
+    # updates tab error icons according to data_holder.device_errors dictionary
     # TODO add comparison list of previous values to avoid unnecessary icon updates
     def update_error_icons(self):
         # go through each device
@@ -2424,12 +2348,12 @@ class MainWindow(QMainWindow):
             try:
                 # device id
                 device_id = dev.child('DevID').value()
-                # error status from device_errors
-                error = self.device_errors[device_id]
+                # error status from data_holder.device_errors
+                error = self.data_holder.device_errors[device_id]
                 # device type
                 device_type = dev.child('Device type').value()
                 # device widget
-                device_widget = self.device_widgets[device_id]
+                device_widget = self.data_holder.device_widgets[device_id]
                 # device widget tab index
                 tab_index = self.device_tabs.indexOf(device_widget)
                 # connected status
@@ -2482,7 +2406,7 @@ class MainWindow(QMainWindow):
     def rename_device(self, device):
         # combine device type name and serial number into device name
         device_type = device.child('Device type').value() # device type number
-        device_type_name = self.device_names[device_type] # device type name
+        device_type_name = self.data_holder.device_names[device_type] # device type name
         serial_number = device.child('Serial number').value() # serial number
         device_name = device_type_name + " " + serial_number
         # set device name
@@ -2494,7 +2418,7 @@ class MainWindow(QMainWindow):
     def rename_tab(self, device):
         # get tab index of device widget
         device_id = device.child('DevID').value()
-        device_widget = self.device_widgets[device_id]
+        device_widget = self.data_holder.device_widgets[device_id]
         tab_index = self.device_tabs.indexOf(device_widget)
         # check if device has a nickname
         if device.child('Device nickname').value() != "":
@@ -2539,7 +2463,7 @@ class MainWindow(QMainWindow):
                 widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
                 widget.set_tab.water_removal.clicked.connect(lambda: connection.send_set(":SET:WREM " + str(int(widget.set_tab.water_removal.isChecked()))))
                 # connect command_input to comand_entered function
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.device_widgets))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.data_holder.device_widgets))
                 # connect Set tab set points to send_set_val function
                 # send set value and message using lambda once value has been changed
                 # stepChanged signal is defined in SpinBox and DoubleSpinBox classes
@@ -2567,10 +2491,6 @@ class MainWindow(QMainWindow):
             if device_type in [PSM, PSM2]: # if PSM TODO optimize structure, remove repetition
                 # create PSM widget instance
                 widget = PSMWidget(device_param, device_type)
-                # add to psm_settings_updates dictionary, set to True
-                self.psm_settings_updates[device_id] = True
-                # add to extra_data_counter dictionary, set to 0
-                self.extra_data_counter[device_id] = 0
                 # connect Measure tab buttons to send_set function
                 widget.measure_tab.scan.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_scan()))
                 widget.measure_tab.step.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_step()))
@@ -2580,57 +2500,57 @@ class MainWindow(QMainWindow):
                 # connect SetTab SetWidgets to send_set_val function and set settings update flag to True
                 # growth tube temperature set
                 widget.set_tab.set_growth_tube_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:GT "))
-                widget.set_tab.set_growth_tube_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.set_growth_tube_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 widget.set_tab.set_growth_tube_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_growth_tube_temp.value_input.text()), ":SET:TEMP:GT "))
-                widget.set_tab.set_growth_tube_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.set_growth_tube_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 # saturator temperature set
                 widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:SAT "))
-                widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_saturator_temp.value_input.text()), ":SET:TEMP:SAT "))
-                widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 # inlet temperature set
                 widget.set_tab.set_inlet_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:INL "))
-                widget.set_tab.set_inlet_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.set_inlet_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 widget.set_tab.set_inlet_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_inlet_temp.value_input.text()), ":SET:TEMP:INL "))
-                widget.set_tab.set_inlet_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.set_inlet_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 # heater temperature set
                 widget.set_tab.set_heater_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:PRE "))
-                widget.set_tab.set_heater_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.set_heater_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 widget.set_tab.set_heater_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_heater_temp.value_input.text()), ":SET:TEMP:PRE "))
-                widget.set_tab.set_heater_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.set_heater_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 # drainage temperature set
                 widget.set_tab.set_drainage_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:DRN "))
-                widget.set_tab.set_drainage_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.set_drainage_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_drainage_temp.value_input.text()), ":SET:TEMP:DRN "))
-                widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 # cpc inlet flow set (send value to PSM)
                 #widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:FLOW:CPC "))
                 widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda value: psm_flow_send(device_param, value))
-                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 #widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_cpc_inlet_flow.value_input.text()), ":SET:FLOW:CPC "))
                 widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: psm_flow_send(device_param, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
-                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 # cpc sample flow set (send value to connected CPC if it exists)
                 # TODO is psm_update required when setting cpc sample flow?
                 widget.set_tab.set_cpc_sample_flow.value_spinbox.stepChanged.connect(lambda value: cpc_flow_send(device_param, value))
                 widget.set_tab.set_cpc_sample_flow.value_input.returnPressed.connect(lambda: cpc_flow_send(device_param, float(widget.set_tab.set_cpc_sample_flow.value_input.text())))
                 # if device type is PSM, connect co flow set
                 if device_type == PSM:
-                    widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.psm_settings_updates))
-                    widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                    widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
+                    widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                     # set value to hidden 'CO flow' parameter in parameter tree
                     widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda value: device_param.child('CO flow').setValue(str(round(value, 3))))
                     widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: device_param.child('CO flow').setValue(widget.set_tab.set_co_flow.value_input.text()))
                 # connect command_input to command_entered and psm_update functions
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.device_widgets))
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: psm_update(device_id, self.psm_settings_updates))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.data_holder.device_widgets))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 # connect liquid operations
                 widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
-                #widget.set_tab.autofill.clicked.connect(lambda: self.psm_update(device_id, self.psm_settings_updates))
+                #widget.set_tab.autofill.clicked.connect(lambda: self.psm_update(device_id, self.data_holder.psm_settings_updates))
                 widget.set_tab.drain.clicked.connect(lambda: connection.send_set(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
-                #widget.set_tab.drain.clicked.connect(lambda: self.psm_update(device_id, self.psm_settings_updates))
+                #widget.set_tab.drain.clicked.connect(lambda: self.psm_update(device_id, self.data_holder.psm_settings_updates))
                 widget.set_tab.drying.clicked.connect(lambda: connection.send_set(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
-                #widget.set_tab.drying.clicked.connect(lambda: self.psm_update(device_id, self.psm_settings_updates))
+                #widget.set_tab.drying.clicked.connect(lambda: self.psm_update(device_id, self.data_holder.psm_settings_updates))
 
             if device_type == ELECTROMETER: # if ELECTROMETER
                 widget = ElectrometerWidget(device_param) # create ELECTROMETER widget instance
@@ -2678,7 +2598,7 @@ class MainWindow(QMainWindow):
                 widget.set_tab.df_2.prev_button.clicked.connect(lambda: connection.send_set("do set dilution.2nd.prev true"))
                 widget.set_tab.df_2.next_button.clicked.connect(lambda: connection.send_set("do set dilution.2nd.next true"))
                 # connect command_input to command_entered function
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param, self.device_widgets, self.latest_command))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param, self.data_holder.device_widgets, self.data_holder.latest_command))
             
             if device_type == TSI_CPC: # if TSI CPC
                 # create TSI widget instance
@@ -2703,12 +2623,14 @@ class MainWindow(QMainWindow):
             else:
                 widget.plot_tab.viewbox.sigXRangeChanged.connect(self.x_range_changed)
 
-            # add widget instance to device_widgets dictionary with device ID as key
-            self.device_widgets[device_id] = widget
+            # add widget instance to data_holder.device_widgets dictionary with device ID as key
+            self.data_holder.device_widgets[device_id] = widget
+            # init data for this device with nan values
+            self.data_holder.reset_for_device(device_id, device_type)
             # add widget instance to tab widget
             self.device_tabs.addTab(widget, widget.name)
-            # add device id to device_errors dictionary
-            self.device_errors[device_id] = False
+            # add device id to data_holder.device_errors dictionary
+            self.data_holder.device_errors[device_id] = False
     
     # triggered when a device is removed from the parameter tree
     # sigChildRemoved(self, parent, child, index) - Emitted when a child (device) is removed
@@ -2717,46 +2639,19 @@ class MainWindow(QMainWindow):
             device_id = child.child("DevID").value()
             device_type = child.child("Device type").value()
             # remove device widget from main tab widget
-            self.device_tabs.removeTab(self.device_tabs.indexOf(self.device_widgets[device_id]))
+            self.device_tabs.removeTab(self.device_tabs.indexOf(self.data_holder.device_widgets[device_id]))
             # close serial connection if open
             try:
                 child.child('Connection').value().close()
             except AttributeError:
                 pass
-            # set empty data to curve_dict (remove curve from Main plot)
+            # set empty data to data_holder.curve_dict (remove curve from Main plot)
             try:
-                self.curve_dict[device_id].setData(x=[], y=[])
+                self.data_holder.curve_dict[device_id].setData(x=[], y=[])
             except KeyError:
                 pass
-            # remove device from all device related dictionaries
-            for dictionary in [self.latest_data, self.latest_settings, self.latest_psm_prnt, # data
-                self.latest_poly_correction, self.latest_ten_hz, self.extra_data, self.psm_dilution, # data
-                self.plot_data, self.curve_dict, self.start_times, self.device_widgets, # plots and widgets
-                self.dat_filenames, self.par_filenames, self.ten_hz_filenames, # filenames
-                self.par_updates, self.psm_settings_updates, self.device_errors]: # flags
-                try:
-                    del dictionary[device_id]
-                except KeyError:
-                    pass
-                # plot data string keys cleaning
-                if dictionary == self.plot_data:
-                    # check if device has multiple data types
-                    if device_type in [CPC, TSI_CPC, ELECTROMETER, RHTP, AFM]:
-                        # determine value types based on device type
-                        if device_type in [CPC, TSI_CPC]:
-                            types = ['', ':raw'] # concentration, raw concentration
-                        elif device_type == ELECTROMETER:
-                            types = [':1', ':2', ':3'] # voltage 1, voltage 2, voltage 3
-                        elif device_type == RHTP:
-                            types = [':rh', ':t', ':p'] # RH, T, P
-                        elif device_type == AFM:
-                            types = [':f', ':sf', ':rh', ':t', ':p'] # flow, standard flow, RH, T, P
-                        # remove all keys with device_id and value types
-                        for t in types:
-                            try:
-                                del dictionary[str(device_id)+t]
-                            except KeyError:
-                                pass
+
+            self.data_holder.clear_for_device(device_id)
 
     def startTimer(self):
         # check start time and sync with next second
