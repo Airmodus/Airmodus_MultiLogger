@@ -39,6 +39,8 @@ class DataHolder:
         # Device names (static, move here for centralization)
         self.device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', ELECTROMETER: 'Electrometer', CO2_SENSOR: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', EDILUTER: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', EXAMPLE_DEVICE: 'Example device'} # Use actual constants like CPC=0, etc.
 
+        self.first_connection = False # once first connection has been made, set to True
+
     def reset_for_device(self, dev_id, dev_type):
         """Init dicts for a new device with type-specific defaults."""
         if dev_type == CPC:

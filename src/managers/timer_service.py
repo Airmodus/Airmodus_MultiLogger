@@ -5,15 +5,16 @@ from datetime import datetime as dt
 from config import TIMER_DELAY_MS, MAX_TIME_SEC
 
 class TimerService:
-    def __init__(self, main_window):
+    def __init__(self, main_window, device_manager, data_holder):
         self.main_window = main_window
+        self.device_manager = device_manager 
+        self.data_holder = data_holder
         self.timer = QTimer(timerType=Qt.PreciseTimer)
         self.timer.timeout.connect(self.timer_functions)
         # State variables (moved from MainWindow)
         self.current_time = 0
         self.time_counter = 0 # used as index value, incremented every second
         self.max_reached = False # flag for checking if MAX_TIME_SEC has been reached
-        self.first_connection = 0 # once first connection has been made, set to 1
         self.error_status = 0
         self.saving_status = 1
 
@@ -37,17 +38,17 @@ class TimerService:
         self.current_time = int(time())
         self.error_status = 0
         self.saving_status = 1
-        self.main_window.data_holder.device_errors = {key: False for key in self.main_window.data_holder.device_errors}
-        self.main_window.connection_test()
-        if self.first_connection:
-            self.main_window.get_dev_data()
+        self.data_holder.device_errors = {key: False for key in self.data_holder.device_errors}
+        self.device_manager.connection_test()
+        if self.data_holder.first_connection:
+            self.device_manager.get_dev_data()
             from PyQt5.QtCore import QTimer
             QTimer.singleShot(TIMER_DELAY_MS, self.delayed_functions) 
 
     # Moved from MainWindow.delayed_functions
     def delayed_functions(self):
-        self.main_window.readIndata()
-        self.main_window.ten_hz_check()
+        self.device_manager.readIndata()
+        self.device_manager.ten_hz_check()
         self.main_window.update_plot_data()
         self.main_window.update_figures_and_menus()
         self.main_window.compare_day()
