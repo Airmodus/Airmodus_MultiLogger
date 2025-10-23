@@ -39,7 +39,14 @@ class DataHolder:
         # Device names (static, move here for centralization)
         self.device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', ELECTROMETER: 'Electrometer', CO2_SENSOR: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', EDILUTER: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', EXAMPLE_DEVICE: 'Example device'} # Use actual constants like CPC=0, etc.
 
+        # Timer variables
         self.first_connection = False # once first connection has been made, set to True
+        self.x_time_list = full(10, nan) # 60 # list for saving x-axis time values
+        self.current_time = 0
+        self.time_counter = 0 # used as index value, incremented every second
+        self.max_reached = False # flag for checking if MAX_TIME_SEC has been reached
+        self.error_status = 0
+        self.saving_status = 1
 
     def reset_for_device(self, dev_id, dev_type):
         """Init dicts for a new device with type-specific defaults."""

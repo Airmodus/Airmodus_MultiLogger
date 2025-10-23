@@ -186,9 +186,9 @@ class DeviceManager:
                                 # update widget error colors and store total errors
                                 total_errors = self.data_holder.device_widgets[dev_id].update_errors(status_hex, cabin_p_error)
                                 
-                                # set timer_service.error_status flag if total errors is not 0
+                                # set data_holder.error_status flag if total errors is not 0
                                 if total_errors != 0:
-                                    self.timer_service.error_status = 1
+                                    self.data_holder.error_status = 1
                                     # set device error flag
                                     self.set_device_error(dev_id, True)
 
@@ -370,9 +370,9 @@ class DeviceManager:
                                 try:
                                     # update widget errors colors
                                     total_errors = self.data_holder.device_widgets[dev_id].update_errors(status_hex)
-                                    # set timer_service.error_status flag if total errors is not 0
+                                    # set data_holder.error_status flag if total errors is not 0
                                     if total_errors != 0:
-                                        self.timer_service.error_status = 1
+                                        self.data_holder.error_status = 1
                                         # set device error flag
                                         self.set_device_error(dev_id, True)
                                 except Exception as e:
@@ -384,7 +384,7 @@ class DeviceManager:
                                 liquid_errors = self.data_holder.device_widgets[dev_id].update_notes(note_hex)
                                 # set error flags if liquid errors is not 0
                                 if liquid_errors != 0:
-                                    self.timer_service.error_status = 1
+                                    self.data_holder.error_status = 1
                                     # set device error flag
                                     self.set_device_error(dev_id, True)
                                 # store polynomial correction value as float to dictionary
@@ -769,9 +769,9 @@ class DeviceManager:
                         # store to latest data dictionary
                         self.data_holder.latest_data[dev_id] = readings
 
-                        # set timer_service.error_status flag if instrument errors is not equal to 0
+                        # set data_holder.error_status flag if instrument errors is not equal to 0
                         if int(readings[1], 16) != 0:
-                            self.timer_service.error_status = 1
+                            self.data_holder.error_status = 1
                             # set device error flag
                             self.set_device_error(dev_id, True)
                     

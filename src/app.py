@@ -4,7 +4,6 @@ import os
 import locale
 import platform
 import logging
-import random
 import traceback
 import json
 import warnings
@@ -71,7 +70,8 @@ from devices import (
 from managers import (
     DataHolder,
     TimerService,
-    DeviceManager
+    DeviceManager,
+    PlotManager
 )
 
 from serial_connection import SerialDeviceConnection
@@ -96,8 +96,9 @@ class MainWindow(QMainWindow):
 
         self.list_com_ports()
         self.device_manager = DeviceManager(self, self.data_holder, self.data_holder.device_widgets)
+        self.plot_manager = PlotManager(self, self.data_holder, self.main_plot)
 
-        self.timer_service = TimerService(self, self.device_manager, self.data_holder)
+        self.timer_service = TimerService(self, self.data_holder, self.device_manager, self.plot_manager)
         self.timer_service.start()
 
         # load ini file if available
@@ -110,7 +111,6 @@ class MainWindow(QMainWindow):
         self.t.setParameters(p, showTop=False)
         self.t.setHeaderHidden(True)
         # x axis time attributes
-        self.x_time_list = full(10, nan) # 60 # list for saving x-axis time values
         self.inquiry_flag = False # when COM ports change, this is set to True to inquire device IDNs
 
         # load CSS style and apply it to the main window
@@ -181,447 +181,14 @@ class MainWindow(QMainWindow):
         self.params.child('Data settings').child('Save settings').sigActivated.connect(self.manual_save_configuration)
         self.params.child('Data settings').child('Load settings').sigActivated.connect(self.manual_load_configuration)
 
-
-    # update plot data lists
-    def update_plot_data(self):
-
-        # ----- PSM connected CPC calculations -----
-        
-        # before setting plot data, go through each PSM and perform connected CPC calculations
-        for dev in self.params.child('Device settings').children():
-
-            try:
-                # if device is PSM and it is connected, calculate and compile connected CPC values
-                if dev.child('Device type').value() in [PSM, PSM2] and dev.child('Connected').value(): # PSM
-                    # get PSM ID
-                    psm_id = dev.child('DevID').value()
-                    # get connected CPC ID
-                    cpc_id = dev.child('Connected CPC').value()
-
-                    # if connected CPC is not 'None' and CPC is not in pulse analysis mode
-                    if cpc_id != 'None' and cpc_id not in self.data_holder.pulse_analysis_index:
-                        
-                        # get connected CPC device parameter
-                        for cpc in self.params.child('Device settings').children():
-                            if cpc.child('DevID').value() == cpc_id:
-                                cpc_device = cpc
-                                break
-
-                        # if CPC is connected, calculate missing values
-                        if cpc_device.child('Connected').value() == True:
-                            cpc_data = self.data_holder.latest_data[cpc_id]
-
-                            # Inlet flow = (CPC flow + CO flow) - Saturator flow - Excess flow
-
-                            # get cpc flow rate from PSM latest_settings
-                            cpc_flow = float(self.data_holder.latest_settings[psm_id][5])
-
-                            if dev.child('Device type').value() == PSM:
-                                # get co flow rate from PSM widget
-                                co_flow = round(self.data_holder.device_widgets[psm_id].set_tab.set_co_flow.value_spinbox.value(), 3)
-                                if co_flow == 0: # if co flow is 0, not set by user
-                                    self.data_holder.device_widgets[psm_id].set_tab.set_co_flow.set_red_color() # set CO flow rate widget to red
-                                    self.timer_service.error_status = 1 # set timer_service.error_status flag to 1
-                                else:
-                                    self.data_holder.device_widgets[psm_id].set_tab.set_co_flow.set_default_color()
-                                inlet_flow = cpc_flow + co_flow - float(self.data_holder.latest_data[psm_id][2]) - float(self.data_holder.latest_data[psm_id][3])
-                            
-                            elif dev.child('Device type').value() == PSM2:
-                                # get vacuum mfc flow rate from latest data
-                                vacuum_flow = float(self.data_holder.latest_data[psm_id][15])
-                                # TODO vacuum flow GUI value is updated in PSMWidget's update_values, check if it works and remove line below
-                                #self.data_holder.device_widgets[psm_id].status_tab.flow_vacuum.change_value(str(round(vacuum_flow, 3)))
-                                inlet_flow = cpc_flow + vacuum_flow - float(self.data_holder.latest_data[psm_id][2]) - float(self.data_holder.latest_data[psm_id][3])
-                                inlet_flow0 = cpc_flow + vacuum_flow - 4 + float(self.data_holder.latest_data[psm_id][2]) + float(self.data_holder.latest_data[psm_id][3])
-                            
-                            # store inlet flow into PSM latest_settings, rounded to 3 decimals
-                            self.data_holder.latest_settings[psm_id][6] = round(inlet_flow, 3)
-                            # show inlet flow in PSM widget
-                            self.data_holder.device_widgets[psm_id].status_tab.flow_inlet.change_value(str(round(inlet_flow, 3)))
-
-                            # if received polynomial correction is 0 (placeholder)
-                            if self.data_holder.latest_poly_correction[psm_id] == 0:
-                                # calculate polynomial correction factor
-                                if dev.child('Device type').value() == PSM:
-                                    pcor = array([-0.0272052, 0.11394213, -0.08959011, -0.20675596, 0.24343024, 1.10531145])
-                                elif dev.child('Device type').value() == PSM2:
-                                    pcor = array([0.12949491, -0.50587616, 0.57214191, 0.76108161])
-                                poly_correction  = polyval(pcor, float(self.data_holder.latest_data[psm_id][2]))
-                            else: # if received polynomial correction is other than 0, use received value
-                                poly_correction = self.data_holder.latest_poly_correction[psm_id]
-
-                            # calculate dilution correction factor
-                            # Dilution ratio = (inlet flow + Excess flow + Saturator flow) / Inlet flow
-                            dilution_correction_factor = (inlet_flow + float(self.data_holder.latest_data[psm_id][3]) + float(self.data_holder.latest_data[psm_id][2])) / inlet_flow
-                            if dev.child('Device type').value() == PSM2:
-                                dilution_correction_factor = (inlet_flow + 4 - float(self.data_holder.latest_data[psm_id][3]) - float(self.data_holder.latest_data[psm_id][2])) / inlet_flow0
-                            
-                            # calculate concentration from PSM
-                            # Concentration from PSM = CPC concentration * Dilution ratio / Polynomial correction
-                            concentration_from_psm = float(self.data_holder.latest_data[cpc_id][0]) * dilution_correction_factor / poly_correction
-                            # add to PSM latest_data
-                            self.data_holder.latest_data[psm_id][0] = round(concentration_from_psm, 2)
-
-                            # if Connected CPC is Airmodus CPC, add CPC data to PSM latest_data
-                            if cpc_device.child('Device type').value() == CPC:
-                                # compile connected CPC data
-                                connected_cpc_data = [
-                                    cpc_data[0], round(dilution_correction_factor, 3), # concentration,  dilution correction factor
-                                    cpc_data[3], cpc_data[4], cpc_data[5], cpc_data[6],# T: saturator, condenser, optics, cabin
-                                    cpc_data[8], cpc_data[9], cpc_data[7],# P: critical orifice, nozzle, absolute (inlet)
-                                    cpc_data[11], cpc_data[2], cpc_data[1],# liquid level, pulses, pulse duration
-                                    cpc_data[13], cpc_data[14] # number of errors, system status (hex)
-                                ]
-                                # replace PSM's latest_data CPC placeholders with connected CPC data
-                                self.data_holder.latest_data[psm_id][-16:-2] = connected_cpc_data # 14 values before status hex and note hex
-                            # if Connected device is TSI CPC, add concentration and dilution correction factor to PSM latest_data
-                            elif cpc_device.child('Device type').value() == TSI_CPC:
-                                self.data_holder.latest_data[psm_id][-16] = cpc_data[0] # concentration
-                                self.data_holder.latest_data[psm_id][-15] = round(dilution_correction_factor, 3) # dilution correction factor
-
-            except Exception as e:
-                print(traceback.format_exc())
-                logging.exception(e)
-
-        # ----- update plot data -----
-
-        self.x_time_list = _manage_plot_array(self.x_time_list, self.timer_service.time_counter, max_reached=self.timer_service.max_reached)
-        self.x_time_list[self.timer_service.time_counter] = self.timer_service.current_time
-        
-        # go through each device
-        for dev in self.params.child('Device settings').children():
-            # store device id to variable for clarity
-            dev_id = dev.child('DevID').value()
-
-            try: # if one device fails, continue with the next one
-                dev_type = dev.child('Device type').value()
-
-                # Devices with multiple values - create lists for each value
-                if dev_type in [CPC, TSI_CPC, ELECTROMETER, RHTP, AFM]:
-                    # determine value types based on device type
-                    if dev_type in [CPC, TSI_CPC]:
-                        types = ['', ':raw'] # concentration, raw concentration
-                    elif dev_type == ELECTROMETER:
-                        types = [':1', ':2', ':3'] # voltage 1, voltage 2, voltage 3
-                    elif dev_type == RHTP:
-                        types = [':rh', ':t', ':p'] # RH, T, P
-                    elif dev_type == AFM:
-                        types = [':f', ':sf', ':rh', ':t', ':p'] # flow, standard flow, RH, T, P
-                    
-                    # if device is not yet in data_holder.plot_data dict, add it
-                    if str(dev_id)+types[0] not in self.data_holder.plot_data:
-                        # make the new lists the same size as x_time_list
-                        for i in types:
-                            self.data_holder.plot_data[str(dev_id)+i] = full(len(self.x_time_list), nan)
-
-                    # Manage all arrays for this device type in one go
-                    for i in types:
-                        self.data_holder.plot_data[str(dev_id)+i] = _manage_plot_array(self.data_holder.plot_data[str(dev_id)+i], self.timer_service.time_counter, max_reached=self.timer_service.max_reached)
-                
-                # other devices
-                else:
-                    # if device is not yet in data_holder.plot_data dict, add it
-                    if dev_id not in self.data_holder.plot_data:
-                        # make the new list the same size as x_time_list
-                        self.data_holder.plot_data[dev_id] = full(len(self.x_time_list), nan)
-                    self.data_holder.plot_data[dev_id] = _manage_plot_array(self.data_holder.plot_data[dev_id], self.timer_service.time_counter, max_reached=self.timer_service.max_reached)
-                
-                # create lists for pulse duration and pulse ratio if they don't exist yet
-                if dev_type == CPC:
-                    key_pd = str(dev_id)+':pd'
-                    self.data_holder.plot_data[key_pd] = _roll_pulse_array(self.data_holder.plot_data[key_pd])
-                    key_pr = str(dev_id)+':pr'
-                    self.data_holder.plot_data[key_pr] = _roll_pulse_array(self.data_holder.plot_data[key_pr])
-                
-                # if device is connected, add latest_values data to data_holder.plot_data according to device
-                if dev.child('Connected').value():
-                    if dev_type in [CPC, TSI_CPC]: # CPC
-                        
-                        # if CPC is in pulse analysis mode, update pulse analysis plot data instead of normal plot data
-                        if dev_id in self.data_holder.pulse_analysis_index:
-                            if self.data_holder.pulse_analysis_index[dev_id] is not None: # when index is None, analysis has reached its end
-                                try:
-                                    # calculate current pulse duration
-                                    dead_time = self.data_holder.latest_data[dev_id][1]
-                                    number_of_pulses = self.data_holder.latest_data[dev_id][2]
-                                    if number_of_pulses == 0:
-                                        pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
-                                    else:
-                                        # pulse duration = dead time * 1000 (micro to nano) / number of pulses
-                                        pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
-                                    # get current threshold value with data_holder.pulse_analysis_index
-                                    threshold_value = PULSE_ANALYSIS_THRESHOLDS[self.data_holder.pulse_analysis_index[dev_id]]
-                                    #print(f"threshold: {threshold_value} pulse duration: {pulse_duration} dead time: {dead_time} number of pulses: {number_of_pulses}")
-                                    # add analysis point to pulse quality widget
-                                    self.data_holder.device_widgets[dev_id].pulse_quality.add_analysis_point(pulse_duration, threshold_value)
-                                except Exception as e:
-                                    print(traceback.format_exc())
-                                    logging.exception(e)
-                                    # stop pulse analysis if exception occurs
-                                    self.pulse_analysis_stop(dev_id, dev)
-
-                        else:
-                            psm_connection = False
-                            # check if this CPC is connected to any PSM
-                            for psm in self.params.child('Device settings').children():
-                                if psm.child('Device type').value() in [PSM, PSM2] and psm.child('Connected').value():
-                                    if psm.child('Connected CPC').value() == dev_id:
-                                        # if PSM connection exists, add latest PSM concentration value to data_holder.plot_data
-                                        self.data_holder.plot_data[str(dev_id)][self.timer_service.time_counter] = self.data_holder.latest_data[psm.child('DevID').value()][0]
-                                        psm_connection = True
-                                        break
-                            # if not connected to PSM, add CPC concentration value to data_holder.plot_data
-                            if psm_connection == False:
-                                self.data_holder.plot_data[str(dev_id)][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][0]
-                            # add raw concentration value to data_holder.plot_data
-                            self.data_holder.plot_data[str(dev_id)+':raw'][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][0]
-                            
-                            # update pulse duration and pulse ratio lists
-                            if dev.child('Device type').value() == CPC:
-                                try:
-                                    #print("concentration", self.latest_data[dev_id][0], "* sample flow", self.latest_settings[dev_id][2], "=", self.latest_data[dev_id][0] * self.latest_settings[dev_id][2])
-                                    # check if (concentration * sample flow) is above 50 and below 5000 (valid)
-                                    check_value = self.data_holder.latest_data[dev_id][0] * self.data_holder.latest_settings[dev_id][2]
-                                    if check_value > 50 and check_value < 5000:
-                                        # calculate pulse duration
-                                        if self.data_holder.latest_data[dev_id][2] == 0:
-                                            pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
-                                        else:
-                                            # pulse duration = dead time * 1000 (micro to nano) / number of pulses
-                                            pulse_duration = round(self.data_holder.latest_data[dev_id][1] * 1000 / self.data_holder.latest_data[dev_id][2], 2)
-                                        # store pulse duration and pulse ratio values to data_holder.plot_data
-                                        self.data_holder.plot_data[str(dev_id)+':pd'][-1] = pulse_duration
-                                        self.data_holder.plot_data[str(dev_id)+':pr'][-1] = self.data_holder.latest_data[dev_id][12]
-                                    else: # if concentration is outside range (invalid)
-                                        # store nan values to data_holder.plot_data
-                                        self.data_holder.plot_data[str(dev_id)+':pd'][-1] = nan
-                                        self.data_holder.plot_data[str(dev_id)+':pr'][-1] = nan
-                                except Exception as e:
-                                    print(traceback.format_exc())
-                                    logging.exception(e)
-                                    # store nan values to data_holder.plot_data
-                                    self.data_holder.plot_data[str(dev_id)+':pd'][-1] = nan
-                                    self.data_holder.plot_data[str(dev_id)+':pr'][-1] = nan
-
-                    elif dev_type in [PSM, PSM2]: # PSM
-                        # add latest saturator flow rate value to timer_service.time_counter index of data_holder.plot_data
-                        self.data_holder.plot_data[dev_id][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][2]
-                    elif dev_type == ELECTROMETER: # ELECTROMETER
-                        # add latest voltage values to timer_service.time_counter index of data_holder.plot_data
-                        self.data_holder.plot_data[str(dev_id)+':1'][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][0]
-                        self.data_holder.plot_data[str(dev_id)+':2'][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][1]
-                        self.data_holder.plot_data[str(dev_id)+':3'][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][2]
-                    elif dev_type == CO2_SENSOR: # CO2 sensor
-                        # add latest CO2 value to timer_service.time_counter index of data_holder.plot_data
-                        self.data_holder.plot_data[dev_id][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][0]
-                    elif dev_type == RHTP: # RHTP
-                        # add latest values (RH, T, P) to timer_service.time_counter index of data_holder.plot_data
-                        self.data_holder.plot_data[str(dev_id)+':rh'][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][0]
-                        self.data_holder.plot_data[str(dev_id)+':t'][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][1]
-                        self.data_holder.plot_data[str(dev_id)+':p'][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][2]
-                    elif dev_type == AFM: # AFM
-                        # add latest values (flow, RH, T, P) to timer_service.time_counter index of data_holder.plot_data
-                        self.data_holder.plot_data[str(dev_id)+':f'][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][0]
-                        self.data_holder.plot_data[str(dev_id)+':sf'][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][1]
-                        self.data_holder.plot_data[str(dev_id)+':rh'][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][2]
-                        self.data_holder.plot_data[str(dev_id)+':t'][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][3]
-                        self.data_holder.plot_data[str(dev_id)+':p'][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][4]
-                    elif dev_type == EDILUTER: # eDiluter
-                        # add latest T1 value to timer_service.time_counter index of data_holder.plot_data
-                        self.data_holder.plot_data[dev_id][self.timer_service.time_counter] = self.data_holder.latest_data[dev_id][3]
-                if dev_type == -1: # Example device
-                    # generate random value for plotting and logging
-                    random_value = round(random.random() * 100, 2) # 0-100
-                    # add random value to timer_service.time_counter index of data_holder.plot_data
-                    self.data_holder.plot_data[dev_id][self.timer_service.time_counter] = random_value
-                    # add random value to latest_data as list object
-                    self.data_holder.latest_data[dev_id] = [random_value]
-
-            except Exception as e:
-                print(traceback.format_exc())
-                logging.exception(e)
-
-    
-    # update plots with plot data lists
-    def update_figures_and_menus(self):
-        # go through each device
-        for dev in self.params.child('Device settings').children():
-            
-            # store device id and device type to variables for readability
-            dev_id = dev.child('DevID').value()
-            dev_type = dev.child('Device type').value()
-
-            try: # if one device fails, continue with the next one
-
-                # MAIN PLOT
-
-                # if device is not yet in data_holder.curve_dict, add it
-                # used when plotting to main plot
-                if dev.child('DevID').value() not in self.data_holder.curve_dict:
-                    # create curve
-                    self.data_holder.curve_dict[dev_id] = PlotCurveItem(pen=dev_id, connect="finite")
-                    #self.data_holder.curve_dict[dev_id] = PlotCurveItem(pen={'color':dev_id, 'width':2}, connect="finite")
-                    # add curve to viewbox according to device type
-                    if dev_type == PSM2: # if PSM2, add to PSM viewbox
-                        self.main_plot.viewboxes[PSM].addItem(self.data_holder.curve_dict[dev_id])
-                    elif dev_type == TSI_CPC: # if TSI CPC, add to CPC viewbox
-                        self.main_plot.viewboxes[CPC].addItem(self.data_holder.curve_dict[dev_id])
-                    else: # other devices
-                        self.main_plot.viewboxes[dev_type].addItem(self.data_holder.curve_dict[dev_id])
-                
-                # if device type is RHTP or AFM, update main plot according to selected value
-                if dev_type in [RHTP, AFM]: # RHTP or AFM
-                    if dev.child("Plot to main").value() == None:
-                        self.data_holder.curve_dict[dev_id].setData(x=[], y=[])
-                    elif dev.child("Plot to main").value() == 'RH':
-                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':rh'][:self.timer_service.time_counter+1])
-                    elif dev.child("Plot to main").value() == 'T':
-                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':t'][:self.timer_service.time_counter+1])
-                    elif dev.child("Plot to main").value() == 'P':
-                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':p'][:self.timer_service.time_counter+1])
-                    elif dev_type == AFM and dev.child("Plot to main").value() == 'Flow':
-                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':f'][:self.timer_service.time_counter+1])
-                    elif dev_type == AFM and dev.child("Plot to main").value() == 'Standard flow':
-                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':sf'][:self.timer_service.time_counter+1])
-
-                # other devices: update main plot if 'Plot to main' is enabled
-                elif dev.child("Plot to main").value():
-                    # if device is CPC, get plot data with str(dev_id) key
-                    if dev_type in [CPC, TSI_CPC]: # CPC
-                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)][:self.timer_service.time_counter+1])
-                    # if device is Electrometer, plot Voltage 2
-                    elif dev_type == ELECTROMETER: # ELECTROMETER
-                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':2'][:self.timer_service.time_counter+1])
-                    else: # other devices
-                        self.data_holder.curve_dict[dev_id].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[dev_id][:self.timer_service.time_counter+1])
-                else: # if 'Plot to main' is off, hide curve from main plot (set empty data)
-                    self.data_holder.curve_dict[dev_id].setData(x=[], y=[])
-                
-                # scale x-axis range if Follow is on
-                if self.params.child('Plot settings').child('Follow').value():
-                    self.main_plot.plot.setXRange(self.timer_service.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.timer_service.current_time, padding=0)
-
-                # INDIVIDUAL PLOTS
-
-                # if device is connected OR Example device
-                if dev.child('Connected').value() or dev_type == EXAMPLE_DEVICE:
-                    
-                    # store current time counter value as start time in dictionary if not yet stored
-                    # start time is stored when first non-nan value is received
-                    # start time is used to crop plot data to only show non-nan values
-                    if dev_id not in self.data_holder.start_times:
-                        # CPC
-                        if dev_type in [CPC, TSI_CPC]:
-                            if str(self.data_holder.plot_data[str(dev_id)+':raw'][self.timer_service.time_counter]) != "nan":
-                                self.data_holder.start_times[dev_id] = self.timer_service.time_counter
-                        # ELECTROMETER
-                        elif dev_type == ELECTROMETER:
-                            if str(self.data_holder.plot_data[str(dev_id)+':1'][self.timer_service.time_counter]) != "nan":
-                                self.data_holder.start_times[dev_id] = self.timer_service.time_counter
-                        # RHTP or AFM
-                        elif dev_type in [RHTP, AFM]:
-                            if str(self.data_holder.plot_data[str(dev_id)+':rh'][self.timer_service.time_counter]) != "nan":
-                                self.data_holder.start_times[dev_id] = self.timer_service.time_counter
-                        # other devices
-                        elif str(self.data_holder.plot_data[dev_id][self.timer_service.time_counter]) != "nan":
-                            self.data_holder.start_times[dev_id] = self.timer_service.time_counter
-
-                    # if device is in start times dictionary, update plot
-                    if dev_id in self.data_holder.start_times:
-                        # get start time from dictionary to determine plot start index
-                        start_time = self.data_holder.start_times[dev_id]
-                        # update plot in device widget
-                        # TODO start times removed from curve setData, problems with array shift index - add back later if compatible
-                        #self.data_holder.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[start_time:self.timer_service.time_counter+1], y=self.data_holder.plot_data[dev_id][start_time:self.timer_service.time_counter+1])
-                        if dev_type in [CPC, TSI_CPC]: # CPC
-                            # update plot with raw CPC concentration
-                            self.data_holder.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':raw'][:self.timer_service.time_counter+1])
-                            # update CPC pulse quality tab view (scatter plot and labels)
-                            if dev_type == CPC:
-                                self.pulse_quality_update(dev_id)
-
-                        elif dev_type == ELECTROMETER: # ELECTROMETER
-                            # update Electrometer plot with all 3 values
-                            self.data_holder.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':1'][:self.timer_service.time_counter+1])
-                            self.data_holder.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':2'][:self.timer_service.time_counter+1])
-                            self.data_holder.device_widgets[dev_id].plot_tab.curve3.setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':3'][:self.timer_service.time_counter+1])
-                        elif dev_type == RHTP: # RHTP
-                            # update RHTP plot with all 3 values
-                            self.data_holder.device_widgets[dev_id].plot_tab.curve1.setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':rh'][:self.timer_service.time_counter+1])
-                            self.data_holder.device_widgets[dev_id].plot_tab.curve2.setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':t'][:self.timer_service.time_counter+1])
-                            self.data_holder.device_widgets[dev_id].plot_tab.curve3.setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':p'][:self.timer_service.time_counter+1])
-                        elif dev_type == AFM: # AFM
-                            # update AFM plot with all 5 values
-                            self.data_holder.device_widgets[dev_id].plot_tab.curves[0].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':f'][:self.timer_service.time_counter+1])
-                            self.data_holder.device_widgets[dev_id].plot_tab.curves[1].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':sf'][:self.timer_service.time_counter+1])
-                            self.data_holder.device_widgets[dev_id].plot_tab.curves[2].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':rh'][:self.timer_service.time_counter+1])
-                            self.data_holder.device_widgets[dev_id].plot_tab.curves[3].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':t'][:self.timer_service.time_counter+1])
-                            self.data_holder.device_widgets[dev_id].plot_tab.curves[4].setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[str(dev_id)+':p'][:self.timer_service.time_counter+1])
-                        else: # other devices
-                            self.data_holder.device_widgets[dev_id].plot_tab.curve.setData(x=self.x_time_list[:self.timer_service.time_counter+1], y=self.data_holder.plot_data[dev_id][:self.timer_service.time_counter+1])
-                        
-                        # scale x-axis range if Follow is on
-                        if self.params.child('Plot settings').child('Follow').value():
-                            if dev_type == ELECTROMETER: # if ELECTROMETER, update all 3 plots
-                                for plot in self.data_holder.device_widgets[dev_id].plot_tab.plots:
-                                    plot.setXRange(self.timer_service.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.timer_service.current_time, padding=0)
-                            else: # other devices
-                                self.data_holder.device_widgets[dev_id].plot_tab.plot.setXRange(self.timer_service.current_time - (p.child('Plot settings').child('Time window (s)').value()), self.timer_service.current_time, padding=0)
-
-                # PSM CPC FLOW CHECK
-                # warn if no CPC is connected or update Set tab's CPC sample flow value
-
-                # if device type is PSM and it is connected
-                if dev_type in [PSM ,PSM2] and dev.child('Connected').value():
-                    # if no CPC is connected
-                    if dev.child('Connected CPC').value() == 'None':
-                        # update status_tab flow_cpc widget value and color
-                        if self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != "Not connected":
-                            # set status_tab flow_cpc color to red and change text
-                            self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_color(1) # change color to red
-                            self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_value("Not connected") # update value on status_tab as well
-                        # set timer_service.error_status flag to 1
-                        self.timer_service.error_status = 1
-                        # set device error flag
-                        self.set_device_error(dev.child('DevID').value(), True)
-                    # if CPC is connected
-                    else:
-                        # get connected CPC id
-                        cpc_id = dev.child('Connected CPC').value()
-                        # get connected CPC device parameter
-                        for cpc in self.params.child('Device settings').children():
-                            if cpc.child('DevID').value() == cpc_id:
-                                cpc_device = cpc
-                                break
-                        # if connected CPC is Airmodus CPC, check if connected CPC sample flow has changed
-                        if cpc_device.child('Device type').value() == CPC:
-                            cpc_sample_flow = float(self.data_holder.latest_settings[cpc_id][2])
-                            # if CPC sample flow is different from value displayed in Set tab, update displayed value
-                            if self.data_holder.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.value() != cpc_sample_flow:
-                                self.data_holder.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.setValue(cpc_sample_flow)
-                        
-                        # if CPC inlet flow is different from value displayed in Status tab, update displayed value
-                        if self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != str(self.data_holder.latest_settings[dev_id][5]) + " lpm":
-                            # set status_tab flow_cpc color to normal and change text
-                            self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_color(0)
-                            self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_value(str(self.data_holder.latest_settings[dev_id][5]) + " lpm")
-
-            except Exception as e:
-                print(traceback.format_exc())
-                logging.exception(e)
-
-        # update axes # TODO add flag for updating axes, activate flag when any 'Plot to main' option is changed
-        self.axis_check()
-        # update legend with current values
-        self.legend_check()
     
     # write data to file(s)
     def write_data(self):
         # if saving is on
         if self.params.child('Data settings').child('Save data').value():
 
-            # create timestamp from timer_service.current_time
-            timestamp = dt.fromtimestamp(self.timer_service.current_time)
+            # create timestamp from data_holder.current_time
+            timestamp = dt.fromtimestamp(self.data_holder.current_time)
             timeStampStr = str(timestamp.strftime("%Y.%m.%d %H:%M:%S"))
 
             # go through each device
@@ -887,7 +454,7 @@ class MainWindow(QMainWindow):
                     except Exception as e:
                         print(traceback.format_exc())
                         logging.exception(e)
-                        self.timer_service.saving_status = 0 # set saving status to 0
+                        self.data_holder.saving_status = 0 # set saving status to 0
                 
                 # if device is not connected
                 else:
@@ -895,7 +462,7 @@ class MainWindow(QMainWindow):
                 # TODO change saving status if device is not connected?
 
         else: # if saving is toggled off
-            self.timer_service.saving_status = 0 # set saving status to 0
+            self.data_holder.saving_status = 0 # set saving status to 0
         
         # write data to pulse analysis file if pulse analysis is on
         for dev in self.params.child('Device settings').children():
@@ -971,7 +538,7 @@ class MainWindow(QMainWindow):
         if self.params.child('Data settings').child('Save data').value():
             # check if new file should be started at midnight
             if self.params.child("Data settings").child('Generate daily files').value():
-                current_day = dt.fromtimestamp(self.timer_service.current_time).strftime("%m%d")
+                current_day = dt.fromtimestamp(self.data_holder.current_time).strftime("%m%d")
                 if current_day != self.start_day:
                     self.data_holder.reset_all_filenames() # start new file if day has changed
                     # update start day
@@ -1275,113 +842,6 @@ class MainWindow(QMainWindow):
             if dev.child('Device type').value() == AFM and dev.child('Plot to main').value() != value:
                 dev.child('Plot to main').setValue(value)
     
-    # updates main_plot axes according to Plot to main settings
-    def axis_check(self):
-        # hide all axes
-        for key in self.main_plot.axes:
-            self.main_plot.show_hide_axis(key, False)
-        # show axes for devices that are set to plot to main
-        for dev in self.params.child('Device settings').children():
-            # RHTP
-            if dev.child('Device type').value() == RHTP:
-                self.main_plot.change_rhtp_axis(dev.child('Plot to main').value())
-            # AFM
-            elif dev.child('Device type').value() == AFM:
-                self.main_plot.change_afm_axis(dev.child('Plot to main').value())
-            # other devices
-            elif dev.child('Plot to main').value():
-                self.main_plot.show_hide_axis(dev.child('Device type').value(), True)
-    
-    # updates main_plot legend with current values according to 'Plot to main' settings
-    def legend_check(self):
-        # clear legend
-        self.main_plot.legend.clear()
-        # check each device and add to legend if exists in curve_dict and Plot to main is enabled
-        for dev in self.params.child('Device settings').children():
-            dev_id = dev.child('DevID').value()
-            # if device is in data_holder.curve_dict
-            if dev_id in self.data_holder.curve_dict:
-                # check if device has a nickname
-                if dev.child('Device nickname').value() != "":
-                    device_name = dev.child('Device nickname').value()
-                else: # if no nickname, use device parameter name (device type and serial number)
-                    device_name = dev.name()
-                # RHTP or AFM
-                if dev.child('Device type').value() in [RHTP, AFM]:
-                    # if Plot to main is enabled
-                    if dev.child('Plot to main').value() != None:
-                        # add curve to legend with device name and current value of chosen parameter
-                        if dev.child('Plot to main').value() == "RH":
-                            legend_string = device_name + ": " + str(self.data_holder.plot_data[str(dev_id)+':rh'][self.timer_service.time_counter])
-                        elif dev.child('Plot to main').value() == "T":
-                            legend_string = device_name + ": " + str(self.data_holder.plot_data[str(dev_id)+':t'][self.timer_service.time_counter])
-                        elif dev.child('Plot to main').value() == "P":
-                            legend_string = device_name + ": " + str(self.data_holder.plot_data[str(dev_id)+':p'][self.timer_service.time_counter])
-                        elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Flow":
-                            legend_string = device_name + ": " + str(self.data_holder.plot_data[str(dev_id) + ':f'][self.timer_service.time_counter])
-                        elif dev.child('Device type').value() == AFM and dev.child('Plot to main').value() == "Standard flow":
-                            legend_string = device_name + ": " + str(self.data_holder.plot_data[str(dev_id) + ':sf'][self.timer_service.time_counter])
-                        self.main_plot.legend.addItem(self.data_holder.curve_dict[dev_id], legend_string)
-                    else: # if disabled
-                        # remove curve from legend
-                        self.main_plot.legend.removeItem(self.data_holder.curve_dict[dev_id])
-                # other devices
-                # if Plot to main is True
-                elif dev.child('Plot to main').value():
-                    # compile legend string - device name and current value
-                    # if CPC, round value to 2 decimals
-                    if dev.child('Device type').value() in [CPC, TSI_CPC]:
-                        legend_string = device_name + ": " + str(round(self.data_holder.plot_data[str(dev_id)][self.timer_service.time_counter], 2))
-                    # if ELECTROMETER, get Voltage 2 value
-                    elif dev.child('Device type').value() == ELECTROMETER:
-                        legend_string = device_name + ": " + str(self.data_holder.plot_data[str(dev_id)+':2'][self.timer_service.time_counter])
-                    # other devices
-                    else:
-                        legend_string = device_name + ": " + str(self.data_holder.plot_data[dev_id][self.timer_service.time_counter])
-                    # add curve to legend with legend string
-                    self.main_plot.legend.addItem(self.data_holder.curve_dict[dev_id], legend_string)
-                else: # if False
-                    # remove curve from legend
-                    self.main_plot.legend.removeItem(self.data_holder.curve_dict[dev_id])
-    
-    # update CPC pulse quality tab view (scatter plot and labels)
-    # called in update_figures_and_menus and when pulse quality options ae changed
-    def pulse_quality_update(self, device_id):
-        try:
-            # check selected average time and history draw limit
-            draw_limit_h = self.data_holder.device_widgets[device_id].pulse_quality.history_time # hours
-            draw_limit_s = draw_limit_h * 3600 # seconds
-            avg_time = self.data_holder.device_widgets[device_id].pulse_quality.average_time * 3600 # seconds
-            # calculate average values (ignore nan values)
-            avg_pulse_duration = nanmean(self.data_holder.plot_data[str(device_id)+':pd'][-avg_time:])
-            avg_pulse_ratio = nanmean(self.data_holder.plot_data[str(device_id)+':pr'][-avg_time:])
-            # slice pulse duration and pulse ratio data to selected history time
-            # number of points is always 3600, longer times are drawn with lower resolution
-            # start at end of list, stop at negative draw limit in seconds, step size negative draw limit in hours
-            sliced_pd = self.data_holder.plot_data[str(device_id)+':pd'][-1:-1*(draw_limit_s+1):-1*draw_limit_h]
-            sliced_pr = self.data_holder.plot_data[str(device_id)+':pr'][-1:-1*(draw_limit_s+1):-1*draw_limit_h]
-
-            # update pulse quality scatter plot and value labels
-            # draw history with sliced data
-            self.data_holder.device_widgets[device_id].pulse_quality.data_points.setData(sliced_pd, sliced_pr)
-            # update current point and labels
-            # check if (concentration * sample flow) is above 50 and below 5000 (valid)
-            check_value = self.data_holder.latest_data[device_id][0] * self.data_holder.latest_settings[device_id][2]
-            if check_value > 50 and check_value < 5000:
-                self.data_holder.device_widgets[device_id].pulse_quality.current_point.setData(x=[self.data_holder.plot_data[str(device_id)+':pd'][-1]], y=[self.data_holder.plot_data[str(device_id)+':pr'][-1]])
-                self.data_holder.device_widgets[device_id].pulse_quality.current_duration.setText(str(round(self.data_holder.plot_data[str(device_id)+':pd'][-1], 3)))
-                self.data_holder.device_widgets[device_id].pulse_quality.current_ratio.setText(str(round(self.data_holder.plot_data[str(device_id)+':pr'][-1], 3)))
-            else: # if concentration is outside range (invalid)
-                self.data_holder.device_widgets[device_id].pulse_quality.current_point.setData(x=[], y=[]) # set current point to empty if invalid data
-                self.data_holder.device_widgets[device_id].pulse_quality.current_duration.setText("Concentration out of range")
-                self.data_holder.device_widgets[device_id].pulse_quality.current_ratio.setText("Concentration out of range")
-            # update average point and labels
-            self.data_holder.device_widgets[device_id].pulse_quality.average_point.setData(x=[avg_pulse_duration], y=[avg_pulse_ratio])
-            self.data_holder.device_widgets[device_id].pulse_quality.average_duration.setText(str(round(avg_pulse_duration, 2)))
-            self.data_holder.device_widgets[device_id].pulse_quality.average_ratio.setText(str(round(avg_pulse_ratio, 2)))
-        except Exception as e:
-            print(traceback.format_exc())
-            #logging.exception(e)
     
     # start CPC pulse analysis, stop normal operation
     def pulse_analysis_start(self, device_id, device_param):
@@ -1411,7 +871,7 @@ class MainWindow(QMainWindow):
             # create file and store threshold value
             filepath = self.params.child('Data settings').child('File path').value()
             # timestamp
-            timestamp = dt.fromtimestamp(self.timer_service.current_time)
+            timestamp = dt.fromtimestamp(self.data_holder.current_time)
             timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
             # serial number
             serial_number = device_param.child('Serial number').value()
@@ -1492,7 +952,7 @@ class MainWindow(QMainWindow):
                     # set disconnected icon
                     self.device_tabs.setTabIcon(tab_index, self.disconnected_icon)
                     # set general error status flag
-                    self.timer_service.error_status = 1
+                    self.data_holder.error_status = 1
 
                 # if error is True
                 elif error:
@@ -1609,8 +1069,8 @@ class MainWindow(QMainWindow):
                 widget.set_tab.set_averaging_time.value_spinbox.stepChanged.connect(lambda value: send_averaging_time(value))
                 widget.set_tab.set_averaging_time.value_input.returnPressed.connect(lambda: send_averaging_time(float(widget.set_tab.set_averaging_time.value_input.text())))
                 # connect Pulse quality tab options to pulse_quality_update function
-                widget.pulse_quality.history_time_select.currentIndexChanged.connect(lambda: self.pulse_quality_update(device_id))
-                widget.pulse_quality.average_time_select.currentIndexChanged.connect(lambda: self.pulse_quality_update(device_id))
+                widget.pulse_quality.history_time_select.currentIndexChanged.connect(lambda: self.plot_manager.pulse_quality_update(device_id))
+                widget.pulse_quality.average_time_select.currentIndexChanged.connect(lambda: self.plot_manager.pulse_quality_update(device_id))
                 # connect pulse analysis start button to pulse_analysis_start function
                 widget.pulse_quality.start_analysis.clicked.connect(lambda: self.pulse_analysis_start(device_id, device_param))
                 # connect device nickname change to ScalableGroup's update_cpc_dict function
