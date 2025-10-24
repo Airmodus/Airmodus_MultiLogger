@@ -1,33 +1,19 @@
 from datetime import datetime as dt
-from time import time, sleep
+from time import time
 import os
-import locale
-import platform
 import logging
 import traceback
 import json
-import warnings
-import sys
 
-from numpy import full, nan, array, polyval, array_equal, roll, nanmean, isnan, linspace
-from serial import Serial
-from serial.serialutil import SerialException
-from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
-from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
-from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QGridLayout, QLabel, QWidget,
-    QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QSizePolicy,
-    QFileDialog, QComboBox, QGraphicsRectItem, QMessageBox)
-from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
-from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
+from numpy import  isnan, nan
+from PyQt5.QtGui import QPixmap, QIcon
+from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QLabel,
+    QFileDialog, QMessageBox)
+from pyqtgraph.parametertree import ParameterTree
 
 from config import *
 from utils import (
-    compile_cpc_data,
-    compile_cpc_settings,
-    compile_psm_data,
-    compile_psm_settings,
-    _manage_plot_array,
-    _roll_pulse_array,
     psm_update,
     psm_flow_send,
     cpc_flow_send,
@@ -35,23 +21,10 @@ from utils import (
     command_entered
 )
 from widgets import (
-    SetWidget,
-    SpinBox,
-    DoubleSpinBox,
-    ToggleButton,
-    StartButton,
-    IndicatorWidget,
-    CommandWidget,
-    StepsWidget,
-    FloatTextEdit,
     StatusLights,
 )
 from plots import (
     MainPlot,
-    SinglePlot, 
-    TriplePlot, 
-    AFMPlot, 
-    ElectrometerPlot
 )
 
 from devices import (
@@ -74,7 +47,7 @@ from managers import (
 )
 
 from serial_connection import SerialDeviceConnection
-from params import ScalableGroup, params, p
+from params import p
 
 
 # main program
@@ -107,7 +80,7 @@ class MainWindow(QMainWindow):
         """Create and configure the ParameterTree."""
         # create parameter tree
         self.t = ParameterTree()
-        self.t.setParameters(p, showTop=False)
+        self.t.setParameters(self.params, showTop=False)
         self.t.setHeaderHidden(True)
 
         # load CSS style and apply it to the main window
@@ -162,9 +135,9 @@ class MainWindow(QMainWindow):
         self.params.child('Serial ports').child('Update serial ports').sigActivated.connect(self.set_inquiry_flag)
 
         # connect parameter tree's sigChildAdded signal to device_added function
-        p.child("Device settings").sigChildAdded.connect(self.device_added)
+        self.params.child("Device settings").sigChildAdded.connect(self.device_added)
         # connect parameter tree's sigChildRemoved signal to device_removed function
-        p.child("Device settings").sigChildRemoved.connect(self.device_removed)
+        self.params.child("Device settings").sigChildRemoved.connect(self.device_removed)
         # connect main_plot's viewboxes' sigXRangeChanged signals to x_range_changed function
         for viewbox in self.main_plot.viewboxes.values():
             viewbox.sigXRangeChanged.connect(self.x_range_changed)
@@ -789,10 +762,6 @@ class MainWindow(QMainWindow):
         # update pulse analysis status
         self.data_holder.device_widgets[device_id].pulse_quality.update_pa_status(False)
     
-    # set device error status in dictionary
-    def set_device_error(self, device_id, error):
-        self.data_holder.device_errors[device_id] = error
-    
     # updates tab error icons according to data_holder.device_errors dictionary
     # TODO add comparison list of previous values to avoid unnecessary icon updates
     def update_error_icons(self):
@@ -916,7 +885,7 @@ class MainWindow(QMainWindow):
                 widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
                 widget.set_tab.water_removal.clicked.connect(lambda: connection.send_set(":SET:WREM " + str(int(widget.set_tab.water_removal.isChecked()))))
                 # connect command_input to comand_entered function
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.data_holder.device_widgets))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.data_holder.device_widgets, self.data_holder.latest_command))
                 # connect Set tab set points to send_set_val function
                 # send set value and message using lambda once value has been changed
                 # stepChanged signal is defined in SpinBox and DoubleSpinBox classes
@@ -995,7 +964,7 @@ class MainWindow(QMainWindow):
                     widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda value: device_param.child('CO flow').setValue(str(round(value, 3))))
                     widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: device_param.child('CO flow').setValue(widget.set_tab.set_co_flow.value_input.text()))
                 # connect command_input to command_entered and psm_update functions
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.data_holder.device_widgets))
+                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.data_holder.device_widgets, self.data_holder.latest_command))
                 widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
                 # connect liquid operations
                 widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))

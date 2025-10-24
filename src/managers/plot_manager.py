@@ -10,6 +10,7 @@ from utils import _manage_plot_array, _roll_pulse_array
 
 class PlotManager:
     def __init__(self, main_window, data_holder, main_plot):
+        self.main_window = main_window
         self.params = main_window.params
         self.data_holder = data_holder
         self.main_plot = main_plot
@@ -183,7 +184,7 @@ class PlotManager:
                                     print(traceback.format_exc())
                                     logging.exception(e)
                                     # stop pulse analysis if exception occurs
-                                    self.pulse_analysis_stop(dev_id, dev)
+                                    self.main_window.pulse_analysis_stop(dev_id, dev)
 
                         else:
                             psm_connection = False
@@ -416,7 +417,7 @@ class PlotManager:
                         # set data_holder.error_status flag to 1
                         self.data_holder.error_status = 1
                         # set device error flag
-                        self.set_device_error(dev.child('DevID').value(), True)
+                        self.data_holder.device_errors[dev.child('DevID').value()] = True
                     # if CPC is connected
                     else:
                         # get connected CPC id

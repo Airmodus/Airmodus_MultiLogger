@@ -1,8 +1,9 @@
-from PyQt5.QtGui import QPalette, QIntValidator, QDoubleValidator, QFont
+from PyQt5.QtGui import QPalette, QIntValidator, QDoubleValidator
 from PyQt5.QtCore import Qt, pyqtSignal, QLocale, QTimer
 from PyQt5.QtWidgets import (QLabel, QWidget, QVBoxLayout, QLineEdit, QPushButton,
-                             QSpinBox, QDoubleSpinBox, QTextEdit, QGridLayout,
-                             QMessageBox, QSizePolicy, QSplitter)
+                             QSpinBox, QDoubleSpinBox, QTextEdit,
+                             QSizePolicy, QSplitter)
+from datetime import datetime as dt
 
 
 # widget showing measurement and saving status

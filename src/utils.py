@@ -1,5 +1,5 @@
-from numpy import full, nan, array, polyval, array_equal, roll, nanmean, isnan, linspace
-from config import MAX_TIME_SEC, PULSE_ANALYSIS_THRESHOLDS, CPC, PSM, PSM2, TSI_CPC, ELECTROMETER, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE
+from numpy import full, nan, roll
+from config import MAX_TIME_SEC, CPC, PSM, PSM2
 from params import p  # For accessing params in some helpers if needed
 
 # compile data list for CPC .dat file

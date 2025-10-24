@@ -1,5 +1,5 @@
 from PyQt5.QtGui import QFont
-from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, mkPen, mkBrush
+from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, LegendItem
 from config import CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, PSM2, TSI_CPC
 
 # main plot widget

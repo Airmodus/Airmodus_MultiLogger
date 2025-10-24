@@ -3,18 +3,17 @@ from PyQt5.QtCore import QTimer
 from time import time
 import traceback
 from serial.tools import list_ports
+from serial import Serial
 import logging
-from numpy import full, nan, isnan, array, array_equal
+from numpy import full, nan, isnan, array_equal
 from serial.serialutil import SerialException
 from config import * 
 from utils import (
     compile_cpc_data,
     compile_cpc_settings,
     compile_psm_data,
-    compile_psm_settings,
-    psm_update
+    compile_psm_settings
 )
-from params import params
 
 class DeviceManager:
     def __init__(self, params, data_holder, device_widgets):
@@ -324,7 +323,7 @@ class DeviceManager:
                                 if total_errors != 0:
                                     self.data_holder.error_status = 1
                                     # set device error flag
-                                    self.set_device_error(dev_id, True)
+                                    self.data_holder.device_errors[dev_id] = True
 
                                 meas_list = list(map(float,data[:-1])) # convert to float without status hex
                                 # compile data list
@@ -508,7 +507,7 @@ class DeviceManager:
                                     if total_errors != 0:
                                         self.data_holder.error_status = 1
                                         # set device error flag
-                                        self.set_device_error(dev_id, True)
+                                        self.data_holder.device_errors[dev_id] = True
                                 except Exception as e:
                                     print(traceback.format_exc())
                                     logging.exception(e)
@@ -520,7 +519,7 @@ class DeviceManager:
                                 if liquid_errors != 0:
                                     self.data_holder.error_status = 1
                                     # set device error flag
-                                    self.set_device_error(dev_id, True)
+                                    self.data_holder.device_errors[dev_id] = True
                                 # store polynomial correction value as float to dictionary
                                 self.data_holder.latest_poly_correction[dev_id] = float(data[14])
 
@@ -907,7 +906,7 @@ class DeviceManager:
                         if int(readings[1], 16) != 0:
                             self.data_holder.error_status = 1
                             # set device error flag
-                            self.set_device_error(dev_id, True)
+                            self.data_holder.device_errors[dev_id] = True
                     
                     except Exception as e: # if reading fails, store nan values to latest_data
                         self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)

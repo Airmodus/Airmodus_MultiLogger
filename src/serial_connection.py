@@ -1,10 +1,6 @@
-import sys
-from time import time 
 from PyQt5.QtCore import QTimer
 from serial import Serial
-from serial.tools import list_ports
-from serial.serialutil import SerialException
-from config import osx_mode, TSI_CPC, CPC
+from config import TSI_CPC, CPC
 
 class SerialDeviceConnection():
     def __init__(self):
