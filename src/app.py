@@ -543,7 +543,7 @@ class MainWindow(QMainWindow):
     
     # set COM port inquiry flag
     def set_inquiry_flag(self):
-        self.dataholder.inquiry_flag = True
+        self.data_holder.inquiry_flag = True
         self.data_holder.inquiry_time = time()
         self.data_holder.com_descriptions = {} # reset com descriptions
     
