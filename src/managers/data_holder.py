@@ -1,5 +1,6 @@
 # managers/data_holder.py
 from numpy import full, nan, array_equal  # Add these imports if not global
+from time import time
 from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, PSM2, TSI_CPC)
 
 class DataHolder:
@@ -47,6 +48,10 @@ class DataHolder:
         self.max_reached = False # flag for checking if MAX_TIME_SEC has been reached
         self.error_status = 0
         self.saving_status = 1
+
+        self.inquiry_flag = False # when COM ports change, this is set to True to inquire device IDNs
+        self.inquiry_time = time()
+
 
     def reset_for_device(self, dev_id, dev_type):
         """Init dicts for a new device with type-specific defaults."""

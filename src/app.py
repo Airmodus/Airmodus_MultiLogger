@@ -11,7 +11,6 @@ import sys
 
 from numpy import full, nan, array, polyval, array_equal, roll, nanmean, isnan, linspace
 from serial import Serial
-from serial.tools import list_ports
 from serial.serialutil import SerialException
 from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
@@ -94,8 +93,8 @@ class MainWindow(QMainWindow):
         self._setup_gui()
         self._connect_signals()
 
-        self.list_com_ports()
-        self.device_manager = DeviceManager(self, self.data_holder, self.data_holder.device_widgets)
+        self.device_manager = DeviceManager(self.params, self.data_holder, self.data_holder.device_widgets)
+        self.device_manager.list_com_ports()
         self.plot_manager = PlotManager(self, self.data_holder, self.main_plot)
 
         self.timer_service = TimerService(self, self.data_holder, self.device_manager, self.plot_manager)
@@ -110,8 +109,6 @@ class MainWindow(QMainWindow):
         self.t = ParameterTree()
         self.t.setParameters(p, showTop=False)
         self.t.setHeaderHidden(True)
-        # x axis time attributes
-        self.inquiry_flag = False # when COM ports change, this is set to True to inquire device IDNs
 
         # load CSS style and apply it to the main window
         with open(script_path + "/style.css", "r") as f:
@@ -546,142 +543,10 @@ class MainWindow(QMainWindow):
     
     # set COM port inquiry flag
     def set_inquiry_flag(self):
-        self.inquiry_flag = True
-        self.inquiry_time = time()
+        self.dataholder.inquiry_flag = True
+        self.data_holder.inquiry_time = time()
         self.data_holder.com_descriptions = {} # reset com descriptions
     
-    def list_com_ports(self):
-        """
-        Scan and list available serial COM ports, update descriptions,
-        inquire device identities for new ports, and manage connection states.
-        """
-        # get list of current available serial ports as ListPortInfo objects
-        ports = list_ports.comports()
-        com_port_list = [] # list of current port device names (like 'COM3')
-        new_ports = {} # dictionary of new identified ports with active connections
-
-        # go over sorted ports by device name
-        for port in sorted(ports, key=lambda p: p.device):
-            com_port_list.append(port.device)
-
-            # add new port description if not previously known
-            if port.device not in self.data_holder.com_descriptions:
-                self.data_holder.com_descriptions[port.device] = port.description
-
-            # if inquiry flag is set, inquire identity from ports not yet identified
-            # (if port has a default desc so it's not yet been acquired)
-            if self.inquiry_flag and self.data_holder.com_descriptions[port.device] == port.description:
-                try:
-                    # attempt to open port with timeout and baud rate (throughput as bits per second)
-                    serial_connection = Serial(str(port.device), 115200, timeout=0.2)
-                    # do device identity inquiry (delay makes sure device state init is done with ESP32)
-                    self.idn_inquiry(serial_connection)
-                    # store the serial connection for later usage with port name as the key
-                    # new_ports dictionary is sent to update_com_ports after delay
-                    new_ports[port.device] = serial_connection
-
-                except SerialException:
-                    # on failure try to update desc using device serial number from params
-                    for dev in self.params.child('Device settings').children():
-                        if osx_mode:
-                            if port.device == dev.child('COM port').value():
-                                # set description according to device's serial number parameter
-                                self.data_holder.com_descriptions[port.device] = dev.child('Serial number').value()
-                        else:
-                            if port.device == 'COM' + str(dev.child('COM port').value()):
-                                # set description according to device's serial number parameter
-                                self.data_holder.com_descriptions[port.device] = dev.child('Serial number').value()
-                except Exception as e:
-                    # log unexpected errors while trying to inquire the device
-                    print(traceback.format_exc())
-                    logging.exception(e)
-
-        # remove descriptions of ports that are no longer connected
-        disconnected_ports = [p for p in self.data_holder.com_descriptions if p not in com_port_list]
-        for port in disconnected_ports:
-            self.data_holder.com_descriptions.pop(port)
-
-        # if inquiry flag is True, check timeout
-        # manage inquiry flag timeout after 3 seconds
-        if self.inquiry_flag and time() > self.inquiry_time + 3:
-            self.inquiry_flag = False
-
-        # schedule update_com_ports to process new ports after a short delay
-        QTimer.singleShot(800, lambda: self.update_com_ports(new_ports, com_port_list)) # delay increased from 600 to 800
-
-        # return list of current port device names
-        return com_port_list
-    
-    def update_com_ports(self, new_ports, com_port_list):
-        """
-        Process new serial port connections to read device identity messages,
-        update port descriptions, close connections, and refresh GUI display.
-        """
-        # Ensure all connections are properly closed after processing
-        def close_connection(port, conn):
-            try:
-                if conn and conn.is_open:
-                    conn.close()
-            except Exception as e:
-                logging.exception(f"Failed to close connection for {port}: {e}")
-        # read messages from new_ports and update descriptions
-        for port, serial_conn in list(new_ports.items()):
-            try:
-                # read available messages, decode and split messages by return char
-                raw_data = serial_conn.read_all()
-                if not raw_data: 
-                    continue # no data available, skip to close
-
-                messages = raw_data.decode('utf-8', errors='ignore').split('\r\n')
-                print("update_com_ports -", port, "messages:", messages)
-
-                for message in messages:
-                    message = message.strip()
-                    if len(message) <= 5: # message needs to be above 5 ("*IDN " + device IDN)
-                        continue
-
-                    # handle *IDN response for serial number
-                    if message.startswith('*IDN '):
-                        serial_number = message[5:].strip()
-                        self.data_holder.com_descriptions[port] = serial_number
-                        close_connection(port, serial_conn)
-                        del new_ports[port]  # Remove after successful processing
-                        break  # Assume one IDN response per inquiry
-
-                    # handle eDiluter ID response
-                    elif ' ID ' in message and ', Status' in message:
-                        start_idx = message.index(' ID ') + 4
-                        end_idx = message.index(', Status')
-                        device_id = message[start_idx:end_idx].strip()
-                        self.data_holder.com_descriptions[port] = device_id
-                        close_connection(port, serial_conn)
-                        del new_ports[port]  # Remove after successful processing
-                        break  # Assume one ID response per inquiry
-
-            except UnicodeDecodeError as e:
-                logging.warning(f"Unicode decode error for {port}: {e}")
-            except Exception as e:
-                logging.exception(f"Error processing messages for {port}: {e}")
-
-        # close any remaining open connections (like when no IDN response received)
-        if not self.inquiry_flag:
-            for port, conn in list(new_ports.items()):
-                close_connection(port, conn)
-                del new_ports[port]
-
-        # formatted text for connected ports only, sorted by port name
-        connected_descriptions = {
-            key: desc for key, desc in self.data_holder.com_descriptions.items()
-            if key in com_port_list
-        }
-        sorted_ports = sorted(connected_descriptions.items())
-        com_ports_text = '\n'.join(f"{port} - {desc}" for port, desc in sorted_ports)
-
-        # update GUI 'Available serial ports' text box if com port list has changed
-        current_value = self.params.child('Serial ports').child('Available serial ports').value()
-        if com_ports_text != current_value:
-            self.params.child('Serial ports').child('Available serial ports').setValue(com_ports_text)
-            logging.debug(f"Updated GUI with new COM ports text:\n{com_ports_text}")
 
     def save_ini(self):
         # check if resume on startup is on
