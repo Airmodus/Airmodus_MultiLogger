@@ -145,7 +145,7 @@ class DeviceManager:
 
         # if inquiry flag is True, check timeout
         # manage inquiry flag timeout after 3 seconds
-        if self.data_holder.inquiry_flag and time() > self.inquiry_time + 3:
+        if self.data_holder.inquiry_flag and time() > self.data_holder.inquiry_time + 3:
             self.data_holder.inquiry_flag = False
 
         # schedule update_com_ports to process new ports after a short delay
