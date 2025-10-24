@@ -514,7 +514,7 @@ class MainWindow(QMainWindow):
         # set file path
         self.filePath = self.params.child('Data settings').child('File path').value()
         # reset filename dictionaries
-        self.data_holder.data_holder.reset_all_filenames()
+        self.data_holder.reset_all_filenames()
     
     
     # remove specific device from filename dictionaries, results in new files being created
