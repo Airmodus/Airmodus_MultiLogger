@@ -1,9 +1,8 @@
 # managers/plot_manager.py
-from PyQt5.QtCore import QTimer
 import random
 import traceback
 import logging
-from numpy import full, nan, nanmean, isnan, array, polyval, array_equal
+from numpy import full, nan, nanmean, array, polyval
 from pyqtgraph import PlotCurveItem
 from config import *  # For constants like MAX_TIME_SEC, etc., if needed
 from utils import _manage_plot_array, _roll_pulse_array

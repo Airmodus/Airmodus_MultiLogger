@@ -4,11 +4,13 @@ from datetime import datetime as dt
 from config import TIMER_DELAY_MS, MAX_TIME_SEC
 
 class TimerService:
-    def __init__(self, main_window, data_holder, device_manager, plot_manager):
+    def __init__(self, main_window, data_holder, device_manager, plot_manager, data_logger, error_status):
         self.main_window = main_window
         self.device_manager = device_manager 
         self.data_holder = data_holder
         self.plot_manager = plot_manager
+        self.data_logger = data_logger
+        self.error_status = error_status
         self.timer = QTimer(timerType=Qt.PreciseTimer)
         self.timer.timeout.connect(self.timer_functions)
 
@@ -45,11 +47,10 @@ class TimerService:
         self.device_manager.ten_hz_check()
         self.plot_manager.update_plot_data()
         self.plot_manager.update_figures_and_menus()
-        self.main_window.compare_day()
-        self.main_window.write_data()
-        self.main_window.update_error_icons()
-        self.main_window.status_lights.set_error_light(self.data_holder.error_status)
-        self.main_window.status_lights.set_saving_light(self.data_holder.saving_status)
+        self.data_logger.compare_day()
+        self.data_logger.write_data()
+        self.error_status.update_error_icons()
+        self.error_status.set_status_lights() 
         if self.data_holder.time_counter < MAX_TIME_SEC - 1:
             self.data_holder.time_counter += 1
         else:

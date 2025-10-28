@@ -1,15 +1,13 @@
 from datetime import datetime as dt
 from time import time
 import os
-import logging
 import traceback
 import json
 
-from numpy import  isnan, nan
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QLabel,
-    QFileDialog, QMessageBox)
+    QFileDialog)
 from pyqtgraph.parametertree import ParameterTree
 
 from config import *
@@ -43,7 +41,9 @@ from managers import (
     DataHolder,
     TimerService,
     DeviceManager,
-    PlotManager
+    PlotManager,
+    DataLogger,
+    ErrorStatus
 )
 
 from serial_connection import SerialDeviceConnection
@@ -62,15 +62,22 @@ class MainWindow(QMainWindow):
 
         # Extracted inits
         self.data_holder = DataHolder()
+        self.data_holder.error_icon = QIcon(resource_path + "/icons/error.png")
+        self.data_holder.disconnected_icon = QIcon(resource_path + "/icons/disconnected.png")
+
         self._setup_parameter_tree()
-        self._setup_gui()
-        self._connect_signals()
+        for child in self.params.child('Device settings').children():
+            self.device_added(self.params.child('Device settings'), child) 
 
         self.device_manager = DeviceManager(self.params, self.data_holder, self.data_holder.device_widgets)
         self.device_manager.list_com_ports()
+        self._setup_gui()
         self.plot_manager = PlotManager(self, self.data_holder, self.main_plot)
+        self.data_logger = DataLogger(self.data_holder, self.params)
+        self._connect_signals()
+        self.error_status = ErrorStatus(self.data_holder, self.params, self.device_tabs)
 
-        self.timer_service = TimerService(self, self.data_holder, self.device_manager, self.plot_manager)
+        self.timer_service = TimerService(self, self.data_holder, self.device_manager, self.plot_manager, self.data_logger, self.error_status)
         self.timer_service.start()
 
         # load ini file if available
@@ -88,9 +95,6 @@ class MainWindow(QMainWindow):
             self.style = f.read()
         self.setStyleSheet(self.style)
 
-        # create error and disconnected icon objects
-        self.error_icon = QIcon(resource_path + "/icons/error.png")
-        self.disconnected_icon = QIcon(resource_path + "/icons/disconnected.png")
 
     def _setup_gui(self):
         """Build main layout, splitters, tabs, etc."""
@@ -98,7 +102,7 @@ class MainWindow(QMainWindow):
         self.main_splitter = QSplitter()
         self.setCentralWidget(self.main_splitter)
         # create status lights widget instance showing measurement and saving status
-        self.status_lights = StatusLights()
+        self.data_holder.status_lights = StatusLights()
         # create logo pixmap label
         self.logo = QLabel(alignment=Qt.AlignCenter, objectName="logo")
         pixmap = QPixmap(resource_path + "/images/airmodus-envea-logo.png")
@@ -108,7 +112,7 @@ class MainWindow(QMainWindow):
         left_splitter = QSplitter(Qt.Vertical) # split vertically
         left_splitter.addWidget(self.logo) # add logo
         left_splitter.addWidget(self.t) # add parameter tree widget
-        left_splitter.addWidget(self.status_lights) # add status lights widget
+        left_splitter.addWidget(self.data_holder.status_lights) # add status lights widget
         left_splitter.setSizes([100, 800, 100]) # set relative sizes of widgets
         # create right side tab widget containing device widgets as tabs
         # new devices are added to this as tabs in device_added function
@@ -126,11 +130,11 @@ class MainWindow(QMainWindow):
         """Wire up all signals/slots."""
 
         # connect parameter tree's save data parameter
-        self.params.child('Data settings').child('Save data').sigValueChanged.connect(self.save_changed)
+        self.params.child('Data settings').child('Save data').sigValueChanged.connect(self.data_logger.save_changed)
         # connect file path parameter to filepath_changed function
-        self.params.child('Data settings').child('File path').sigValueChanged.connect(self.filepath_changed)
+        self.params.child('Data settings').child('File path').sigValueChanged.connect(self.data_logger.filepath_changed)
         # connect file tag parameter to reset_all_filenames function
-        self.params.child('Data settings').child('File tag').sigValueChanged.connect(self.data_holder.reset_all_filenames)
+        self.params.child('Data settings').child('File tag').sigValueChanged.connect(self.data_logger.reset_all_filenames)
         # connect com port update button
         self.params.child('Serial ports').child('Update serial ports').sigActivated.connect(self.set_inquiry_flag)
 
@@ -151,369 +155,6 @@ class MainWindow(QMainWindow):
         self.params.child('Data settings').child('Save settings').sigActivated.connect(self.manual_save_configuration)
         self.params.child('Data settings').child('Load settings').sigActivated.connect(self.manual_load_configuration)
 
-    
-    # write data to file(s)
-    def write_data(self):
-        # if saving is on
-        if self.params.child('Data settings').child('Save data').value():
-
-            # create timestamp from data_holder.current_time
-            timestamp = dt.fromtimestamp(self.data_holder.current_time)
-            timeStampStr = str(timestamp.strftime("%Y.%m.%d %H:%M:%S"))
-
-            # go through each device
-            for dev in self.params.child('Device settings').children():
-
-                # if device is TSI CPC, do nothing
-                if dev.child('Device type').value() == TSI_CPC:
-                    pass
-                # if device is in pulse analysis mode, do nothing
-                elif dev.child('DevID').value() in self.data_holder.pulse_analysis_index:
-                    pass
-
-                # if device is connected OR example device
-                elif dev.child('Connected').value() or dev.child('Device type').value() == EXAMPLE_DEVICE:
-
-                    try:
-                        # store device id to variable for clarity
-                        dev_id = dev.child('DevID').value()
-
-                        # if device is not yet in data_holder.dat_filenames dict, create .dat file and add filename to dict
-                        if dev_id not in self.data_holder.dat_filenames:
-                            # format timestamp for filename
-                            timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
-                            # get serial number from device settings
-                            serial_number = dev.child('Serial number').value()
-                            # if serial number is not empty, add underscore to beginning
-                            if serial_number != "":
-                                serial_number = '_' + serial_number
-                            # get device type from device settings
-                            device_type = dev.child('Device type').value() # device type number
-                            device_type_name = self.data_holder.device_names[device_type] # device type name
-                            # get device nickname from device settings
-                            device_nickname = dev.child('Device nickname').value()
-                            # if nickname is not empty, add underscore to beginning
-                            if device_nickname != "":
-                                device_nickname = '_' + device_nickname
-                            # get file tag from data settings
-                            file_tag = self.params.child('Data settings').child('File tag').value()
-                            # if file tag is not empty, add underscore to beginning
-                            if file_tag != "":
-                                file_tag = '_' + file_tag
-                            # compile filename and add to data_holder.dat_filenames
-                            if osx_mode:
-                                filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.dat'
-                            else:
-                                filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.dat'
-                            self.data_holder.dat_filenames[dev_id] = filename
-                            with open(self.filePath + filename ,"w",encoding='UTF-8'):
-                                pass
-                            
-                            # if CPC or PSM, create .par file and add filename to data_holder.par_filenames
-                            if dev.child('Device type').value() in [CPC, PSM, PSM2]:
-                                if osx_mode:
-                                    filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.par'
-                                else:
-                                    filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.par'
-                                self.data_holder.par_filenames[dev_id] = filename
-                                with open(self.filePath + filename ,"w",encoding='UTF-8'):
-                                    pass
-                                self.data_holder.par_updates[dev.child('DevID').value()] = 1 # set .par update flag, ensuring new .par file is updated at start
-                        
-                        # check if device is Airmodus CPC and 10hz parameter is on
-                        if dev.child('Device type').value() == CPC and dev.child('10 hz').value():
-                            # if device is not in data_holder.ten_hz_filenames dict, create .csv file and add filename to data_holder.ten_hz_filenames
-                            if dev_id not in self.data_holder.ten_hz_filenames:
-                                # format timestamp for filename
-                                timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
-                                # get serial number from device settings
-                                serial_number = dev.child('Serial number').value()
-                                # if serial number is not empty, add underscore to beginning
-                                if serial_number != "":
-                                    serial_number = '_' + serial_number
-                                # get device type from device settings
-                                device_type = dev.child('Device type').value() # device type number
-                                device_type_name = self.data_holder.device_names[device_type] # device type name
-                                # get device nickname from device settings
-                                device_nickname = dev.child('Device nickname').value()
-                                # if nickname is not empty, add underscore to beginning
-                                if device_nickname != "":
-                                    device_nickname = '_' + device_nickname
-                                # get file tag from data settings
-                                file_tag = self.params.child('Data settings').child('File tag').value()
-                                # if file tag is not empty, add underscore to beginning
-                                if file_tag != "":
-                                    file_tag = '_' + file_tag
-                                # compile filename and add to data_holder.ten_hz_filenames
-                                if osx_mode:
-                                    filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
-                                else:
-                                    filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
-                                self.data_holder.ten_hz_filenames[dev_id] = filename
-                                # create file and write header
-                                with open(self.filePath + filename ,"w",encoding='UTF-8') as file:
-                                    # write header
-                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration 1 (#/cc),Concentration 2 (#/cc),Concentration 3 (#/cc),Concentration 4 (#/cc),Concentration 5 (#/cc),Concentration 6 (#/cc),Concentration 7 (#/cc),Concentration 8 (#/cc),Concentration 9 (#/cc),Concentration 10 (#/cc)')
-                            
-                        # get filename from dictionary and add path to front
-                        filename = self.filePath + self.data_holder.dat_filenames[dev_id]
-                        
-                        # Check the type and length of header
-                        with open(filename, 'r', encoding='UTF-8') as file:
-                            file.seek(0)
-                            header_row1 = file.readline()
-                            header_len = len(header_row1)
-                            # At the moment only check is a header exists
-                            if header_len == 0:
-                                write_headers = 1
-                            else:
-                                write_headers = 0
-
-                        # append file with new data
-                        with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
-
-                            # write headers if they don't exist
-                            if write_headers == 1:
-                            #if len(file.readline()) == 0:
-                                if dev.child('Device type').value() == CPC: # CPC
-                                    # TODO complete CPC headers, check if ok
-                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration (#/cc),Dead time (µs),Number of pulses,Saturator T (C),Condenser T (C),Optics T (C),Cabin T (C),Inlet P (kPa),Critical orifice P (kPa),Nozzle P (kPa),Cabin P (kPa),Liquid level,Pulse ratio,Total CPC errors,System status error')
-                                elif dev.child('Device type').value() == PSM: # PSM
-                                    # TODO check if PSM headers are ok
-                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)')
-                                elif dev.child('Device type').value() == PSM2: # PSM 2.0
-                                    # TODO check if correct
-                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,Vacuum flow (lpm),PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)')
-                                elif dev.child('Device type').value() == ELECTROMETER: # ELECTROMETER
-                                    file.write('YYYY.MM.DD hh:mm:ss,Voltage 1 (V),Voltage 2 (V),Voltage 3 (V)')
-                                elif dev.child('Device type').value() == CO2_SENSOR: # CO2
-                                    file.write('YYYY.MM.DD hh:mm:ss,CO2 (ppm),T (C),RH (%)')
-                                elif dev.child('Device type').value() == RHTP: # RHTP
-                                    file.write('YYYY.MM.DD hh:mm:ss,RH (%),T (C),P (Pa)')
-                                elif dev.child('Device type').value() == AFM: # AFM
-                                    file.write('YYYY.MM.DD hh:mm:ss,Flow (lpm),Standard flow (slpm),RH (%),T (C),P (Pa)')
-                                elif dev.child('Device type').value() == EDILUTER: # eDiluter
-                                    file.write('YYYY.MM.DD hh:mm:ss,Status,P1,P2,T1,T2,T3,T4,T5,T6,DF1,DF2,DFTot')
-                                elif dev.child('Device type').value() == EXAMPLE_DEVICE:
-                                    file.write('YYYY.MM.DD hh:mm:ss,Random value (0-100)')
-                                else:
-                                    file.write('YYYY.MM.DD hh:mm:ss,value1,value2,value3')
-                            
-                            # Write the actual data
-                            file.write("\n") # create new line
-                            file.write(timeStampStr+',') # add timestamp
-                            # convert data to string
-                            write_data = ','.join(str(vals) for vals in self.data_holder.latest_data[dev_id])
-                            # write data
-                            file.write(write_data)
-                        
-                        # if CPC or PSM, append .par file with new settings
-                        if dev.child('Device type').value() in [CPC, PSM, PSM2]:
-                            # get filename from dictionary and add path to front
-                            filename = self.filePath + self.data_holder.par_filenames[dev_id]
-
-                            # Check the type and length of header
-                            with open(filename, 'r', encoding='UTF-8') as file:
-                                file.seek(0)
-                                header_row1 = file.readline()
-                                header_len = len(header_row1)
-                                # At the moment only check is a header exists
-                                if header_len == 0:
-                                    write_headers = 1
-                                else:
-                                    write_headers = 0
-                        
-                            # append file with new data
-                            with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
-                                # write headers if they don't exist
-                                if write_headers == 1:
-                                    if dev.child('Device type').value() == CPC: # CPC
-                                        file.write('YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau,Command input')
-                                    elif dev.child('Device type').value() == PSM: # PSM
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
-                                    elif dev.child('Device type').value() == PSM2: # PSM2
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
-                                
-                                # reset local update_par flag
-                                update_par = 0
-
-                                # if device's .par update flag is set, write data
-                                if self.data_holder.par_updates[dev_id] == 1:
-                                    update_par = 1
-                                
-                                # else if a command has been entered, write data
-                                elif dev_id in self.data_holder.latest_command:
-                                    update_par = 1
-                                
-                                # else check if device is PSM and if there are changes in connected CPC
-                                elif dev.child('Device type').value() in [PSM, PSM2]:
-                                    # check if Connected CPC parameter has been changed
-                                    if dev.cpc_changed == True: # check device's cpc_changed flag
-                                        update_par = 1
-                                        dev.cpc_changed = False # reset cpc_changed flag
-                                    # else check if connected CPC is not 'None'
-                                    elif dev.child('Connected CPC').value() != 'None':
-                                        # check if connected CPC is in par_updates dictionary and its .par update flag is set
-                                        if dev.child('Connected CPC').value() in self.data_holder.par_updates and self.data_holder.par_updates[dev.child('Connected CPC').value()] == 1:
-                                            update_par = 1
-                                
-                                # if update_par flag is set
-                                if update_par == 1:
-                                    file.write("\n")
-                                    # Add timestamp
-                                    file.write(timeStampStr+',')
-                                    # Convert data to string                            
-                                    write_data = ','.join(str(vals) for vals in self.data_holder.latest_settings[dev_id])
-                                    file.write(write_data)
-
-                                    # if device type is PSM
-                                    if dev.child('Device type').value() in [PSM, PSM2]: # if PSM
-                                        # get connected CPC ID
-                                        cpc_id = dev.child('Connected CPC').value()
-
-                                        # if connected CPC is not 'None'
-                                        if cpc_id != 'None':
-                                            # get connected CPC device parameter
-                                            for cpc in self.params.child('Device settings').children():
-                                                if cpc.child('DevID').value() == cpc_id:
-                                                    cpc_device = cpc
-                                                    break
-                                            # if CPC is connected Airmodus CPC, write connected CPC settings
-                                            if cpc_device.child('Connected').value() and cpc_device.child('Device type').value() == CPC:
-                                                cpc_idn = cpc_device.child('Serial number').value()
-                                                cpc_settings = self.data_holder.latest_settings[cpc_id]
-                                                file.write(',') # separate PSM and CPC settings with comma
-                                                # compile connected CPC settings
-                                                connected_cpc_settings = [
-                                                    cpc_idn, # connected CPC serial number (IDN)
-                                                    cpc_settings[6], cpc_settings[11], cpc_settings[9], # autofill, drain, water removal
-                                                    cpc_settings[3], cpc_settings[4], cpc_settings[5], # T set: saturator, condenser, optics
-                                                    cpc_settings[2], cpc_settings[0] # inlet flow rate (measured), aveaging time
-                                                ]
-                                                # write connected CPC settings
-                                                write_data = ','.join(str(vals) for vals in connected_cpc_settings)
-                                                file.write(write_data)
-                                            
-                                            else: # if CPC is not connected or not Airmodus CPC, write nan values
-                                                file.write(',nan,nan,nan,nan,nan,nan,nan,nan,nan')
-                                        
-                                        else: # if no connected CPC selected, write nan values
-                                            file.write(',nan,nan,nan,nan,nan,nan,nan,nan,nan')
-                                        
-                                    # check if device is in latest_command dictionary
-                                    if dev_id in self.data_holder.latest_command:
-                                        # write latest command to file and remove from dictionary
-                                        file.write(',' + self.data_holder.latest_command.pop(dev_id))
-                        
-                        # check if device is Airmodus CPC and 10hz parameter is on
-                        if dev.child('Device type').value() == CPC and dev.child('10 hz').value():
-                            # check if device is in latest_ten_hz dictionary
-                            if dev_id in self.data_holder.latest_ten_hz:
-                                # get filename from dictionary and add path to front
-                                filename = self.filePath + self.data_holder.ten_hz_filenames[dev_id]
-                                # append file with new data
-                                with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
-                                    file.write("\n")
-                                    # Add timestamp
-                                    file.write(timeStampStr+',')
-                                    # Convert data to string
-                                    write_data = ','.join(str(vals) for vals in self.data_holder.latest_ten_hz[dev_id])
-                                    file.write(write_data)
-
-                    # if saving fails, set saving status to 0
-                    except Exception as e:
-                        print(traceback.format_exc())
-                        logging.exception(e)
-                        self.data_holder.saving_status = 0 # set saving status to 0
-                
-                # if device is not connected
-                else:
-                    pass
-                # TODO change saving status if device is not connected?
-
-        else: # if saving is toggled off
-            self.data_holder.saving_status = 0 # set saving status to 0
-        
-        # write data to pulse analysis file if pulse analysis is on
-        for dev in self.params.child('Device settings').children():
-            dev_id = dev.child('DevID').value()
-            if dev_id in self.data_holder.pulse_analysis_index:
-                if self.data_holder.pulse_analysis_index[dev_id] is not None: # when index is None, analysis has reached its end
-                    try:
-                        # calculate current pulse duration
-                        dead_time = self.data_holder.latest_data[dev_id][1]
-                        number_of_pulses = self.data_holder.latest_data[dev_id][2]
-                        if number_of_pulses == 0:
-                            pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
-                        else:
-                            # pulse duration = dead time * 1000 (micro to nano) / number of pulses
-                            pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
-                        # get current threshold value with data_holder.pulse_analysis_index
-                        threshold_value = PULSE_ANALYSIS_THRESHOLDS[self.data_holder.pulse_analysis_index[dev_id]]
-                        # get filename from dictionary (includes file path)
-                        filename = self.data_holder.pulse_analysis_filenames[dev_id]
-                        # append file with new data
-                        with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
-                            file.write('\n') # create new line
-                            file.write(str(threshold_value) + ',' + str(number_of_pulses) + ',' + str(dead_time) + ',' + str(pulse_duration))
-                        # increase data_holder.pulse_analysis_index by 1
-                        self.data_holder.pulse_analysis_index[dev_id] += 1
-                        # if all thresholds have been gone through, end pulse analysis
-                        if self.data_holder.pulse_analysis_index[dev_id] >= len(PULSE_ANALYSIS_THRESHOLDS):
-                            self.pulse_analysis_stop(dev_id, dev)
-                    except Exception as e:
-                        print(traceback.format_exc())
-                        logging.exception(e)
-                        # stop pulse analysis if exception occurs
-                        self.pulse_analysis_stop(dev_id, dev)
-    
-    # triggered when saving is toggled on/off
-    def save_changed(self):
-        # if saving is toggled on
-        if self.params.child('Data settings').child('Save data').value():
-            # store start day
-            self.start_day = dt.now().strftime("%m%d")
-            # get file path
-            self.filePath = self.params.child('Data settings').child('File path').value()
-            # set file path as read only
-            self.params.child('Data settings').child('File path').setReadonly(True)
-        # if saving is toggled off, reset filename dictionaries
-        else:
-            self.data_holder.reset_all_filenames()
-            # disable read only file path
-            self.params.child('Data settings').child('File path').setReadonly(False)
-
-    def filepath_changed(self):
-        # set file path
-        self.filePath = self.params.child('Data settings').child('File path').value()
-        # reset filename dictionaries
-        self.data_holder.reset_all_filenames()
-    
-    
-    # remove specific device from filename dictionaries, results in new files being created
-    def reset_device_filenames(self, dev_id):
-        if dev_id in self.data_holder.dat_filenames:
-            self.data_holder.dat_filenames.pop(dev_id)
-        if dev_id in self.data_holder.par_filenames:
-            self.data_holder.par_filenames.pop(dev_id)
-        if dev_id in self.data_holder.par_updates:
-            self.data_holder.par_updates.pop(dev_id)
-        if dev_id in self.data_holder.ten_hz_filenames:
-            self.data_holder.ten_hz_filenames.pop(dev_id)
-
-    
-    # compare current day to file start day (self.start_day defined in save_changed)
-    def compare_day(self):
-        # check if saving is on
-        if self.params.child('Data settings').child('Save data').value():
-            # check if new file should be started at midnight
-            if self.params.child("Data settings").child('Generate daily files').value():
-                current_day = dt.fromtimestamp(self.data_holder.current_time).strftime("%m%d")
-                if current_day != self.start_day:
-                    self.data_holder.reset_all_filenames() # start new file if day has changed
-                    # update start day
-                    self.start_day = current_day
-    
     # set COM port inquiry flag
     def set_inquiry_flag(self):
         self.data_holder.inquiry_flag = True
@@ -681,148 +322,6 @@ class MainWindow(QMainWindow):
                 dev.child('Plot to main').setValue(value)
     
     
-    # start CPC pulse analysis, stop normal operation
-    def pulse_analysis_start(self, device_id, device_param):
-        # ask for user confirmation before starting
-        start = QMessageBox.question(self, 'Start pulse analysis?', 'Regular measurement for this device will pause for one minute.\nStart pulse analysis?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if start == QMessageBox.No:
-            return
-        try:
-            # add device to data_holder.pulse_analysis_index dictionary with index value 0
-            self.data_holder.pulse_analysis_index[device_id] = 0
-            # update pulse analysis status
-            self.data_holder.device_widgets[device_id].pulse_quality.update_pa_status(True)
-            # disable command input
-            self.data_holder.device_widgets[device_id].set_tab.command_widget.disable_command_input()
-
-            # get original threshold value from latest_settings
-            # value should stay intact during pulse analysis, settings are not updated
-            original_threshold = self.data_holder.latest_settings[device_id][7]
-            # if threshold value is nan, stop pulse analysis
-            if isnan(original_threshold):
-                self.pulse_analysis_stop(device_id, device_param)
-                return
-
-            # clear previous pulse analysis points
-            self.data_holder.device_widgets[device_id].pulse_quality.clear_analysis_points()
-
-            # create file and store threshold value
-            filepath = self.params.child('Data settings').child('File path').value()
-            # timestamp
-            timestamp = dt.fromtimestamp(self.data_holder.current_time)
-            timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
-            # serial number
-            serial_number = device_param.child('Serial number').value()
-            # compile filename and add to data_holder.pulse_analysis_filenames dictionary
-            if osx_mode:
-                filename = filepath + '/' + timestamp_file + '_pulse_analysis_' + serial_number + '.csv'
-            else:
-                filename = filepath + '\\' + timestamp_file + '_pulse_analysis_' + serial_number + '.csv'
-            self.data_holder.pulse_analysis_filenames[device_id] = filename
-            with open(filename, 'w', newline='\n', encoding='UTF-8') as file:
-                # write info row (serial number and original threshold)
-                file.write(serial_number + ' original threshold: ' + str(original_threshold) + ' mV')
-                file.write('\n') # create new line
-                # write header
-                file.write('Threshold (mV),Number of pulses,Dead time (µs),Pulse duration (ns)')
-        
-        except Exception as e:
-            print(traceback.format_exc())
-            logging.exception(e)
-            # if pulse analysis cannot be started, stop it (resume normal operation)
-            self.pulse_analysis_stop(device_id, device_param)
-    
-    # stop CPC pulse analysis, resume normal operation
-    def pulse_analysis_stop(self, device_id, device_param):
-        # restore original threshold value to device
-        try:
-            device_param.child('Connection').value().send_message(":SET:OPC:THRS " + str(self.data_holder.latest_settings[device_id][7]))
-        except Exception as e:
-            print(traceback.format_exc())
-            logging.exception(e)
-        # clear current threshold value
-        self.data_holder.device_widgets[device_id].pulse_quality.current_threshold.setText("")
-        # set data_holder.pulse_analysis_index to None (signaling end of pulse analysis)
-        self.data_holder.pulse_analysis_index[device_id] = None
-        # remove device id from data_holder.pulse_analysis_index dictionary with delay
-        # delay ensures CPC has time to set original threshold before measurement continues
-        QTimer.singleShot(1000, lambda: self.data_holder.pulse_analysis_index.pop(device_id))
-        # remove device id from data_holder.pulse_analysis_filenames dictionary
-        if device_id in self.data_holder.pulse_analysis_filenames:
-            self.data_holder.pulse_analysis_filenames.pop(device_id)
-
-        # TODO plot gaussian fit and calculate nRMSE
-        # analysis values are stored as listed tuples (pulse duration, threshold value)
-        # analysis_values = self.data_holder.device_widgets[device_id].pulse_quality.analysis_values
-        # pulse_durations = [x[0] for x in analysis_values]
-        # thresholds = [x[1] for x in analysis_values]
-
-        # enable command input
-        self.data_holder.device_widgets[device_id].set_tab.command_widget.enable_command_input()
-        # update pulse analysis status
-        self.data_holder.device_widgets[device_id].pulse_quality.update_pa_status(False)
-    
-    # updates tab error icons according to data_holder.device_errors dictionary
-    # TODO add comparison list of previous values to avoid unnecessary icon updates
-    def update_error_icons(self):
-        # go through each device
-        for dev in self.params.child('Device settings').children():
-            try:
-                # device id
-                device_id = dev.child('DevID').value()
-                # error status from data_holder.device_errors
-                error = self.data_holder.device_errors[device_id]
-                # device type
-                device_type = dev.child('Device type').value()
-                # device widget
-                device_widget = self.data_holder.device_widgets[device_id]
-                # device widget tab index
-                tab_index = self.device_tabs.indexOf(device_widget)
-                # connected status
-                connected = dev.child('Connected').value() # True or False
-
-                # if connected is False
-                if not connected and device_type != EXAMPLE_DEVICE: # exclude Example device
-                    # set disconnected icon
-                    self.device_tabs.setTabIcon(tab_index, self.disconnected_icon)
-                    # set general error status flag
-                    self.data_holder.error_status = 1
-
-                # if error is True
-                elif error:
-                    # change tab icon to error icon
-                    self.device_tabs.setTabIcon(tab_index, self.error_icon)
-                    # change status tab icon to error icon if device is CPC or PSM
-                    if device_type in [CPC, PSM, PSM2]:
-                        status_tab_index = device_widget.indexOf(device_widget.status_tab)
-                        device_widget.setTabIcon(status_tab_index, self.error_icon)
-
-                # if connected and no error
-                else:
-                    # remove error icon with empty QIcon object
-                    self.device_tabs.setTabIcon(tab_index, QIcon())
-                    # remove status tab error icon if device is CPC or PSM
-                    if device_type in [CPC, PSM, PSM2]:
-                        status_tab_index = device_widget.indexOf(device_widget.status_tab)
-                        device_widget.setTabIcon(status_tab_index, QIcon())
-                
-                # if device is PSM, check co flow status
-                if device_type == PSM:
-                    # if co flow is red (error)
-                    if device_widget.set_tab.set_co_flow.error == True:
-                        # change tab icon to error icon
-                        self.device_tabs.setTabIcon(tab_index, self.error_icon)
-                        # change set tab icon to error icon
-                        set_tab_index = device_widget.indexOf(device_widget.set_tab)
-                        device_widget.setTabIcon(set_tab_index, self.error_icon)
-                    else:
-                        # remove error icon with empty QIcon object
-                        set_tab_index = device_widget.indexOf(device_widget.set_tab)
-                        device_widget.setTabIcon(set_tab_index, QIcon())
-
-            except Exception as e:
-                print(traceback.format_exc())
-                logging.exception(e)
     
     # rename device parameter according to device type and serial number
     def rename_device(self, device):
@@ -852,7 +351,7 @@ class MainWindow(QMainWindow):
 
     # triggered when a new device is added to the parameter tree
     # sigChildAdded(self, param, child, index) - Emitted when a child (device) is added
-    def device_added(self, param, child, index):
+    def device_added(self, param, child):
         if param.name() == "Device settings": # check if detected parameter is a device
             device_param = child # store device parameter
             device_type = child.child("Device type").value() # store device type
@@ -861,15 +360,15 @@ class MainWindow(QMainWindow):
             connection = device_param.child('Connection').value() # store connection class
 
             # connect serial number change to reset_device_filenames function
-            device_param.child("Serial number").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
+            device_param.child("Serial number").sigValueChanged.connect(lambda: self.data_logger.reset_device_filenames(device_id))
             # connect device nickname change to reset_device_filenames function
-            device_param.child("Device nickname").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
+            device_param.child("Device nickname").sigValueChanged.connect(lambda: self.data_logger.reset_device_filenames(device_id))
             # connect device nickname change to rename_tab function
             device_param.child("Device nickname").sigValueChanged.connect(lambda: self.rename_tab(device_param))
             # connect device serial number change to rename_device function
             device_param.child("Serial number").sigValueChanged.connect(lambda: self.rename_device(device_param))
             # connect device serial number change to reset_device_filenames function
-            device_param.child("Serial number").sigValueChanged.connect(lambda: self.reset_device_filenames(device_id))
+            device_param.child("Serial number").sigValueChanged.connect(lambda: self.data_logger.reset_device_filenames(device_id))
             # connect COM port change to SerialDeviceConnection's change_port function
             if osx_mode:
                 device_port.sigValueChanged.connect(lambda: connection.change_port(str(device_port.value())))
@@ -1049,6 +548,7 @@ class MainWindow(QMainWindow):
             self.data_holder.device_widgets[device_id] = widget
             # init data for this device with nan values
             self.data_holder.reset_for_device(device_id, device_type)
+            self.data_holder.init_plot_data_for_device(device_id, device_type)
             # add widget instance to tab widget
             self.device_tabs.addTab(widget, widget.name)
             # add device id to data_holder.device_errors dictionary

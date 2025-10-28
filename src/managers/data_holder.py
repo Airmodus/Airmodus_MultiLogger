@@ -1,6 +1,6 @@
-# managers/data_holder.py
-from numpy import full, nan, array_equal  # Add these imports if not global
+from numpy import full, nan
 from time import time
+from utils import _manage_plot_array
 from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, PSM2, TSI_CPC)
 
 class DataHolder:
@@ -49,9 +49,46 @@ class DataHolder:
         self.error_status = 0
         self.saving_status = 1
 
+        self.file_path = ""  # Current save directory
+        self.start_day = None  # For daily rollover
+
+        self.error_icon = None
+        self.disconnected_icon = None
+
+        self.status_lights = None
+
         self.inquiry_flag = False # when COM ports change, this is set to True to inquire device IDNs
         self.inquiry_time = time()
 
+    def init_plot_data_for_device(self, dev_id, dev_type):
+        """Initialize plot_data arrays for a new device with NaN defaults."""
+        from numpy import full, nan
+        x_len = len(self.x_time_list) 
+
+        if dev_type in [CPC, TSI_CPC, ELECTROMETER, RHTP, AFM]:
+            if dev_type in [CPC, TSI_CPC]:
+                types = ['', ':raw']
+            elif dev_type == ELECTROMETER:
+                types = [':1', ':2', ':3']
+            elif dev_type == RHTP:
+                types = [':rh', ':t', ':p']
+            elif dev_type == AFM:
+                types = [':f', ':sf', ':rh', ':t', ':p']
+            
+            for t in types:
+                key = str(dev_id) + t
+                self.plot_data[key] = full(x_len, nan)
+                self.plot_data[key] = _manage_plot_array(self.plot_data[key], 0, max_reached=False)  
+            
+            # CPC-specific pulse arrays 
+            if dev_type == CPC:
+                self.plot_data[f"{dev_id}:pd"] = full(3600, nan) 
+                self.plot_data[f"{dev_id}:pr"] = full(3600, nan)
+        else:
+            # Single-value devices 
+            key = str(dev_id)
+            self.plot_data[key] = full(x_len, nan)
+            self.plot_data[key] = _manage_plot_array(self.plot_data[key], 0, max_reached=False)
 
     def reset_for_device(self, dev_id, dev_type):
         """Init dicts for a new device with type-specific defaults."""
@@ -127,9 +164,3 @@ class DataHolder:
         else:
             return full(15, nan)  # Fallback
 
-    # reset filename dictionaries, results in new files being created
-    def reset_all_filenames(self):
-        self.dat_filenames = {}
-        self.par_filenames = {}
-        self.ten_hz_filenames = {}
-        self.par_updates = {}
