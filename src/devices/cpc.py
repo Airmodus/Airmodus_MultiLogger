@@ -1,7 +1,10 @@
 from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
+from numpy import full, nan, isnan, array_equal
+from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
 from PyQt5.QtWidgets import (QTabWidget, QGridLayout, QLabel, QWidget,
     QPushButton, QComboBox, QGraphicsRectItem)
+from config import CPC, CPC_ERRORS
 
 from widgets import (
     CommandWidget,
@@ -10,13 +13,13 @@ from widgets import (
     IndicatorWidget,
 )
 from plots.device_plots import SinglePlot
+from devices.base_device import ComplexDevice
+from utils import compile_cpc_data, compile_cpc_settings
 
 # CPC widget containing CPC related GUI elements as tabs
-class CPCWidget(QTabWidget):
+class CPCWidget(ComplexDevice):
     def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__()
-        self.device_parameter = device_parameter # store device parameter tree reference
-        self.name = device_parameter.name() # store device name
+        super().__init__(device_parameter, device_type=CPC, *args, **kwargs)
         # create set tab widget for cpc settings
         self.set_tab = CPCSetTab()
         self.addTab(self.set_tab, "Set")
@@ -123,6 +126,172 @@ class CPCWidget(QTabWidget):
         elif current_list[11] == 2:
             self.status_tab.liquid_level.change_value("OVERFILL")
         self.status_tab.temp_cabin.change_value(str(current_list[6]) + " °C")
+
+    def get_read_command(self):
+        """Get CPC read command(s)."""
+        # Note: Actual command sending logic is in DeviceManager.get_dev_data()
+        # This method is for documentation/future use
+        return ":MEAS:ALL"
+
+    def parse_message(self, message, data_holder=None):
+        """
+        Parse CPC serial messages.
+
+        Handles multiple message types:
+        - :MEAS:ALL - measurement data with status
+        - :SYST:PRNT - settings data
+        - :SYST:PALL - all parameters
+        - :MEAS:OPC_CONC_LOG - 10 Hz logging data
+        - :STAT:SELF:LOG - self-test errors
+        - :SELF:ERR - error messages
+        - *IDN - device identification
+        """
+        try:
+            # Split command and data
+            message_string = message
+            parts = message.split(" ", 1)
+            if len(parts) < 2:
+                return {
+                    'type': 'unknown',
+                    'command': parts[0] if parts else '',
+                    'data': None,
+                    'raw': message,
+                    'update_gui': False
+                }
+
+            command = parts[0]
+            data = parts[1].split(",")
+
+            # Handle :MEAS:ALL - main measurement data
+            if command == ":MEAS:ALL":
+                status_hex = data[-1]
+
+                # Check cabin pressure validity (0-200 kPa)
+                cabin_p_error = not (0 <= float(data[12]) <= 200)
+
+                # Update error indicators
+                total_errors = self.update_errors(status_hex, cabin_p_error)
+
+                # Convert data to float (excluding status hex)
+                meas_list = list(map(float, data[:-1]))
+
+                # Compile data
+                compiled_data = compile_cpc_data(meas_list, status_hex, total_errors)
+                self.latest_data = compiled_data
+
+                return {
+                    'type': 'data',
+                    'command': command,
+                    'data': compiled_data,
+                    'status_hex': status_hex,
+                    'total_errors': total_errors,
+                    'raw': message,
+                    'update_gui': True
+                }
+
+            # Handle :SYST:PRNT - settings data
+            elif command == ":SYST:PRNT":
+                prnt_list = list(map(float, data))
+                return {
+                    'type': 'settings',
+                    'command': command,
+                    'data': prnt_list,
+                    'raw': message,
+                    'update_gui': True
+                }
+
+            # Handle :SYST:PALL - all parameters
+            elif command == ":SYST:PALL":
+                data[22] = "NaN"  # device id
+                data[23] = "NaN"  # firmware variant letter
+                pall_list = list(map(float, data))
+                return {
+                    'type': 'settings',
+                    'command': command,
+                    'data': pall_list,
+                    'raw': message,
+                    'update_gui': False
+                }
+
+            # Handle :MEAS:OPC_CONC_LOG - 10 Hz logging
+            elif command == ":MEAS:OPC_CONC_LOG":
+                del data[0]  # remove timestamp
+                return {
+                    'type': 'ten_hz',
+                    'command': command,
+                    'data': data,
+                    'raw': message,
+                    'update_gui': False
+                }
+
+            # Handle :STAT:SELF:LOG - self-test errors
+            elif command == ":STAT:SELF:LOG":
+                error_length = len(CPC_ERRORS)
+                status_bin = bin(int(data[0], 16))[2:].zfill(error_length)
+                inverted_status_bin = status_bin[::-1]
+
+                # Build error message
+                error_messages = []
+                for i in range(error_length):
+                    if inverted_status_bin[i] == "1":
+                        error_messages.append(f"Bit {i}: {CPC_ERRORS[i]}")
+
+                return {
+                    'type': 'self_test',
+                    'command': command,
+                    'data': data[0],
+                    'errors': error_messages,
+                    'raw': message,
+                    'update_gui': False,
+                    'show_in_command_widget': True
+                }
+
+            # Handle :SELF:ERR - error message
+            elif command == ":SELF:ERR":
+                error_code = int(data[0])
+                error_msg = CPC_ERRORS[error_code] if error_code < len(CPC_ERRORS) else "Unknown error"
+                return {
+                    'type': 'error',
+                    'command': command,
+                    'data': error_code,
+                    'error': error_msg,
+                    'raw': message,
+                    'update_gui': False,
+                    'show_in_command_widget': True
+                }
+
+            # Handle *IDN - identification
+            elif command == "*IDN":
+                serial_number = data[0].strip()
+                return {
+                    'type': 'info',
+                    'command': command,
+                    'data': serial_number,
+                    'raw': message,
+                    'update_gui': False,
+                    'show_in_command_widget': True
+                }
+
+            # Unknown command
+            else:
+                return {
+                    'type': 'unknown',
+                    'command': command,
+                    'data': data,
+                    'raw': message,
+                    'update_gui': False,
+                    'show_in_command_widget': True
+                }
+
+        except Exception as e:
+            return {
+                'type': 'error',
+                'command': 'unknown',
+                'data': None,
+                'error': str(e),
+                'raw': message,
+                'update_gui': False
+            }
 
 # set tab widget containing settings and message input
 # used in CPCWidget

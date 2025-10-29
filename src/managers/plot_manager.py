@@ -350,14 +350,18 @@ class PlotManager:
                     # start time is stored when first non-nan value is received
                     # start time is used to crop plot data to only show non-nan values
                     if dev_id not in self.data_holder.start_times:
-                        if dev_type in [CPC, TSI_CPC] and str(self.data_holder.plot_data[str(dev_id)+':raw'][self.data_holder.time_counter]) != "nan":
-                            self.data_holder.start_times[dev_id] = self.data_holder.time_counter
-                        elif dev_type == ELECTROMETER and str(self.data_holder.plot_data[str(dev_id)+':1'][self.data_holder.time_counter]) != "nan":
-                            self.data_holder.start_times[dev_id] = self.data_holder.time_counter
-                        elif dev_type in [RHTP, AFM] and str(self.data_holder.plot_data[str(dev_id)+':rh'][self.data_holder.time_counter]) != "nan":
-                            self.data_holder.start_times[dev_id] = self.data_holder.time_counter
-                        elif str(self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter]) != "nan":
-                            self.data_holder.start_times[dev_id] = self.data_holder.time_counter
+                        try:
+                            if dev_type in [CPC, TSI_CPC] and str(self.data_holder.plot_data[str(dev_id)+':raw'][self.data_holder.time_counter]) != "nan":
+                                self.data_holder.start_times[dev_id] = self.data_holder.time_counter
+                            elif dev_type == ELECTROMETER and str(self.data_holder.plot_data[str(dev_id)+':1'][self.data_holder.time_counter]) != "nan":
+                                self.data_holder.start_times[dev_id] = self.data_holder.time_counter
+                            elif dev_type in [RHTP, AFM] and str(self.data_holder.plot_data[str(dev_id)+':rh'][self.data_holder.time_counter]) != "nan":
+                                self.data_holder.start_times[dev_id] = self.data_holder.time_counter
+                            elif str(dev_id) in self.data_holder.plot_data and str(self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter]) != "nan":
+                                self.data_holder.start_times[dev_id] = self.data_holder.time_counter
+                        except (KeyError, IndexError):
+                            # Plot data not yet initialized for this device
+                            pass
 
                     # if device is in start times dictionary, update plot
                     if dev_id in self.data_holder.start_times:

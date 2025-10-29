@@ -288,480 +288,305 @@ class DeviceManager:
 
                 if dev_type == CPC: # CPC
 
-                    # check if there's data from last round in extra_data dictionary
-                    # if no extra data, start with nan lists
-                    self.data_holder.latest_data[dev_id] = self.data_holder.extra_data.pop(dev_id, self.data_holder.get_default_data_array(dev_type))
+                    # Get device widget for parsing
+                    widget = self.data_holder.device_widgets[dev_id]
 
+                    # Initialize from extra_data buffer
+                    self.data_holder.latest_data[dev_id] = self.data_holder.extra_data.pop(dev_id, self.data_holder.get_default_data_array(dev_type))
                     prnt_list = self.data_holder.extra_data.pop(str(dev_id) + ":prnt", full(13, nan))
                     pall_list = self.data_holder.extra_data.pop(str(dev_id) + ":pall", full(28, nan))
-                    # if 10 hz is True, initialize 10 hz data with extra data or nan list
+
+                    # Handle 10 Hz data if enabled
                     if dev.child('10 hz').value():
                         self.data_holder.latest_ten_hz[dev_id] = self.data_holder.extra_data.pop(str(dev_id) + ":10hz", self.data_holder.latest_ten_hz[dev_id])
 
                     try:
                         readings = dev_conn.connection.read_all()
-                        readings = readings.decode().split("\r")[:-1] # decode, separate messages and remove last empty message
-                        for message in readings: # loop through messages
-                            message_string = message # store message as string
-                            message = message.split(" ", 1) # separate command name and data readings
-                            command = message[0] # get command name
-                            data = message[1] # get data readings
-                            data = data.split(",") # split data readings to list
+                        readings = readings.decode().split("\r")[:-1]  # decode, split messages, remove last empty
 
-                            if command == ":MEAS:ALL":
-                                status_hex = data[-1] # store status hex value
-
-                                # check if cabin pressure value is within valid range (0-200 kPa)
-                                if float(data[12]) < 0 or float(data[12]) > 200:
-                                    cabin_p_error = True
-                                else:
-                                    cabin_p_error = False
-                                # update widget error colors and store total errors
-                                total_errors = self.data_holder.device_widgets[dev_id].update_errors(status_hex, cabin_p_error)
-                                
-                                # set data_holder.error_status flag if total errors is not 0
-                                if total_errors != 0:
-                                    self.data_holder.error_status = 1
-                                    # set device error flag
-                                    self.data_holder.device_errors[dev_id] = True
-
-                                meas_list = list(map(float,data[:-1])) # convert to float without status hex
-                                # compile data list
-                                # if latest_data is nan, store data normally
-                                if isnan(self.data_holder.latest_data[dev_id][0]):
-                                    self.data_holder.latest_data[dev_id] = compile_cpc_data(meas_list, status_hex, total_errors)
-                                else: # if not nan, store data to extra_data dictionary
-                                    self.data_holder.extra_data[dev_id] = compile_cpc_data(meas_list, status_hex, total_errors)
-
-                            elif command == ":SYST:PRNT":
-                                # if prnt_list is nan, store data normally
-                                if isnan(prnt_list[0]):
-                                    prnt_list = list(map(float,data)) # convert to float
-                                else: # if not nan, store data to extra_data dictionary
-                                    self.data_holder.extra_data[str(dev_id)+":prnt"] = list(map(float,data))
-
-                            elif command == ":SYST:PALL":
-                                data[22] = "NaN" # set device id and firmware variant letter to NaN before float conversion
-                                data[23] = "NaN" # TODO store device id and firmware variant letter somewhere
-                                # if pall_list is nan, store data normally
-                                if isnan(pall_list[0]): # TODO make sure this value (inlet press lower limit) is never nan in valid data
-                                    pall_list = list(map(float,data))
-                                else: # if not nan, store data to extra_data dictionary
-                                    self.data_holder.extra_data[str(dev_id)+":pall"] = list(map(float,data))
-                            
-                            elif command == ":MEAS:OPC_CONC_LOG":
-                                del data[0] # remove first item (timestamp)
-                                # if latest_ten_hz is nan, store data normally
-                                if isnan(float(self.data_holder.latest_ten_hz[dev_id][0])):
-                                    self.data_holder.latest_ten_hz[dev_id] = data
-                                else: # if not nan, store data to extra_data dictionary
-                                    self.data_holder.extra_data[str(dev_id)+":10hz"] = data
-                            
-                            elif command == ":STAT:SELF:LOG":
-                                error_length = len(CPC_ERRORS) # get amount of CPC errors
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
-                                status_bin = bin(int(data[0], 16)) # convert hex to int and int to binary
-                                status_bin = status_bin[2:].zfill(error_length) # remove 0b from string and fill with 0s
-                                # print self test error binary
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
-                                inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
-                                # print error indices
-                                for i in range(error_length): # loop through errors
-                                    if inverted_status_bin[i] == "1":
-                                        self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(i))
-                                        self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + CPC_ERRORS[i])
-
-                            elif command == ":SELF:ERR":
-                                try:
-                                    self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
-                                    error_code = int(data[0])
-                                    print("self test error: " + CPC_ERRORS[error_code])
-                                except Exception as e:
-                                    print(traceback.format_exc())
-                                    logging.exception(e)
-                            
-                            elif command == "*IDN":
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
-                                serial_number = data[0]
-                                serial_number = serial_number.strip("\n")
-                                serial_number = serial_number.strip("\r")
-                                # check if serial number has changed
-                                if dev.child('Serial number').value() != serial_number:
-                                    dev.child('Serial number').setValue(serial_number)
-                                    # update PSM 'Connected CPC' list
-                                    self.params.child('Device settings').update_cpc_dict()
-                                # remove device from IDN inquiry list
-                                if dev_id in self.data_holder.idn_inquiry_devices:
-                                    self.data_holder.idn_inquiry_devices.remove(dev_id)
-
-                            else: # print these to command widget text box
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
-                                #logging.warning("readIndata - unknown command: %s", command)
-
-                    except Exception as e: # if reading fails, print error message
-                        print(traceback.format_exc())
-                        logging.exception(e)
-                    
-                    # update CPC widget data values
-                    self.data_holder.device_widgets[dev_id].update_values(self.data_holder.latest_data[dev_id])
-                    # update CPC widget set values
-                    self.data_holder.device_widgets[dev_id].update_settings(prnt_list)
-
-                    # set settings update flag if both lists are successfully read
-                    if str(prnt_list[0]) != "nan" and str(pall_list[0]) != "nan": # if both lists are not nan (checks first item only)
-                        settings_update = True
-                    else:
-                        settings_update = False
-                    
-                    # if pulse analysis is in progress, skip settings update
-                    # this keeps the original threshold value intact in latest_settings dictionary
-                    if dev_id in self.data_holder.pulse_analysis_index:
-                        settings_update = False
-                    
-                    # update settings if settings are valid
-                    if settings_update == True: # if settings are valid, not nan
-                        
-                        # get previous settings form latest_settings dictionary
-                        previous_settings = self.data_holder.latest_settings[dev_id]
-                        # compile settings list
-                        settings = compile_cpc_settings(prnt_list, pall_list)
-
-                        if not array_equal(settings, previous_settings, equal_nan=True): # if values have changed
-                            # update latest settings
-                            self.data_holder.latest_settings[dev_id] = settings
-                            # set .par update flag
-                            self.data_holder.par_updates[dev_id] = 1
-                        else:
-                            # clear .par update flag
-                            self.data_holder.par_updates[dev_id] = 0
-                    
-                    else: # if settings are not valid, clear .par update flag
-                        self.data_holder.par_updates[dev_id] = 0
-                
-                if dev_type in [PSM, PSM2]: # PSM
-
-                    # clear extra data buffer after 60 seconds of consecutive buffering
-                    # this ensures data is real time and not delayed by 1 second
-                    if dev_id in self.data_holder.extra_data and self.data_holder.extra_data_counter[dev_id] >= 60:
-                        del self.data_holder.extra_data[dev_id]
-                        logging.info("PSM %s extra data buffer cleared", dev.child('Serial number').value())
-                    
-                    default_nan = self.data_holder.get_default_data_array(dev_type)
-                    was_present = dev_id in self.data_holder.extra_data  # Check BEFORE pop
-                    self.data_holder.latest_data[dev_id] = self.data_holder.extra_data.pop(dev_id, default_nan)
-                    if was_present:
-                        self.data_holder.extra_data_counter[dev_id] += 1
-                    else:
-                        self.data_holder.extra_data_counter[dev_id] = 0  # Add reset
-
-                    # clear par update flag
-                    self.data_holder.par_updates[dev_id] = 0
-
-                    # set settings_fetched flag to False
-                    # flag is set to True when settings are successfully fetched
-                    settings_fetched = False
-
-                    try: # try to read data, decode and split
-                        #print("inWaiting():", dev_conn.connection.inWaiting())
-                        readings = dev_conn.connection.read_all()
-                        # decode and separate messages
-                        readings = readings.decode().split("\r")
-
-                        # check if first message is expected as second half of partial message
-                        if dev_id in self.data_holder.partial_data:
-                            # add stored partial message to the front of first message
-                            readings[0] = self.data_holder.partial_data[dev_id] + readings[0]
-                            # remove partial message from dictionary
-                            del self.data_holder.partial_data[dev_id]
-                            #logging.info("PSM %s combined message: %s", dev.child('Serial number').value(), readings[0])
-
-                        # check if last message is empty or partial
-                        if readings[-1] == "": # if empty, remove it from readings
-                            readings = readings[:-1]
-                        else: # if not empty, store partial message and remove it from readings
-                            self.data_holder.partial_data[dev_id] = readings[-1]
-                            readings = readings[:-1]
-                            #logging.info("PSM %s partial message: %s", dev.child('Serial number').value(), self.data_holder.partial_data[dev_id])
-                        
-                        # loop through messages
                         for message in readings:
-                            message_string = message # store message as string
-                            message = message.split(" ", 1) # separate command name and data readings
-                            command = message[0] # get command name
-                            data = message[1] # get data readings
-                            data = data.split(",") # split data readings to list
+                            # Parse message using device's parse_message method
+                            parsed = widget.parse_message(message, self.data_holder)
 
-                            # if measurement command
-                            if command == ":MEAS:SCAN" or command == ":MEAS:STEP" or command == ":MEAS:FIXD":
-                                
-                                # update PSM widget data values in GUI
-                                self.data_holder.device_widgets[dev_id].update_values(data)
-                                # update active measure mode color
-                                self.data_holder.device_widgets[dev_id].measure_tab.change_mode_color(command)
-                                # status hex handling
-                                status_hex = data[-2]
-                                try:
-                                    # update widget errors colors
-                                    total_errors = self.data_holder.device_widgets[dev_id].update_errors(status_hex)
-                                    # set data_holder.error_status flag if total errors is not 0
-                                    if total_errors != 0:
-                                        self.data_holder.error_status = 1
-                                        # set device error flag
-                                        self.data_holder.device_errors[dev_id] = True
-                                except Exception as e:
-                                    print(traceback.format_exc())
-                                    logging.exception(e)
-                                # note hex handling
-                                note_hex = data[-1]
-                                # update widget liquid states with note hex
-                                liquid_errors = self.data_holder.device_widgets[dev_id].update_notes(note_hex)
-                                # set error flags if liquid errors is not 0
-                                if liquid_errors != 0:
+                            # Handle based on parsed type
+                            if parsed['type'] == 'data':
+                                # Store measurement data
+                                if isnan(self.data_holder.latest_data[dev_id][0]):
+                                    self.data_holder.latest_data[dev_id] = parsed['data']
+                                else:
+                                    self.data_holder.extra_data[dev_id] = parsed['data']
+
+                                # Set error flags
+                                if parsed.get('total_errors', 0) != 0:
                                     self.data_holder.error_status = 1
-                                    # set device error flag
                                     self.data_holder.device_errors[dev_id] = True
-                                # store polynomial correction value as float to dictionary
-                                self.data_holder.latest_poly_correction[dev_id] = float(data[14])
 
-                                scan_status = "9" # set scan status to 9 (undefined) as default
-                                # check firmware number to determine if scan status is included in data
-                                try:
-                                    if dev.child('Firmware version').value() != "":
-                                        firmware_version = dev.child('Firmware version').value().split(".")
-                                        # Retrofit: version >= 0.5.5
-                                        if dev_type == PSM:
-                                            if int(firmware_version[1]) > 5:
-                                                scan_status = data[15]
-                                            elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 5:
-                                                scan_status = data[15]
-                                        # PSM 2.0: version >= 0.6.8
-                                        elif dev_type == PSM2:
-                                            if int(firmware_version[1]) > 6:
-                                                scan_status = data[15]
-                                            elif int(firmware_version[1]) == 6 and int(firmware_version[2]) >= 8:
-                                                scan_status = data[15]
-                                except Exception as e:
-                                    print(traceback.format_exc())
-                                    logging.exception(e)
-                                
-                                # compile psm data
-                                compiled_data = compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=dev_type)
-                                # if latest_data is nan, store data normally
-                                if isnan(float(self.data_holder.latest_data[dev_id][2])): # check saturator flow rate value (index 2)
-                                    self.data_holder.latest_data[dev_id] = compiled_data
-                                else: # if not nan, store data to extra_data dictionary
-                                    self.data_holder.extra_data[dev_id] = compiled_data
-                                    #logging.info("PSM %s extra data: %s", dev.child('Serial number').value(), str(compiled_data))
-                            
-                            elif command == ":SYST:PRNT":
-                                # update GUI set points
-                                self.data_holder.device_widgets[dev_id].update_settings(data)
-                                # store settings to latest PSM prnt dictionary with device id as key
-                                self.data_holder.latest_psm_prnt[dev_id] = data
-                                # print settings to command widget text box
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
-                                # set settings_fetched flag to True
-                                settings_fetched = True
-                            
-                            elif command == ":STAT:SELF:LOG":
-                                error_length = len(PSM_ERRORS) # get amount of PSM errors
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
-                                status_bin = bin(int(data[0], 16)) # convert hex to int and int to binary
-                                status_bin = status_bin[2:].zfill(error_length) # remove 0b from string and fill with 0s
-                                # print self test error binary
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error binary: " + status_bin)
-                                inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
-                                # print error indices
-                                for i in range(error_length): # loop through binary digits
-                                    if inverted_status_bin[i] == "1":
-                                        self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error bit index: " + str(i))
-                                        # if error is MFC_HEATER / MFC_EXCESS, check device type
-                                        if i == 27 and dev_type == PSM: # Retrofit has different error at index 27
-                                            self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + "ERROR_SELFTEST_MFC_EXCESS")
-                                        else:
-                                            self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box("self test error: " + PSM_ERRORS[i])
-                            
-                            elif command == ":SELF:ERR":
-                                try:
-                                    self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
-                                    error_code = int(data[0])
-                                    # if error is MFC_HEATER / MFC_EXCESS, check device type
-                                    if error_code == 27 and dev_type == PSM:
-                                        print("self test error: " + "ERROR_SELFTEST_MFC_EXCESS")
+                            elif parsed['type'] == 'settings':
+                                # Handle PRNT or PALL settings
+                                if parsed['command'] == ':SYST:PRNT':
+                                    if isnan(prnt_list[0]):
+                                        prnt_list = parsed['data']
                                     else:
-                                        print("self test error: " + PSM_ERRORS[int(error_code)])
-                                except Exception as e:
-                                    print(traceback.format_exc())
-                                    logging.exception(e)
-                            
-                            elif command == "*IDN":
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
-                                serial_number = data[0]
-                                serial_number = serial_number.strip("\n")
-                                serial_number = serial_number.strip("\r")
-                                # check if serial number has changed
+                                        self.data_holder.extra_data[str(dev_id)+":prnt"] = parsed['data']
+                                elif parsed['command'] == ':SYST:PALL':
+                                    if isnan(pall_list[0]):
+                                        pall_list = parsed['data']
+                                    else:
+                                        self.data_holder.extra_data[str(dev_id)+":pall"] = parsed['data']
+
+                            elif parsed['type'] == 'ten_hz':
+                                # Handle 10 Hz logging data
+                                if isnan(float(self.data_holder.latest_ten_hz[dev_id][0])):
+                                    self.data_holder.latest_ten_hz[dev_id] = parsed['data']
+                                else:
+                                    self.data_holder.extra_data[str(dev_id)+":10hz"] = parsed['data']
+
+                            elif parsed['type'] == 'self_test':
+                                # Display self-test errors in command widget
+                                widget.set_tab.command_widget.update_text_box(parsed['raw'])
+                                widget.set_tab.command_widget.update_text_box("self test error binary: " + bin(int(parsed['data'], 16))[2:].zfill(len(CPC_ERRORS)))
+                                for error_msg in parsed.get('errors', []):
+                                    widget.set_tab.command_widget.update_text_box(error_msg)
+
+                            elif parsed['type'] == 'info' and parsed['command'] == '*IDN':
+                                # Handle device identification
+                                widget.set_tab.command_widget.update_text_box(parsed['raw'])
+                                serial_number = parsed['data']
                                 if dev.child('Serial number').value() != serial_number:
                                     dev.child('Serial number').setValue(serial_number)
-                                # remove device from IDN inquiry list
+                                    self.params.child('Device settings').update_cpc_dict()
                                 if dev_id in self.data_holder.idn_inquiry_devices:
                                     self.data_holder.idn_inquiry_devices.remove(dev_id)
-                            
-                            elif command == "Firmware":
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
-                                if "version: " in data[0]:
-                                    firmware_version = data[0].split(": ")[1]
-                                    if dev.child('Firmware version').value() != firmware_version:
-                                        dev.child('Firmware version').setValue(firmware_version)
-                            
-                            elif command == ":SYST:VCMP":
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
-                                if len(data) == 6: # make sure data is valid
-                                    # store dilution parameters to dictionary
-                                    self.data_holder.psm_dilution[dev_id] = data
-                                else:
-                                    print("PSM dilution parameters invalid:", data)
-                            
-                            else: # print other messages to command widget text box
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message_string)
+
+                            # Show messages in command widget if requested
+                            if parsed.get('show_in_command_widget', False):
+                                widget.set_tab.command_widget.update_text_box(parsed['raw'])
+                                if parsed['type'] == 'error' and 'error' in parsed:
+                                    print("CPC error: " + str(parsed['error']))
 
                     except Exception as e:
                         print(traceback.format_exc())
                         logging.exception(e)
-                        # update widget error colors
-                        self.data_holder.device_widgets[dev_id].measure_tab.scan.change_color(0)
-                        self.data_holder.device_widgets[dev_id].measure_tab.step.change_color(0)
-                        self.data_holder.device_widgets[dev_id].measure_tab.fixed.change_color(0)
-                        try:
-                            # print message_string to log
-                            logging.info("PSM message_string: %s", message_string)
-                        except Exception:
-                            print(traceback.format_exc())
-                    
-                    # compile settings list if update flag is True, settings_fetched is True and dilution parameters have been fetched
-                    if self.data_holder.psm_settings_updates[dev_id] == True and settings_fetched == True and dev_id in self.data_holder.psm_dilution:
-                        try:
-                            psm_version = dev_type
-                            if psm_version == PSM:
-                                # get CO flow rate from PSM widget
-                                co_flow = round(self.data_holder.device_widgets[dev_id].set_tab.set_co_flow.value_spinbox.value(), 3)
-                            elif psm_version == PSM2:
-                                # set nan as placeholder
-                                co_flow = "nan"
-                            dilution_parameters = self.data_holder.psm_dilution[dev_id]
-                            # compile settings with latest PSM prnt settings and CO flow rate
-                            settings = compile_psm_settings(self.data_holder.latest_psm_prnt[dev_id], co_flow, dilution_parameters, psm_version)
-                            # store settings to latest settings dictionary with device id as key
+
+                    # Update GUI with current data
+                    widget.update_values(self.data_holder.latest_data[dev_id])
+                    widget.update_settings(prnt_list)
+
+                    # Compile and update settings if both PRNT and PALL are available
+                    settings_update = (str(prnt_list[0]) != "nan" and str(pall_list[0]) != "nan")
+
+                    # Skip settings update if pulse analysis is in progress
+                    if dev_id in self.data_holder.pulse_analysis_index:
+                        settings_update = False
+
+                    if settings_update:
+                        previous_settings = self.data_holder.latest_settings[dev_id]
+                        settings = compile_cpc_settings(prnt_list, pall_list)
+
+                        if not array_equal(settings, previous_settings, equal_nan=True):
                             self.data_holder.latest_settings[dev_id] = settings
-                            # add par update flag
                             self.data_holder.par_updates[dev_id] = 1
-                            # remove update settings flag once settings have been updated and compiled
+                        else:
+                            self.data_holder.par_updates[dev_id] = 0
+                    else:
+                        self.data_holder.par_updates[dev_id] = 0
+                
+                if dev_type in [PSM, PSM2]: # PSM
+
+                    # Get device widget for parsing
+                    widget = self.data_holder.device_widgets[dev_id]
+
+                    # Clear extra data buffer after 60 seconds of consecutive buffering
+                    if dev_id in self.data_holder.extra_data and self.data_holder.extra_data_counter[dev_id] >= 60:
+                        del self.data_holder.extra_data[dev_id]
+                        logging.info("PSM %s extra data buffer cleared", dev.child('Serial number').value())
+
+                    # Initialize from extra_data buffer
+                    default_nan = self.data_holder.get_default_data_array(dev_type)
+                    was_present = dev_id in self.data_holder.extra_data
+                    self.data_holder.latest_data[dev_id] = self.data_holder.extra_data.pop(dev_id, default_nan)
+                    if was_present:
+                        self.data_holder.extra_data_counter[dev_id] += 1
+                    else:
+                        self.data_holder.extra_data_counter[dev_id] = 0
+
+                    self.data_holder.par_updates[dev_id] = 0
+                    settings_fetched = False
+
+                    try:
+                        readings = dev_conn.connection.read_all()
+                        readings = readings.decode().split("\r")
+
+                        # Handle partial messages
+                        if dev_id in self.data_holder.partial_data:
+                            readings[0] = self.data_holder.partial_data[dev_id] + readings[0]
+                            del self.data_holder.partial_data[dev_id]
+
+                        # Store/remove last message if partial/empty
+                        if readings[-1] == "":
+                            readings = readings[:-1]
+                        else:
+                            self.data_holder.partial_data[dev_id] = readings[-1]
+                            readings = readings[:-1]
+
+                        for message in readings:
+                            # Parse message using device's parse_message method
+                            parsed = widget.parse_message(message, self.data_holder)
+
+                            # Handle based on parsed type
+                            if parsed['type'] == 'data':
+                                # Store measurement data
+                                if isnan(float(self.data_holder.latest_data[dev_id][2])):
+                                    self.data_holder.latest_data[dev_id] = parsed['data']
+                                else:
+                                    self.data_holder.extra_data[dev_id] = parsed['data']
+
+                                # Store polynomial correction
+                                self.data_holder.latest_poly_correction[dev_id] = parsed.get('poly_correction', 0.0)
+
+                                # Set error flags
+                                if parsed.get('has_errors', False):
+                                    self.data_holder.error_status = 1
+                                    self.data_holder.device_errors[dev_id] = True
+
+                            elif parsed['type'] == 'settings':
+                                # Store PRNT settings
+                                self.data_holder.latest_psm_prnt[dev_id] = parsed['data']
+                                settings_fetched = True
+
+                            elif parsed['type'] == 'dilution':
+                                # Store dilution parameters
+                                self.data_holder.psm_dilution[dev_id] = parsed['data']
+
+                            elif parsed['type'] == 'self_test':
+                                # Display self-test errors
+                                widget.set_tab.command_widget.update_text_box("self test error binary: " + bin(int(parsed['data'], 16))[2:].zfill(len(PSM_ERRORS)))
+                                for error_msg in parsed.get('errors', []):
+                                    widget.set_tab.command_widget.update_text_box(error_msg)
+
+                            elif parsed['type'] == 'info' and parsed['command'] == '*IDN':
+                                # Handle device identification
+                                serial_number = parsed['data']
+                                if dev.child('Serial number').value() != serial_number:
+                                    dev.child('Serial number').setValue(serial_number)
+                                if dev_id in self.data_holder.idn_inquiry_devices:
+                                    self.data_holder.idn_inquiry_devices.remove(dev_id)
+
+                            elif parsed['type'] == 'firmware':
+                                # Update firmware version
+                                firmware_version = parsed['data']
+                                if dev.child('Firmware version').value() != firmware_version:
+                                    dev.child('Firmware version').setValue(firmware_version)
+
+                            # Show messages in command widget if requested
+                            if parsed.get('show_in_command_widget', False):
+                                widget.set_tab.command_widget.update_text_box(parsed['raw'])
+                                if parsed['type'] == 'error' and 'error' in parsed:
+                                    print("PSM error: " + str(parsed['error']))
+
+                    except Exception as e:
+                        print(traceback.format_exc())
+                        logging.exception(e)
+                        # Reset mode colors on error
+                        widget.measure_tab.scan.change_color(0)
+                        widget.measure_tab.step.change_color(0)
+                        widget.measure_tab.fixed.change_color(0)
+
+                    # Compile settings if all required data is available
+                    if self.data_holder.psm_settings_updates[dev_id] and settings_fetched and dev_id in self.data_holder.psm_dilution:
+                        try:
+                            # Get CO flow rate (PSM Retrofit only)
+                            if dev_type == PSM:
+                                co_flow = round(widget.set_tab.set_co_flow.value_spinbox.value(), 3)
+                            else:
+                                co_flow = "nan"
+
+                            dilution_parameters = self.data_holder.psm_dilution[dev_id]
+                            settings = compile_psm_settings(self.data_holder.latest_psm_prnt[dev_id], co_flow, dilution_parameters, dev_type)
+
+                            self.data_holder.latest_settings[dev_id] = settings
+                            self.data_holder.par_updates[dev_id] = 1
                             self.data_holder.psm_settings_updates[dev_id] = False
                         except Exception as e:
                             print(traceback.format_exc())
                             logging.exception(e)
                 
                 if dev_type == ELECTROMETER: # ELECTROMETER
-                    try: # try to read data, decode, split and convert to float
+                    widget = self.data_holder.device_widgets[dev_id]
+                    try:
                         readings = dev_conn.connection.read_until(b'\r\n').decode()
-                        readings = list(map(float,readings.split(";")))
-                        # store to latest_data dictionary with device id as key
-                        self.data_holder.latest_data[dev_id] = readings
-                    except Exception as e: # if reading fails, store nan values to latest_data
+                        parsed = widget.parse_message(readings, self.data_holder)
+
+                        if parsed['type'] == 'data':
+                            self.data_holder.latest_data[dev_id] = parsed['data']
+                        else:
+                            self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
+                    except Exception as e:
                         print(traceback.format_exc())
                         self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
                         logging.exception(e)
 
-                if dev_type == CO2_SENSOR: # CO2 sensor TODO make CO2 process similar to RHTP?
+                if dev_type == CO2_SENSOR: # CO2 sensor
+                    widget = self.data_holder.device_widgets[dev_id]
                     try:
-                        # if device is in IDN inquiry list, look for *IDN
+                        # Check if looking for IDN
                         if dev_id in self.data_holder.idn_inquiry_devices:
-                            # read all data from buffer
                             messages = dev_conn.connection.read_all().decode().split("\r\n")
-                            # go through messages
                             for message in messages:
-                                # if message length is above 5 ("*IDN " + device IDN)
                                 if len(message) > 5:
-                                    # if "*IDN " is part of message
-                                    if "*IDN " in message:
-                                        serial_number = message.split(" ", 1)[1] # separate serial number from message
-                                        serial_number = serial_number.strip("\n")
-                                        serial_number = serial_number.strip("\r")
-                                        # check if serial number has changed
+                                    parsed = widget.parse_message(message, self.data_holder)
+                                    if parsed['type'] == 'info' and parsed['command'] == '*IDN':
+                                        serial_number = parsed['data']
                                         if dev.child('Serial number').value() != serial_number:
-                                            dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
-                                        # remove device from IDN inquiry list
+                                            dev.child('Serial number').setValue(serial_number)
                                         if dev_id in self.data_holder.idn_inquiry_devices:
                                             self.data_holder.idn_inquiry_devices.remove(dev_id)
-                            # store nan values to latest_data
                             self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
-
-                        # if Serial number has been acquired, read data normally
                         else:
-                            # read data, decode, split and convert to float
+                            # Read normal data
                             readings = dev_conn.connection.read_until(b'\r\n').decode()
-                            readings = list(map(float,readings.split(";")))
-                            if readings[0] != 0: # if data is something else than 0
-                                # store to latest_data dictionary with device id as key
-                                self.data_holder.latest_data[dev_id] = readings
-                            else: # if data is 0, not valid
-                                self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type) 
+                            parsed = widget.parse_message(readings, self.data_holder)
 
-                    except Exception as e: # if reading fails, store nan values to latest_data
+                            if parsed['type'] == 'data':
+                                self.data_holder.latest_data[dev_id] = parsed['data']
+                            else:
+                                self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
+
+                    except Exception as e:
                         print(traceback.format_exc())
-                        self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type) 
+                        self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
                         logging.exception(e)
                 
                 if dev_type == RHTP: # RHTP
+                    widget = self.data_holder.device_widgets[dev_id]
                     try:
-                        # if device is in IDN inquiry list, look for *IDN
+                        # Check if looking for IDN
                         if dev_id in self.data_holder.idn_inquiry_devices:
-                            # read all data from buffer
                             messages = dev_conn.connection.read_all().decode().split("\r\n")
-                            # go through messages
                             for message in messages:
-                                # if message length is above 5 ("*IDN " + device IDN)
                                 if len(message) > 5:
-                                    # if "*IDN " is part of message
-                                    if "*IDN " in message:
-                                        serial_number = message.split(" ", 1)[1] # separate serial number from message
-                                        serial_number = serial_number.strip("\n")
-                                        serial_number = serial_number.strip("\r")
-                                        # check if serial number has changed
+                                    parsed = widget.parse_message(message, self.data_holder)
+                                    if parsed['type'] == 'info' and parsed['command'] == '*IDN':
+                                        serial_number = parsed['data']
                                         if dev.child('Serial number').value() != serial_number:
-                                            dev.child('Serial number').setValue(serial_number) # set serial number to parameter tree
-                                        # remove device from IDN inquiry list
+                                            dev.child('Serial number').setValue(serial_number)
                                         if dev_id in self.data_holder.idn_inquiry_devices:
                                             self.data_holder.idn_inquiry_devices.remove(dev_id)
-                        
-                        # if Serial number has been acquired, read data normally
                         else:
-                            # read and decode a line of data
+                            # Read normal data
                             readings = dev_conn.connection.read_until(b'\r\n').decode()
-                            # remove '\r\n' from end
-                            readings = readings.strip('\r\n')
-                            # split data to list
-                            readings = readings.split(", ")
+                            parsed = widget.parse_message(readings, self.data_holder)
 
-                            # check if data is valid and store to latest_data
-                            # readings length should be 3 (RH, T, P)
-                            if len(readings) == 3:
-                                self.data_holder.latest_data[dev_id] = readings
+                            if parsed['type'] == 'data':
+                                self.data_holder.latest_data[dev_id] = parsed['data']
 
-                            # check if there's extra data in buffer
-                            # max message length is 23 (normal 20 + 2 \r\n + 1 if negative T)
+                            # Check for extra data in buffer
                             buffer_length = dev_conn.connection.inWaiting()
                             if buffer_length >= 24:
-                                # create log entry
-                                # serial_number = dev.child('Serial number').value()
-                                # logging.warning("RHTP %s buffer: %i", serial_number, buffer_length)
-
-                                # read next line
                                 extra_data = dev_conn.connection.read_until(b'\r\n').decode()
-                                # remove '\r\n' and split data to list
-                                extra_data = extra_data.strip('\r\n').split(", ")
-                                # use extra data as latest_data if valid
-                                if len(extra_data) == 3:
-                                    self.data_holder.latest_data[dev_id] = extra_data
+                                parsed_extra = widget.parse_message(extra_data, self.data_holder)
+                                if parsed_extra['type'] == 'data':
+                                    self.data_holder.latest_data[dev_id] = parsed_extra['data']
 
                     except Exception as e:
                         print(traceback.format_exc())
@@ -769,146 +594,100 @@ class DeviceManager:
                         logging.exception(e)
                 
                 if dev_type == AFM: # AFM
+                    widget = self.data_holder.device_widgets[dev_id]
                     try:
-                        # if device is in IDN inquiry list, look for *IDN
+                        # Check if looking for IDN
                         if dev_id in self.data_holder.idn_inquiry_devices:
-                            # read all data from buffer
                             messages = dev_conn.connection.read_all().decode().split("\r\n")
-                            # go through messages
                             for message in messages:
-                                # if message length is above 5 ("*IDN " + device IDN)
                                 if len(message) > 5:
-                                    # if "*IDN " is part of message
-                                    if "*IDN " in message:
-                                        serial_number = message.split(" ", 1)[1]
-                                        serial_number = serial_number.strip("\n")
-                                        serial_number = serial_number.strip("\r")
-                                        # check if serial number has changed
+                                    parsed = widget.parse_message(message, self.data_holder)
+                                    if parsed['type'] == 'info' and parsed['command'] == '*IDN':
+                                        serial_number = parsed['data']
                                         if dev.child('Serial number').value() != serial_number:
                                             dev.child('Serial number').setValue(serial_number)
-                                        # remove device from IDN inquiry list
                                         if dev_id in self.data_holder.idn_inquiry_devices:
                                             self.data_holder.idn_inquiry_devices.remove(dev_id)
-                        
-                        # if Serial number has been acquired, read data normally
                         else:
-                            # read and decode a line of data
+                            # Read normal data
                             readings = dev_conn.connection.read_until(b'\r\n').decode()
-                            # remove '\r\n' from end
-                            readings = readings.strip('\r\n')
-                            # split data to list
-                            readings = readings.split(", ")
+                            parsed = widget.parse_message(readings, self.data_holder)
 
-                            # check if data is valid and store to latest_data
-                            # readings length should be 5 (volumetric flow, standard flow, RH, T, P)
-                            if len(readings) == 5:
-                                self.data_holder.latest_data[dev_id] = readings
+                            if parsed['type'] == 'data':
+                                self.data_holder.latest_data[dev_id] = parsed['data']
 
-                            # check if there's extra data in buffer
-                            # max message length is 39 (normal 34 + 2 \r\n + 1 if negative T + 2 if flow values >= 10)
+                            # Check for extra data in buffer
                             buffer_length = dev_conn.connection.inWaiting()
                             if buffer_length >= 40:
-                                # create log entry
-                                # serial_number = dev.child('Serial number').value()
-                                # logging.warning("AFM %s buffer: %i", serial_number, buffer_length)
-
-                                # read next line
                                 extra_data = dev_conn.connection.read_until(b'\r\n').decode()
-                                # remove '\r\n' and split data to list
-                                extra_data = extra_data.strip('\r\n').split(", ")
-                                # use extra data as latest_data if valid
-                                if len(extra_data) == 5:
-                                    self.data_holder.latest_data[dev_id] = extra_data
-                    
-                    except Exception as e:
-                        print(traceback.format_exc())
-                        self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type) 
-                        logging.exception(e)
-                
-                if dev_type == EDILUTER: # eDiluter
-                    try:
-                        # flag indicating if data has already been received, used for handling extra data
-                        data_received = False
-                        # check if there's extra data from last round
-                        if dev_id in self.data_holder.extra_data:
-                            # store extra data to latest_data
-                            self.data_holder.latest_data[dev_id] = self.data_holder.extra_data[dev_id]
-                            # remove extra data from dictionary
-                            del self.data_holder.extra_data[dev_id]
-                        # read all data from buffer
-                        readings = dev_conn.connection.read_all()
-                        # decode, separate messages and remove last empty message
-                        readings = readings.decode().split("\r\n")[:-1]
-                        
-                        # loop through messages
-                        for message in readings:
+                                parsed_extra = widget.parse_message(extra_data, self.data_holder)
+                                if parsed_extra['type'] == 'data':
+                                    self.data_holder.latest_data[dev_id] = parsed_extra['data']
 
-                            # if message starts with "time" - data push message
-                            if message.split(" ")[0] == "time":
-                                # check if message is full (147 characters) # TODO make sure this message is always 147 characters
-                                if len(message) == 147:
-                                    # remove time and id from message
-                                    data = message.split("Status ")[1]
-                                    # replace value labels with ""
-                                    data = data.replace("pres", "").replace("temp", "").replace("DF", "")
-                                    # split data to list
-                                    data = data.split(",")
-                                    # strip whitespace from values
-                                    data = [i.strip() for i in data]
-                                    # if data has already been received
-                                    if data_received == True:
-                                        # store extra data to extra_data dictionary for next round
-                                        self.data_holder.extra_data[dev_id] = data
-                                    # if data has not been received yet
-                                    else:
-                                        # store data to latest_data dictionary with device id as key
-                                        self.data_holder.latest_data[dev_id] = data
-                                        # set data received flag to True
-                                        data_received = True
-                                else: # if message is not full
-                                    # TODO store partial message and expect the rest on next round
-                                    print("readIndata - eDiluter message not full:", message)
-                                    logging.error("readIndata - eDiluter message not full: %s", message)
-
-                            # if message starts with "SUCCESS:" - command message response
-                            elif message.split(" ")[0] == "SUCCESS:":
-                                # append device's command widget text box
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message)
-                            
-                            # if message starts with "ERROR:" - command message response
-                            elif message.split(" ")[0] == "ERROR:":
-                                # append device's command widget text box
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message)
-                            
-                            else: # if message is not recognized
-                                logging.error("readIndata - eDiluter unknown message: %s", message)
-                                # append device's command widget text box
-                                self.data_holder.device_widgets[dev_id].set_tab.command_widget.update_text_box(message)
-                        
                     except Exception as e:
                         print(traceback.format_exc())
                         self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
                         logging.exception(e)
-                    
-                    # update eDiluter status tab values
-                    self.data_holder.device_widgets[dev_id].update_values(self.data_holder.latest_data[dev_id])
+                
+                if dev_type == EDILUTER: # eDiluter
+                    widget = self.data_holder.device_widgets[dev_id]
+                    data_received = False
+
+                    try:
+                        # Check for extra data from last round
+                        if dev_id in self.data_holder.extra_data:
+                            self.data_holder.latest_data[dev_id] = self.data_holder.extra_data[dev_id]
+                            del self.data_holder.extra_data[dev_id]
+
+                        # Read all data from buffer
+                        readings = dev_conn.connection.read_all()
+                        readings = readings.decode().split("\r\n")[:-1]
+
+                        for message in readings:
+                            parsed = widget.parse_message(message, self.data_holder)
+
+                            if parsed['type'] == 'data':
+                                if data_received:
+                                    self.data_holder.extra_data[dev_id] = parsed['data']
+                                else:
+                                    self.data_holder.latest_data[dev_id] = parsed['data']
+                                    data_received = True
+
+                            elif parsed['type'] == 'error' and parsed['command'] == 'auto-push':
+                                # Incomplete message
+                                print("readIndata - " + parsed.get('error', 'eDiluter error'))
+                                logging.error(parsed.get('error', 'eDiluter error'))
+
+                            # Show messages in command widget if requested
+                            if parsed.get('show_in_command_widget', False):
+                                widget.set_tab.command_widget.update_text_box(parsed['raw'])
+
+                    except Exception as e:
+                        print(traceback.format_exc())
+                        self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
+                        logging.exception(e)
+
+                    # Update eDiluter status tab
+                    widget.update_values(self.data_holder.latest_data[dev_id])
                 
                 if dev_type == TSI_CPC:
-                    try: # try to read data, decode and split
+                    widget = self.data_holder.device_widgets[dev_id]
+                    try:
                         readings = dev_conn.connection.read_all()
-                        readings = readings.decode().split("\r")[:-1]
-                        readings[0] = float(readings[0]) # convert concentration to float
+                        readings = readings.decode()
+                        parsed = widget.parse_message(readings, self.data_holder)
 
-                        # store to latest data dictionary
-                        self.data_holder.latest_data[dev_id] = readings
+                        if parsed['type'] == 'data':
+                            self.data_holder.latest_data[dev_id] = parsed['data']
 
-                        # set data_holder.error_status flag if instrument errors is not equal to 0
-                        if int(readings[1], 16) != 0:
-                            self.data_holder.error_status = 1
-                            # set device error flag
-                            self.data_holder.device_errors[dev_id] = True
-                    
-                    except Exception as e: # if reading fails, store nan values to latest_data
+                            # Set error flags if device has errors
+                            if parsed.get('has_errors', False):
+                                self.data_holder.error_status = 1
+                                self.data_holder.device_errors[dev_id] = True
+                        else:
+                            self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
+
+                    except Exception as e:
                         self.data_holder.latest_data[dev_id] = self.data_holder.get_default_data_array(dev_type)
                         logging.error(traceback.format_exc())
 

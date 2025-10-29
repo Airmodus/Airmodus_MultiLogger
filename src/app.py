@@ -18,9 +18,6 @@ from utils import (
     ten_hz_clicked,
     command_entered
 )
-from widgets import (
-    StatusLights,
-)
 from plots import (
     MainPlot,
 )
@@ -101,8 +98,6 @@ class MainWindow(QMainWindow):
         # create and set central widget (requirement of QMainWindow)
         self.main_splitter = QSplitter()
         self.setCentralWidget(self.main_splitter)
-        # create status lights widget instance showing measurement and saving status
-        self.data_holder.status_lights = StatusLights()
         # create logo pixmap label
         self.logo = QLabel(alignment=Qt.AlignCenter, objectName="logo")
         pixmap = QPixmap(resource_path + "/images/airmodus-envea-logo.png")

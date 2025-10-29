@@ -3,23 +3,25 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QSplitter, QTabWidget, QGridLayout, QWidget,
     QSizePolicy)
 
-from config import PSM, PSM2
+
+from config import PSM, PSM2, PSM_ERRORS
 from widgets import (
     CommandWidget,
     SetWidget,
     ToggleButton,
     IndicatorWidget,
     StartButton,
+    StepsWidget
 )
 
 from plots.device_plots import SinglePlot
+from devices.base_device import ComplexDevice
+from utils import compile_psm_data, compile_psm_settings
 
 # PSM widget
-class PSMWidget(QTabWidget):
+class PSMWidget(ComplexDevice):
     def __init__(self, device_parameter, device_type, *args, **kwargs):
-        super().__init__()
-        self.device_parameter = device_parameter # store device parameter tree reference
-        self.name = device_parameter.name() # store device name
+        super().__init__(device_parameter, device_type=device_type, *args, **kwargs)
         self.device_type = device_type # store device type (PSM or PSM 2.0)
         # create set tab for PSM
         self.set_tab = PSMSetTab(device_type)
@@ -122,6 +124,233 @@ class PSMWidget(QTabWidget):
         if self.device_type == PSM2:
             self.status_tab.flow_vacuum.change_value(str(current_list[13]) + " lpm")
         # liquid level values are updated in PSMWidget's update_notes()
+
+    def get_read_command(self):
+        """PSM auto-pushes measurement data, no read command needed for data."""
+        # Note: Settings queries (:SYST:PRNT, :SYST:VCMP) are sent separately
+        return None
+
+    def parse_message(self, message, data_holder=None):
+        """
+        Parse PSM serial messages.
+
+        Handles multiple message types:
+        - :MEAS:SCAN/:MEAS:STEP/:MEAS:FIXD - measurement data
+        - :SYST:PRNT - settings data
+        - :SYST:VCMP - dilution parameters
+        - :STAT:SELF:LOG - self-test errors
+        - :SELF:ERR - error messages
+        - *IDN - device identification
+        - Firmware - firmware version
+        """
+        try:
+            # Split command and data
+            message_string = message
+            parts = message.split(" ", 1)
+            if len(parts) < 2:
+                return {
+                    'type': 'unknown',
+                    'command': parts[0] if parts else '',
+                    'data': None,
+                    'raw': message,
+                    'update_gui': False
+                }
+
+            command = parts[0]
+            data = parts[1].split(",")
+
+            # Handle measurement commands
+            if command in [":MEAS:SCAN", ":MEAS:STEP", ":MEAS:FIXD"]:
+                status_hex = data[-2]
+                note_hex = data[-1]
+
+                # Update error indicators
+                total_errors = self.update_errors(status_hex)
+
+                # Update liquid states
+                liquid_errors = self.update_notes(note_hex)
+
+                # Store polynomial correction value
+                poly_correction = float(data[14])
+
+                # Determine scan status (firmware version dependent)
+                scan_status = "9"  # undefined by default
+                try:
+                    firmware_version_str = self.device_parameter.child('Firmware version').value()
+                    if firmware_version_str != "":
+                        firmware_version = firmware_version_str.split(".")
+                        # Retrofit: version >= 0.5.5
+                        if self.device_type == PSM:
+                            if int(firmware_version[1]) > 5:
+                                scan_status = data[15]
+                            elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 5:
+                                scan_status = data[15]
+                        # PSM 2.0: version >= 0.6.8
+                        elif self.device_type == PSM2:
+                            if int(firmware_version[1]) > 6:
+                                scan_status = data[15]
+                            elif int(firmware_version[1]) == 6 and int(firmware_version[2]) >= 8:
+                                scan_status = data[15]
+                except Exception:
+                    # If firmware version check fails, keep scan_status as "9" (undefined)
+                    pass
+
+                # Compile PSM data
+                compiled_data = compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=self.device_type)
+                self.latest_data = compiled_data
+
+                # Update GUI
+                self.update_values(data)
+                self.measure_tab.change_mode_color(command)
+
+                has_errors = (total_errors + liquid_errors) > 0
+
+                return {
+                    'type': 'data',
+                    'command': command,
+                    'data': compiled_data,
+                    'status_hex': status_hex,
+                    'note_hex': note_hex,
+                    'total_errors': total_errors,
+                    'liquid_errors': liquid_errors,
+                    'poly_correction': poly_correction,
+                    'raw': message,
+                    'update_gui': True,
+                    'has_errors': has_errors
+                }
+
+            # Handle :SYST:PRNT - settings
+            elif command == ":SYST:PRNT":
+                self.update_settings(data)
+                return {
+                    'type': 'settings',
+                    'command': command,
+                    'data': data,
+                    'raw': message,
+                    'update_gui': True,
+                    'show_in_command_widget': True
+                }
+
+            # Handle :SYST:VCMP - dilution parameters
+            elif command == ":SYST:VCMP":
+                if len(data) == 6:
+                    return {
+                        'type': 'dilution',
+                        'command': command,
+                        'data': data,
+                        'raw': message,
+                        'update_gui': False,
+                        'show_in_command_widget': True
+                    }
+                else:
+                    return {
+                        'type': 'error',
+                        'command': command,
+                        'data': None,
+                        'error': f'Invalid dilution parameters: {len(data)} values (expected 6)',
+                        'raw': message,
+                        'update_gui': False,
+                        'show_in_command_widget': True
+                    }
+
+            # Handle :STAT:SELF:LOG - self-test errors
+            elif command == ":STAT:SELF:LOG":
+                error_length = len(PSM_ERRORS)
+                status_bin = bin(int(data[0], 16))[2:].zfill(error_length)
+                inverted_status_bin = status_bin[::-1]
+
+                # Build error messages
+                error_messages = []
+                for i in range(error_length):
+                    if inverted_status_bin[i] == "1":
+                        # Special handling for MFC_HEATER/MFC_EXCESS error (index 27)
+                        if i == 27 and self.device_type == PSM:
+                            error_messages.append(f"Bit {i}: ERROR_SELFTEST_MFC_EXCESS")
+                        else:
+                            error_messages.append(f"Bit {i}: {PSM_ERRORS[i]}")
+
+                return {
+                    'type': 'self_test',
+                    'command': command,
+                    'data': data[0],
+                    'errors': error_messages,
+                    'raw': message,
+                    'update_gui': False,
+                    'show_in_command_widget': True
+                }
+
+            # Handle :SELF:ERR - error message
+            elif command == ":SELF:ERR":
+                error_code = int(data[0])
+                # Special handling for index 27
+                if error_code == 27 and self.device_type == PSM:
+                    error_msg = "ERROR_SELFTEST_MFC_EXCESS"
+                else:
+                    error_msg = PSM_ERRORS[error_code] if error_code < len(PSM_ERRORS) else "Unknown error"
+
+                return {
+                    'type': 'error',
+                    'command': command,
+                    'data': error_code,
+                    'error': error_msg,
+                    'raw': message,
+                    'update_gui': False,
+                    'show_in_command_widget': True
+                }
+
+            # Handle *IDN - identification
+            elif command == "*IDN":
+                serial_number = data[0].strip()
+                return {
+                    'type': 'info',
+                    'command': command,
+                    'data': serial_number,
+                    'raw': message,
+                    'update_gui': False,
+                    'show_in_command_widget': True
+                }
+
+            # Handle Firmware - firmware version
+            elif command == "Firmware":
+                if "version: " in data[0]:
+                    firmware_version = data[0].split(": ")[1]
+                    return {
+                        'type': 'firmware',
+                        'command': command,
+                        'data': firmware_version,
+                        'raw': message,
+                        'update_gui': False,
+                        'show_in_command_widget': True
+                    }
+
+            # Unknown command
+            else:
+                return {
+                    'type': 'unknown',
+                    'command': command,
+                    'data': data,
+                    'raw': message,
+                    'update_gui': False,
+                    'show_in_command_widget': True
+                }
+
+        except Exception as e:
+            # On parsing error, reset mode colors
+            try:
+                self.measure_tab.scan.change_color(0)
+                self.measure_tab.step.change_color(0)
+                self.measure_tab.fixed.change_color(0)
+            except:
+                pass
+
+            return {
+                'type': 'error',
+                'command': 'unknown',
+                'data': None,
+                'error': str(e),
+                'raw': message,
+                'update_gui': False
+            }
 
 
 class PSMSetTab(QSplitter):

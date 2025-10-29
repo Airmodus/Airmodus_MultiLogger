@@ -5,13 +5,12 @@ from plots.device_plots import SinglePlot
 
 from widgets import StartButton, IndicatorWidget, CommandWidget
 from config import EDILUTER
+from devices.base_device import ComplexDevice
 
 # eDiluter widget
-class eDiluterWidget(QTabWidget):
+class eDiluterWidget(ComplexDevice):
     def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__()
-        self.device_parameter = device_parameter # store device parameter tree reference
-        self.name = device_parameter.name() # store device name
+        super().__init__(device_parameter, device_type=EDILUTER, *args, **kwargs)
         self.current_mode = None # used for storing current mode
         # create set tab for eDiluter
         self.set_tab = eDiluterSetTab()
@@ -54,6 +53,104 @@ class eDiluterWidget(QTabWidget):
                 # change color of active mode button
                 self.mode_dict[current_list[0]].change_color(1)
                 self.current_mode = current_list[0] # update current mode
+
+    def get_read_command(self):
+        """eDiluter auto-pushes data, no read command needed."""
+        return None
+
+    def update_errors(self, status_hex, *args):
+        """eDiluter doesn't have error monitoring via status hex."""
+        return 0
+
+    def parse_message(self, message, data_holder=None):
+        """
+        Parse eDiluter serial messages.
+
+        Handles multiple message types:
+        - data push: "time X ID Y Status Z pres... temp... DF..."
+        - SUCCESS: command response
+        - ERROR: command error response
+        """
+        try:
+            # Determine message type
+            parts = message.split(" ")
+            message_type = parts[0] if parts else ''
+
+            # Handle data push message
+            if message_type == "time":
+                # Check if message is complete (should be 147 characters)
+                if len(message) == 147:
+                    # Extract data after "Status "
+                    if "Status " in message:
+                        data = message.split("Status ")[1]
+                        # Remove value labels
+                        data = data.replace("pres", "").replace("temp", "").replace("DF", "")
+                        # Split and strip whitespace
+                        data = [i.strip() for i in data.split(",")]
+
+                        self.latest_data = data
+
+                        return {
+                            'type': 'data',
+                            'command': 'auto-push',
+                            'data': data,
+                            'raw': message,
+                            'update_gui': True
+                        }
+                else:
+                    # Incomplete message
+                    return {
+                        'type': 'error',
+                        'command': 'auto-push',
+                        'data': None,
+                        'error': f'Incomplete message: {len(message)} chars (expected 147)',
+                        'raw': message,
+                        'update_gui': False
+                    }
+
+            # Handle SUCCESS response
+            elif message_type == "SUCCESS:":
+                return {
+                    'type': 'info',
+                    'command': 'SUCCESS',
+                    'data': message,
+                    'raw': message,
+                    'update_gui': False,
+                    'show_in_command_widget': True
+                }
+
+            # Handle ERROR response
+            elif message_type == "ERROR:":
+                return {
+                    'type': 'error',
+                    'command': 'ERROR',
+                    'data': None,
+                    'error': message,
+                    'raw': message,
+                    'update_gui': False,
+                    'show_in_command_widget': True
+                }
+
+            # Unknown message type
+            else:
+                return {
+                    'type': 'unknown',
+                    'command': message_type,
+                    'data': None,
+                    'raw': message,
+                    'update_gui': False,
+                    'show_in_command_widget': True
+                }
+
+        except Exception as e:
+            return {
+                'type': 'error',
+                'command': 'unknown',
+                'data': None,
+                'error': str(e),
+                'raw': message,
+                'update_gui': False
+            }
 
 
 class eDiluterSetTab(QWidget):

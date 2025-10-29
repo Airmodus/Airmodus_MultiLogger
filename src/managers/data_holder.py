@@ -2,6 +2,7 @@ from numpy import full, nan
 from time import time
 from utils import _manage_plot_array
 from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, PSM2, TSI_CPC)
+from widgets import StatusLights
 
 class DataHolder:
     """Holds all app data dicts/lists. No logic—just storage."""
@@ -55,7 +56,7 @@ class DataHolder:
         self.error_icon = None
         self.disconnected_icon = None
 
-        self.status_lights = None
+        self.status_lights = StatusLights()
 
         self.inquiry_flag = False # when COM ports change, this is set to True to inquire device IDNs
         self.inquiry_time = time()
