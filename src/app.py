@@ -189,6 +189,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         parameterTypes.GroupParameter.__init__(self, **opts)
         self.n_devices = 0
         self.cpc_dict = {'None': 'None'}
+        self.main_window = None # reference to MainWindow for accessing methods and data
         # update cpc_dict when device is removed
         self.sigChildRemoved.connect(self.update_cpc_dict)
 
@@ -303,6 +304,21 @@ class ScalableGroup(parameterTypes.GroupParameter):
         device = value.parent() # get device parameter
         device.cpc_changed = True # set cpc_changed flag to True
 
+        # if MainWindow reference exists, trigger immediate CPC settings query
+        if self.main_window is not None:
+            cpc_id = value.value() # get connected CPC ID
+            # if connected CPC is not 'None', find the CPC device and query its settings
+            if cpc_id != 'None':
+                for cpc in self.children():
+                    if cpc.child('DevID').value() == cpc_id:
+                        # check if CPC is connected and is Airmodus CPC
+                        if cpc.child('Connected').value() and cpc.child('Device type').value() == CPC:
+                            # send immediate settings query to CPC
+                            cpc.child('Connection').value().send_multiple_messages(CPC)
+                            # set par_updates flag to ensure settings are written
+                            self.main_window.par_updates[cpc_id] = 1
+                        break
+
 # Create a dictionary, in which the names, types and default values are set
 params = [
     {'name': 'Data settings', 'type': 'group', 'children': [
@@ -397,6 +413,9 @@ class MainWindow(QMainWindow):
         self.idn_inquiry_devices = [] # contains IDs of devices that need IDN inquiry
         # dictionary of device names matching device type
         self.device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', Electrometer: 'Electrometer', CO2_sensor: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', eDiluter: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', Example_device: 'Example device'}
+
+        # set MainWindow reference in ScalableGroup for CPC settings query
+        self.params.child('Device settings').main_window = self
 
         # initialize GUI
         # create and set central widget (requirement of QMainWindow)
@@ -2031,8 +2050,20 @@ class MainWindow(QMainWindow):
                                 elif dev.child('Device type').value() in [PSM, PSM2]:
                                     # check if Connected CPC parameter has been changed
                                     if dev.cpc_changed == True: # check device's cpc_changed flag
-                                        update_par = 1
-                                        dev.cpc_changed = False # reset cpc_changed flag
+                                        # validate that CPC settings are available before updating .par file
+                                        cpc_id = dev.child('Connected CPC').value()
+                                        if cpc_id != 'None' and cpc_id in self.latest_settings:
+                                            # check if CPC settings contain valid data (not all NaN)
+                                            cpc_settings = self.latest_settings[cpc_id]
+                                            # check if temperature setpoints are valid (indices 3,4,5)
+                                            if not (isnan(cpc_settings[3]) and isnan(cpc_settings[4]) and isnan(cpc_settings[5])):
+                                                update_par = 1
+                                                dev.cpc_changed = False # reset cpc_changed flag
+                                            # else keep cpc_changed flag set and wait for next cycle
+                                        else:
+                                            # if no CPC connected or settings not available, update anyway
+                                            update_par = 1
+                                            dev.cpc_changed = False # reset cpc_changed flag
                                     # else check if connected CPC is not 'None'
                                     elif dev.child('Connected CPC').value() != 'None':
                                         # check if connected CPC is in par_updates dictionary and its .par update flag is set
