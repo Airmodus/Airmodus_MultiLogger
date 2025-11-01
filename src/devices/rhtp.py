@@ -1,6 +1,7 @@
 from plots.device_plots import TriplePlot
 from config import RHTP
 from devices.base_device import SimpleDevice
+from devices.device_data import RHTPData
 
 # RHTP widget
 class RHTPWidget(SimpleDevice):
@@ -33,7 +34,12 @@ class RHTPWidget(SimpleDevice):
 
             # Validate data (should have 3 values)
             if len(readings) == 3:
-                self.latest_data = readings
+                # Update data object
+                self.current_data.humidity = float(readings[0])
+                self.current_data.temperature = float(readings[1])
+                self.current_data.pressure = float(readings[2])
+
+                # Data stored in self.current_data by base class
                 return {
                     'type': 'data',
                     'data': readings,

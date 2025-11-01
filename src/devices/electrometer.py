@@ -1,6 +1,8 @@
+from numpy import nan
 from plots.device_plots import ElectrometerPlot
 from config import ELECTROMETER
 from devices.base_device import SimpleDevice
+from devices.device_data import ElectrometerData
 
 # ELECTROMETER widget
 class ElectrometerWidget(SimpleDevice):
@@ -19,8 +21,13 @@ class ElectrometerWidget(SimpleDevice):
         try:
             # Parse semicolon-separated data
             readings = list(map(float, message.split(";")))
-            self.latest_data = readings
 
+            # Update data object
+            self.current_data.voltage1 = readings[0]
+            self.current_data.voltage2 = readings[1] if len(readings) > 1 else nan
+            self.current_data.voltage3 = readings[2] if len(readings) > 2 else nan
+
+            # Data stored in self.current_data by base class
             return {
                 'type': 'data',
                 'data': readings,

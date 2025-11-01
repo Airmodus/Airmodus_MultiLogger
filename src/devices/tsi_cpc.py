@@ -1,6 +1,7 @@
 from plots.device_plots import SinglePlot
 from config import TSI_CPC, CPC
 from devices.base_device import SimpleDevice
+from devices.device_data import TSI_CPCData
 
 # TSI CPC widget
 class TSIWidget(SimpleDevice):
@@ -24,7 +25,11 @@ class TSIWidget(SimpleDevice):
                 concentration = float(readings[0])
                 errors_hex = readings[1]
 
-                self.latest_data = [concentration, errors_hex]
+                # Update data object
+                self.current_data.concentration = concentration
+                self.current_data.error_hex = errors_hex
+
+                # Data stored in self.current_data by base class
 
                 # Check if there are any errors
                 has_errors = int(errors_hex, 16) != 0

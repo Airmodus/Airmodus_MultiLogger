@@ -30,8 +30,8 @@ class SerialDeviceConnection():
             # Try to close with the port that was last used (needed if the port has been changed)
             self.connection.close()
             #print("Connection closed")
-        except:
-            pass
+        except Exception:
+            pass  # Connection already closed or doesn't exist
     
     # close old connection and open new connection
     def change_port(self, serial_port):

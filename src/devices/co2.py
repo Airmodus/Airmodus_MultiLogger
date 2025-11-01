@@ -1,6 +1,8 @@
+from numpy import nan
 from plots.device_plots import SinglePlot
 from config import CO2_SENSOR
 from devices.base_device import SimpleDevice
+from devices.device_data import CO2Data
 
 # CO2 widget
 class CO2Widget(SimpleDevice):
@@ -33,7 +35,12 @@ class CO2Widget(SimpleDevice):
 
             # Validate data (check if first value is not 0)
             if readings[0] != 0:
-                self.latest_data = readings
+                # Update data object
+                self.current_data.co2 = readings[0]
+                self.current_data.temperature = readings[1] if len(readings) > 1 else nan
+                self.current_data.humidity = readings[2] if len(readings) > 2 else nan
+
+                # Data stored in self.current_data by base class
                 return {
                     'type': 'data',
                     'data': readings,

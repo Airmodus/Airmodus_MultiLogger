@@ -9,6 +9,7 @@ for device widgets, data management, and serial communication parsing.
 from abc import ABCMeta, abstractmethod
 from PyQt5.QtWidgets import QTabWidget
 from numpy import full, nan
+from devices.device_data import create_device_data, create_device_settings
 
 
 # Create a metaclass that combines Qt's metaclass with ABC's metaclass
@@ -31,8 +32,8 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         dev_id: Device ID for tracking
         dev_type: Device type constant from config
         plot_tab: Widget for plotting device data
-        latest_data: Current measurement values
-        latest_settings: Current device settings (for complex devices)
+        current_data: Typed dataclass containing current measurement values
+        settings: Typed dataclass containing device settings (for complex devices)
         errors: Current error state
     """
 
@@ -52,9 +53,9 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         self.dev_type = device_type
         self.plot_tab = None  # Should be set by subclass
 
-        # Data storage (device state)
-        self.latest_data = None
-        self.latest_settings = None
+        # Data storage (device owns its data now)
+        self.current_data = create_device_data(device_type) if device_type else None
+        self.settings = create_device_settings(device_type)
         self.errors = {}
 
     @abstractmethod
@@ -78,7 +79,7 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         Parse a serial message from the device.
 
         This method handles device-specific protocol parsing and updates
-        the device's internal state (latest_data, latest_settings, errors).
+        the device's internal state (current_data, latest_settings, errors).
 
         Args:
             message: Raw message string from serial connection
@@ -144,20 +145,6 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         """
         return 0
 
-    def format_data_for_logging(self):
-        """
-        Format current device data for writing to log file.
-
-        Override this method to provide device-specific formatting.
-        Default implementation returns latest_data as-is.
-
-        Returns:
-            str or list: Formatted data ready for file writing
-        """
-        if self.latest_data is not None:
-            return self.latest_data
-        return []
-
     def get_column_headers(self):
         """
         Get column headers for data log file.
@@ -220,6 +207,105 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         """
         return True
 
+    def handle_serial_data(self, connection, data_holder=None):
+        """
+        Read and process serial data from device connection.
+
+        This is the main entry point for device communication. Override this
+        method if device needs special serial handling (e.g., partial message
+        buffering, multiple read commands).
+
+        Default implementation:
+        1. Reads all available data from serial connection
+        2. Splits into messages by \\r
+        3. Calls parse_message() for each message
+        4. Returns list of parsed results
+
+        Args:
+            connection: Serial connection object (has .connection attribute)
+            data_holder: Reference to DataHolder for accessing shared state
+
+        Returns:
+            list: List of parsed message dictionaries from parse_message()
+        """
+        results = []
+        try:
+            # Read all available data
+            raw_data = connection.connection.read_all()
+            if not raw_data:
+                return results
+
+            # Decode and split into messages
+            messages = raw_data.decode().split("\r")[:-1]  # Remove last empty element
+
+            # Parse each message
+            for message in messages:
+                if message:  # Skip empty messages
+                    parsed = self.parse_message(message, data_holder)
+                    results.append(parsed)
+
+        except Exception as e:
+            results.append({
+                'type': 'error',
+                'command': 'serial_read',
+                'data': None,
+                'error': str(e),
+                'raw': '',
+                'update_gui': False
+            })
+
+        return results
+
+    def process_parsed_messages(self, parsed_messages, device_param, data_holder):
+        """
+        Process parsed messages and update device state.
+
+        This method is called by DeviceManager after handle_serial_data().
+        Override this to add device-specific post-processing logic like:
+        - Managing data buffers
+        - Updating GUI elements
+        - Compiling settings
+        - Special error handling
+
+        Default implementation handles simple data storage.
+
+        Args:
+            parsed_messages: List of parsed message dicts from handle_serial_data()
+            device_param: Parameter tree reference for this device
+            data_holder: Reference to DataHolder for shared state
+
+        Returns:
+            dict: Processing results with keys:
+                - 'data_updated': bool, whether new data was received
+                - 'settings_updated': bool, whether settings changed
+                - 'needs_gui_update': bool, whether GUI should refresh
+        """
+        result = {
+            'data_updated': False,
+            'settings_updated': False,
+            'needs_gui_update': False
+        }
+
+        # Process each parsed message
+        for parsed in parsed_messages:
+            if parsed['type'] == 'data':
+                # Data already stored in current_data by parse_message
+                result['data_updated'] = True
+
+            elif parsed['type'] == 'info' and parsed['command'] == '*IDN':
+                # Handle device identification
+                serial_number = parsed['data']
+                if device_param.child('Serial number').value() != serial_number:
+                    device_param.child('Serial number').setValue(serial_number)
+                if self.dev_id in data_holder.idn_inquiry_devices:
+                    data_holder.idn_inquiry_devices.remove(self.dev_id)
+
+            elif parsed['type'] == 'error':
+                # On error, reset current_data to defaults (handled in parse_message)
+                pass
+
+        return result
+
 
 class SimpleDevice(BaseDevice):
     """
@@ -260,7 +346,6 @@ class SimpleDevice(BaseDevice):
 
             # Default data parsing (semicolon-separated)
             data = message.split(";")
-            self.latest_data = data
 
             return {
                 'type': 'data',

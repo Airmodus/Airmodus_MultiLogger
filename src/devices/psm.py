@@ -16,13 +16,15 @@ from widgets import (
 
 from plots.device_plots import SinglePlot
 from devices.base_device import ComplexDevice
-from utils import compile_psm_data, compile_psm_settings
+from devices.device_data import PSMData, PSMSettings
+from utils import compile_psm_settings
 
 # PSM widget
 class PSMWidget(ComplexDevice):
     def __init__(self, device_parameter, device_type, *args, **kwargs):
         super().__init__(device_parameter, device_type=device_type, *args, **kwargs)
         self.device_type = device_type # store device type (PSM or PSM 2.0)
+        self.connected_cpc_device = None  # Direct reference to connected CPC widget
         # create set tab for PSM
         self.set_tab = PSMSetTab(device_type)
         self.addTab(self.set_tab, "Set")
@@ -130,6 +132,166 @@ class PSMWidget(ComplexDevice):
         # Note: Settings queries (:SYST:PRNT, :SYST:VCMP) are sent separately
         return None
 
+    def process_parsed_messages(self, parsed_messages, device_param, data_holder):
+        """
+        Process PSM messages with buffering, settings compilation, and error handling.
+        """
+        from numpy import isnan
+        from utils import compile_psm_settings
+        import logging
+        import traceback
+
+        result = {
+            'data_updated': False,
+            'settings_updated': False,
+            'needs_gui_update': False
+        }
+
+        # Clear extra data buffer after 60 seconds of consecutive buffering
+        if self.dev_id in data_holder.extra_data and data_holder.extra_data_counter[self.dev_id] >= 60:
+            del data_holder.extra_data[self.dev_id]
+            logging.info("PSM %s extra data buffer cleared", device_param.child('Serial number').value())
+
+        # Initialize from extra_data buffer
+        was_present = self.dev_id in data_holder.extra_data
+        if was_present:
+            data_holder.extra_data_counter[self.dev_id] += 1
+        else:
+            data_holder.extra_data_counter[self.dev_id] = 0
+
+        data_holder.par_updates[self.dev_id] = 0
+        settings_fetched = False
+
+        # Process each parsed message
+        for parsed in parsed_messages:
+            if parsed['type'] == 'data':
+                # Store measurement data with buffering (uses current_data now)
+                if isnan(float(self.current_data.saturator_flow)):
+                    # First data received - no buffering needed
+                    pass
+                else:
+                    # Buffer extra data for next update cycle
+                    data_holder.extra_data[self.dev_id] = parsed['data']
+
+                result['data_updated'] = True
+
+                # Store polynomial correction
+                data_holder.latest_poly_correction[self.dev_id] = parsed.get('poly_correction', 0.0)
+
+                # Set error flags
+                if parsed.get('has_errors', False):
+                    data_holder.error_status = 1
+                    data_holder.device_errors[self.dev_id] = True
+
+            elif parsed['type'] == 'settings':
+                # Store PRNT settings
+                data_holder.latest_psm_prnt[self.dev_id] = parsed['data']
+                settings_fetched = True
+
+            elif parsed['type'] == 'dilution':
+                # Store dilution parameters
+                data_holder.psm_dilution[self.dev_id] = parsed['data']
+
+            elif parsed['type'] == 'self_test':
+                # Display self-test errors
+                from config import PSM_ERRORS
+                self.set_tab.command_widget.update_text_box("self test error binary: " +
+                    bin(int(parsed['data'], 16))[2:].zfill(len(PSM_ERRORS)))
+                for error_msg in parsed.get('errors', []):
+                    self.set_tab.command_widget.update_text_box(error_msg)
+
+            elif parsed['type'] == 'info' and parsed['command'] == '*IDN':
+                # Handle device identification
+                serial_number = parsed['data']
+                if device_param.child('Serial number').value() != serial_number:
+                    device_param.child('Serial number').setValue(serial_number)
+                if self.dev_id in data_holder.idn_inquiry_devices:
+                    data_holder.idn_inquiry_devices.remove(self.dev_id)
+
+            elif parsed['type'] == 'firmware':
+                # Update firmware version
+                firmware_version = parsed['data']
+                if device_param.child('Firmware version').value() != firmware_version:
+                    device_param.child('Firmware version').setValue(firmware_version)
+
+            # Show messages in command widget if requested
+            if parsed.get('show_in_command_widget', False):
+                self.set_tab.command_widget.update_text_box(parsed['raw'])
+                if parsed['type'] == 'error' and 'error' in parsed:
+                    print("PSM error: " + str(parsed['error']))
+
+        # Compile settings if all required data is available
+        if data_holder.psm_settings_updates[self.dev_id] and settings_fetched and self.dev_id in data_holder.psm_dilution:
+            try:
+                # Get CO flow rate (PSM Retrofit only)
+                from config import PSM
+                # Update settings with co_flow and dilution parameters
+                if self.dev_type == PSM:
+                    self.settings.co_flow = round(self.set_tab.set_co_flow.value_spinbox.value(), 3)
+                else:
+                    self.settings.co_flow = nan
+
+                self.settings.dilution_parameters = data_holder.psm_dilution[self.dev_id]
+
+                # Get settings array from device's typed settings dataclass
+                # Note: inlet_flow_rate is updated by plot_manager, CPC settings added by data_logger
+
+                data_holder.par_updates[self.dev_id] = 1
+                data_holder.psm_settings_updates[self.dev_id] = False
+                result['settings_updated'] = True
+            except Exception as e:
+                print(traceback.format_exc())
+                logging.exception(e)
+
+        return result
+
+    def handle_serial_data(self, connection, data_holder=None):
+        """
+        Handle PSM serial data with partial message buffering.
+
+        PSM messages can be split across multiple reads, so we buffer
+        incomplete messages in data_holder.partial_data[dev_id].
+        """
+        results = []
+        try:
+            raw_data = connection.connection.read_all()
+            if not raw_data:
+                return results
+
+            # Decode and split by \r
+            messages = raw_data.decode().split("\r")
+
+            # Handle partial message from previous read
+            if self.dev_id in data_holder.partial_data:
+                messages[0] = data_holder.partial_data[self.dev_id] + messages[0]
+                del data_holder.partial_data[self.dev_id]
+
+            # Check if last message is complete (ends with \r)
+            if messages[-1] == "":
+                messages = messages[:-1]  # Complete, remove empty element
+            else:
+                # Incomplete, save for next read
+                data_holder.partial_data[self.dev_id] = messages[-1]
+                messages = messages[:-1]
+
+            # Parse each complete message
+            for message in messages:
+                if message:
+                    parsed = self.parse_message(message, data_holder)
+                    results.append(parsed)
+
+        except Exception as e:
+            results.append({
+                'type': 'error',
+                'command': 'serial_read',
+                'data': None,
+                'error': str(e),
+                'raw': '',
+                'update_gui': False
+            })
+
+        return results
+
     def parse_message(self, message, data_holder=None):
         """
         Parse PSM serial messages.
@@ -195,9 +357,28 @@ class PSMWidget(ComplexDevice):
                     # If firmware version check fails, keep scan_status as "9" (undefined)
                     pass
 
-                # Compile PSM data
-                compiled_data = compile_psm_data(data, status_hex, note_hex, scan_status, psm_version=self.device_type)
-                self.latest_data = compiled_data
+                # Update new data object
+                self.current_data.saturator_flow = float(data[0])
+                self.current_data.excess_flow = float(data[1])
+                self.current_data.temp_growth_tube = float(data[2])
+                self.current_data.temp_saturator = float(data[3])
+                self.current_data.temp_inlet = float(data[4])
+                self.current_data.temp_heater = float(data[5])
+                self.current_data.temp_drainage = float(data[6])
+                self.current_data.temp_cabin = float(data[7])
+                self.current_data.sat_flow_setpoint = float(data[8])
+                self.current_data.pres_inlet = float(data[9])
+                self.current_data.cpc_inlet_flow = float(data[10])
+                self.current_data.concentration_psm = float(data[11])
+                self.current_data.pres_critical_orifice = float(data[12])
+                if self.device_type == PSM2 and len(data) > 13:
+                    self.current_data.vacuum_flow = float(data[13])
+                self.current_data.poly_correction = poly_correction
+                self.current_data.scan_status = scan_status
+                self.current_data.status_hex = status_hex
+                self.current_data.note_hex = note_hex
+                self.current_data.total_errors = total_errors
+                self.current_data.liquid_errors = liquid_errors
 
                 # Update GUI
                 self.update_values(data)
@@ -208,7 +389,7 @@ class PSMWidget(ComplexDevice):
                 return {
                     'type': 'data',
                     'command': command,
-                    'data': compiled_data,
+                    'data': self.current_data.to_array(),  # Use dataclass to_array() instead of compile_psm_data
                     'status_hex': status_hex,
                     'note_hex': note_hex,
                     'total_errors': total_errors,
@@ -221,7 +402,18 @@ class PSMWidget(ComplexDevice):
 
             # Handle :SYST:PRNT - settings
             elif command == ":SYST:PRNT":
+                # Update settings object
+                self.settings.mode = int(data[0])
+                self.settings.temp_growth_tube = float(data[1])
+                self.settings.temp_saturator = float(data[2])
+                self.settings.temp_inlet = float(data[3])
+                self.settings.temp_heater = float(data[4])
+                self.settings.temp_drainage = float(data[5])
+                self.settings.cpc_inlet_flow = float(data[6])
+
+                # Update GUI
                 self.update_settings(data)
+
                 return {
                     'type': 'settings',
                     'command': command,
@@ -340,8 +532,8 @@ class PSMWidget(ComplexDevice):
                 self.measure_tab.scan.change_color(0)
                 self.measure_tab.step.change_color(0)
                 self.measure_tab.fixed.change_color(0)
-            except:
-                pass
+            except Exception:
+                pass  # Widget may not exist yet
 
             return {
                 'type': 'error',

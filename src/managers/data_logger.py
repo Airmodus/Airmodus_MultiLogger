@@ -202,8 +202,9 @@ class DataLogger:
                             # Write the actual data
                             file.write("\n") # create new line
                             file.write(timeStampStr+',') # add timestamp
-                            # convert data to string
-                            write_data = ','.join(str(vals) for vals in self.data_holder.latest_data[dev_id])
+                            # convert data to string using typed dataclass to_array()
+                            device_data = self.data_holder.get_device_data(dev_id)
+                            write_data = ','.join(str(vals) for vals in device_data.to_array())
                             # write data
                             file.write(write_data)
                        
@@ -260,8 +261,9 @@ class DataLogger:
                                     file.write("\n")
                                     # Add timestamp
                                     file.write(timeStampStr+',')
-                                    # Convert data to string
-                                    write_data = ','.join(str(vals) for vals in self.data_holder.latest_settings[dev_id])
+                                    # Convert data to string from device settings dataclass
+                                    device_settings = self.data_holder.get_device_settings(dev_id)
+                                    write_data = ','.join(str(vals) for vals in device_settings.to_array()) if device_settings else ''
                                     file.write(write_data)
                                     # if device type is PSM
                                     if dev.child('Device type').value() in [PSM, PSM2]: # if PSM
@@ -277,15 +279,18 @@ class DataLogger:
                                             # if CPC is connected Airmodus CPC, write connected CPC settings
                                             if cpc_device.child('Connected').value() and cpc_device.child('Device type').value() == CPC:
                                                 cpc_idn = cpc_device.child('Serial number').value()
-                                                cpc_settings = self.data_holder.latest_settings[cpc_id]
+                                                cpc_settings = self.data_holder.get_device_settings(cpc_id)
                                                 file.write(',') # separate PSM and CPC settings with comma
-                                                # compile connected CPC settings
-                                                connected_cpc_settings = [
-                                                    cpc_idn, # connected CPC serial number (IDN)
-                                                    cpc_settings[6], cpc_settings[11], cpc_settings[9], # autofill, drain, water removal
-                                                    cpc_settings[3], cpc_settings[4], cpc_settings[5], # T set: saturator, condenser, optics
-                                                    cpc_settings[2], cpc_settings[0] # inlet flow rate (measured), aveaging time
-                                                ]
+                                                # compile connected CPC settings from typed dataclass
+                                                if cpc_settings:
+                                                    connected_cpc_settings = [
+                                                        cpc_idn, # connected CPC serial number (IDN)
+                                                        cpc_settings.autofill, cpc_settings.drain, cpc_settings.water_removal, # autofill, drain, water removal
+                                                        cpc_settings.saturator_temp, cpc_settings.condenser_temp, cpc_settings.spare1, # T set: saturator, condenser, optics
+                                                        cpc_settings.measured_cpc_flow, cpc_settings.averaging_time # inlet flow rate (measured), aveaging time
+                                                    ]
+                                                else:
+                                                    connected_cpc_settings = []
                                                 # write connected CPC settings
                                                 write_data = ','.join(str(vals) for vals in connected_cpc_settings)
                                                 file.write(write_data)
@@ -334,9 +339,11 @@ class DataLogger:
             if dev_id in self.data_holder.pulse_analysis_index:
                 if self.data_holder.pulse_analysis_index[dev_id] is not None: # when index is None, analysis has reached its end
                     try:
+                        # Get device data
+                        cpc_data = self.data_holder.get_device_data(dev_id)
                         # calculate current pulse duration
-                        dead_time = self.data_holder.latest_data[dev_id][1]
-                        number_of_pulses = self.data_holder.latest_data[dev_id][2]
+                        dead_time = cpc_data.dead_time
+                        number_of_pulses = cpc_data.number_of_pulses
                         if number_of_pulses == 0:
                             pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
                         else:
@@ -365,7 +372,9 @@ class DataLogger:
         """Stop CPC pulse analysis, resume normal operation."""
         # restore original threshold value to device
         try:
-            device_param.child('Connection').value().send_message(":SET:OPC:THRS " + str(self.data_holder.latest_settings[device_id][7]))
+            cpc_settings = self.data_holder.get_device_settings(device_id)
+            if cpc_settings:
+                device_param.child('Connection').value().send_message(":SET:OPC:THRS " + str(cpc_settings.opc_threshold))
         except Exception as e:
             print(traceback.format_exc())
             logging.exception(e)
@@ -406,9 +415,10 @@ class DataLogger:
             # disable command input
             self.data_holder.device_widgets[device_id].set_tab.command_widget.disable_command_input()
 
-            # get original threshold value from latest_settings
+            # get original threshold value from device settings
             # value should stay intact during pulse analysis, settings are not updated
-            original_threshold = self.data_holder.latest_settings[device_id][7]
+            cpc_settings = self.data_holder.get_device_settings(device_id)
+            original_threshold = cpc_settings.opc_threshold if cpc_settings else nan
             # if threshold value is nan, stop pulse analysis
             if isnan(original_threshold):
                 self.pulse_analysis_stop(device_id, device_param)

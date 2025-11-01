@@ -1,6 +1,7 @@
 from plots.device_plots import AFMPlot
 from config import AFM
 from devices.base_device import SimpleDevice
+from devices.device_data import AFMData
 
 # AFM widget
 class AFMWidget(SimpleDevice):
@@ -33,7 +34,14 @@ class AFMWidget(SimpleDevice):
 
             # Validate data (should have 5 values)
             if len(readings) == 5:
-                self.latest_data = readings
+                # Update data object
+                self.current_data.flow = float(readings[0])
+                self.current_data.saturator_flow = float(readings[1])
+                self.current_data.humidity = float(readings[2])
+                self.current_data.temperature = float(readings[3])
+                self.current_data.pressure = float(readings[4])
+
+                # Data stored in self.current_data by base class
                 return {
                     'type': 'data',
                     'data': readings,

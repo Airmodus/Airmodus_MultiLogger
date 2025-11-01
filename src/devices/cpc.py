@@ -14,7 +14,8 @@ from widgets import (
 )
 from plots.device_plots import SinglePlot
 from devices.base_device import ComplexDevice
-from utils import compile_cpc_data, compile_cpc_settings
+from devices.device_data import CPCData, CPCSettings
+from utils import compile_cpc_settings
 
 # CPC widget containing CPC related GUI elements as tabs
 class CPCWidget(ComplexDevice):
@@ -133,6 +134,123 @@ class CPCWidget(ComplexDevice):
         # This method is for documentation/future use
         return ":MEAS:ALL"
 
+    def process_parsed_messages(self, parsed_messages, device_param, data_holder):
+        """
+        Process CPC messages with buffering, settings compilation, and GUI updates.
+        """
+        from numpy import isnan, full, nan, array_equal
+        from utils import compile_cpc_settings
+
+        result = {
+            'data_updated': False,
+            'settings_updated': False,
+            'needs_gui_update': False
+        }
+
+        # Initialize from extra_data buffer
+        prnt_list = data_holder.extra_data.pop(str(self.dev_id) + ":prnt", full(13, nan))
+        pall_list = data_holder.extra_data.pop(str(self.dev_id) + ":pall", full(28, nan))
+
+        # Handle 10 Hz data if enabled
+        if device_param.child('10 hz').value():
+            data_holder.latest_ten_hz[self.dev_id] = data_holder.extra_data.pop(
+                str(self.dev_id) + ":10hz", data_holder.latest_ten_hz[self.dev_id])
+
+        # Process each parsed message
+        for parsed in parsed_messages:
+            if parsed['type'] == 'data':
+                # Store measurement data with buffering 
+                if isnan(self.current_data.concentration):
+                    # First data received - no buffering needed
+                    pass
+                else:
+                    # Buffer extra data for next update cycle
+                    data_holder.extra_data[self.dev_id] = parsed['data']
+
+                result['data_updated'] = True
+
+                # Set error flags
+                if parsed.get('total_errors', 0) != 0:
+                    data_holder.error_status = 1
+                    data_holder.device_errors[self.dev_id] = True
+
+            elif parsed['type'] == 'settings':
+                # Handle PRNT or PALL settings
+                if parsed['command'] == ':SYST:PRNT':
+                    if isnan(prnt_list[0]):
+                        prnt_list = parsed['data']
+                    else:
+                        data_holder.extra_data[str(self.dev_id)+":prnt"] = parsed['data']
+                elif parsed['command'] == ':SYST:PALL':
+                    if isnan(pall_list[0]):
+                        pall_list = parsed['data']
+                    else:
+                        data_holder.extra_data[str(self.dev_id)+":pall"] = parsed['data']
+
+            elif parsed['type'] == 'ten_hz':
+                # Handle 10 Hz logging data
+                if isnan(float(data_holder.latest_ten_hz[self.dev_id][0])):
+                    data_holder.latest_ten_hz[self.dev_id] = parsed['data']
+                else:
+                    data_holder.extra_data[str(self.dev_id)+":10hz"] = parsed['data']
+
+            elif parsed['type'] == 'self_test':
+                # Display self-test errors in command widget
+                from config import CPC_ERRORS
+                self.set_tab.command_widget.update_text_box(parsed['raw'])
+                self.set_tab.command_widget.update_text_box("self test error binary: " +
+                    bin(int(parsed['data'], 16))[2:].zfill(len(CPC_ERRORS)))
+                for error_msg in parsed.get('errors', []):
+                    self.set_tab.command_widget.update_text_box(error_msg)
+
+            elif parsed['type'] == 'info' and parsed['command'] == '*IDN':
+                # Handle device identification
+                self.set_tab.command_widget.update_text_box(parsed['raw'])
+                serial_number = parsed['data']
+                if device_param.child('Serial number').value() != serial_number:
+                    device_param.child('Serial number').setValue(serial_number)
+                    # Update CPC dict in params
+                    device_param.parent().update_cpc_dict()
+                if self.dev_id in data_holder.idn_inquiry_devices:
+                    data_holder.idn_inquiry_devices.remove(self.dev_id)
+
+            # Show messages in command widget if requested
+            if parsed.get('show_in_command_widget', False):
+                self.set_tab.command_widget.update_text_box(parsed['raw'])
+                if parsed['type'] == 'error' and 'error' in parsed:
+                    print("CPC error: " + str(parsed['error']))
+
+        # Update GUI with current data
+        self.update_values(self.current_data.to_array())
+        self.update_settings(prnt_list)
+        result['needs_gui_update'] = True
+
+        # Compile and update settings if both PRNT and PALL are available
+        settings_update = (str(prnt_list[0]) != "nan" and str(pall_list[0]) != "nan")
+
+        # Skip settings update if pulse analysis is in progress
+        if self.dev_id in data_holder.pulse_analysis_index:
+            settings_update = False
+
+        if settings_update:
+            # Get current settings array from device's typed settings dataclass
+            settings = self.settings.to_array()
+
+            # Compare with previous settings (stored in device)
+            if not hasattr(self, 'previous_settings_array'):
+                self.previous_settings_array = full(14, nan)
+
+            if not array_equal(settings, self.previous_settings_array, equal_nan=True):
+                self.previous_settings_array = settings.copy()
+                data_holder.par_updates[self.dev_id] = 1
+                result['settings_updated'] = True
+            else:
+                data_holder.par_updates[self.dev_id] = 0
+        else:
+            data_holder.par_updates[self.dev_id] = 0
+
+        return result
+
     def parse_message(self, message, data_holder=None):
         """
         Parse CPC serial messages.
@@ -175,14 +293,38 @@ class CPCWidget(ComplexDevice):
                 # Convert data to float (excluding status hex)
                 meas_list = list(map(float, data[:-1]))
 
-                # Compile data
-                compiled_data = compile_cpc_data(meas_list, status_hex, total_errors)
-                self.latest_data = compiled_data
+                # Update new data object (indices match firmware :MEAS:ALL response)
+                self.current_data.concentration = meas_list[0]
+                self.current_data.number_of_pulses = int(meas_list[1])
+                self.current_data.dead_time = meas_list[2]
+                # meas_list[3] = pulse_duration_firmware (not used, we calculate our own)
+                # meas_list[4] = unused
+                self.current_data.temp_saturator = meas_list[5]
+                self.current_data.temp_optics = meas_list[6]
+                self.current_data.temp_condenser = meas_list[7]
+                self.current_data.temp_cabin = meas_list[8]
+                self.current_data.pres_inlet = meas_list[9]
+                self.current_data.pres_critical_orifice = meas_list[10]
+                self.current_data.pres_nozzle = meas_list[11]
+                self.current_data.pres_cabin = meas_list[12]
+                self.current_data.laser_current = meas_list[13]
+                self.current_data.liquid_level = int(meas_list[14])
+                # Calculate pulse_duration and pulse_ratio (matches compile_cpc_data logic)
+                if str(meas_list[3]) == "nan":
+                    self.current_data.pulse_ratio = nan
+                elif meas_list[1] == 0:
+                    self.current_data.pulse_ratio = 0
+                else:
+                    self.current_data.pulse_ratio = round(meas_list[3]/meas_list[1], 2)
+                # pulse_duration is calculated later in plot_manager for pulse quality plot
+                self.current_data.pulse_duration = meas_list[3] if len(meas_list) > 3 else nan
+                self.current_data.status_hex = status_hex
+                self.current_data.total_errors = total_errors
 
                 return {
                     'type': 'data',
                     'command': command,
-                    'data': compiled_data,
+                    'data': self.current_data.to_array(),  # Use dataclass to_array() instead of compile_cpc_data
                     'status_hex': status_hex,
                     'total_errors': total_errors,
                     'raw': message,
@@ -192,6 +334,24 @@ class CPCWidget(ComplexDevice):
             # Handle :SYST:PRNT - settings data
             elif command == ":SYST:PRNT":
                 prnt_list = list(map(float, data))
+
+                # Update settings object
+                self.settings.mode = prnt_list[0]
+                self.settings.autofill = prnt_list[1]
+                self.settings.drain = prnt_list[2]
+                self.settings.flow_adjustment = prnt_list[3]
+                self.settings.water_removal = prnt_list[4]
+                self.settings.averaging_time = prnt_list[5]
+                self.settings.condenser_temp = prnt_list[6]
+                self.settings.spare1 = prnt_list[7]
+                self.settings.saturator_temp = prnt_list[8]
+                if len(prnt_list) > 9:
+                    self.settings.spare2 = prnt_list[9]
+                    self.settings.measured_cpc_flow = prnt_list[10]
+                    self.settings.spare4 = prnt_list[11]
+                    self.settings.dead_time_correction = prnt_list[12]
+                    self.settings.spare5 = nan if len(prnt_list) <= 13 else prnt_list[13]
+
                 return {
                     'type': 'settings',
                     'command': command,
@@ -205,6 +365,15 @@ class CPCWidget(ComplexDevice):
                 data[22] = "NaN"  # device id
                 data[23] = "NaN"  # firmware variant letter
                 pall_list = list(map(float, data))
+
+                # Update settings object with pall fields
+                self.settings.nominal_inlet_flow = pall_list[24]
+                self.settings.opc_threshold = pall_list[26]
+                self.settings.opc_threshold_2 = pall_list[27]
+                self.settings.k_factor = pall_list[20]
+                self.settings.tau = pall_list[25]
+                # measured_cpc_flow and dead_time_correction come from prnt
+
                 return {
                     'type': 'settings',
                     'command': command,

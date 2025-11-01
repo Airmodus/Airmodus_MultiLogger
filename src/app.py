@@ -39,8 +39,7 @@ from managers import (
     TimerService,
     DeviceManager,
     PlotManager,
-    DataLogger,
-    ErrorStatus
+    DataLogger
 )
 
 from serial_connection import SerialDeviceConnection
@@ -64,17 +63,20 @@ class MainWindow(QMainWindow):
 
         self._setup_parameter_tree()
         for child in self.params.child('Device settings').children():
-            self.device_added(self.params.child('Device settings'), child) 
+            self.device_added(self.params.child('Device settings'), child)
 
         self.device_manager = DeviceManager(self.params, self.data_holder, self.data_holder.device_widgets)
         self.device_manager.list_com_ports()
         self._setup_gui()
+
+        # Update device_manager with device_tabs reference after GUI setup
+        self.device_manager.device_tabs = self.device_tabs
+
         self.plot_manager = PlotManager(self, self.data_holder, self.main_plot)
         self.data_logger = DataLogger(self.data_holder, self.params)
         self._connect_signals()
-        self.error_status = ErrorStatus(self.data_holder, self.params, self.device_tabs)
 
-        self.timer_service = TimerService(self, self.data_holder, self.device_manager, self.plot_manager, self.data_logger, self.error_status)
+        self.timer_service = TimerService(self, self.data_holder, self.device_manager, self.plot_manager, self.data_logger)
         self.timer_service.start()
 
         # load ini file if available
@@ -347,207 +349,71 @@ class MainWindow(QMainWindow):
     # triggered when a new device is added to the parameter tree
     # sigChildAdded(self, param, child, index) - Emitted when a child (device) is added
     def device_added(self, param, child):
-        if param.name() == "Device settings": # check if detected parameter is a device
-            device_param = child # store device parameter
-            device_type = child.child("Device type").value() # store device type
-            device_id = child.child("DevID").value() # store device ID
-            device_port = child.child("COM port") # store COM port parameter
-            connection = device_param.child('Connection').value() # store connection class
+        """
+        Handle device addition to the application.
 
-            # connect serial number change to reset_device_filenames function
-            device_param.child("Serial number").sigValueChanged.connect(lambda: self.data_logger.reset_device_filenames(device_id))
-            # connect device nickname change to reset_device_filenames function
-            device_param.child("Device nickname").sigValueChanged.connect(lambda: self.data_logger.reset_device_filenames(device_id))
-            # connect device nickname change to rename_tab function
-            device_param.child("Device nickname").sigValueChanged.connect(lambda: self.rename_tab(device_param))
-            # connect device serial number change to rename_device function
-            device_param.child("Serial number").sigValueChanged.connect(lambda: self.rename_device(device_param))
-            # connect device serial number change to reset_device_filenames function
-            device_param.child("Serial number").sigValueChanged.connect(lambda: self.data_logger.reset_device_filenames(device_id))
-            # connect COM port change to SerialDeviceConnection's change_port function
-            if osx_mode:
-                device_port.sigValueChanged.connect(lambda: connection.change_port(str(device_port.value())))
-            else:
-                device_port.sigValueChanged.connect(lambda: connection.change_port('COM'+str(device_port.value())))
+        Creates the device widget and sets up signal/slot connections
+        using the device registry for a declarative, maintainable approach.
+        """
+        if param.name() != "Device settings":
+            return
 
-            # create new widget according to device type
-            if device_type == CPC: # if CPC
-                # create CPC widget instance
-                widget = CPCWidget(device_param)
-                # connect Set tab buttons to send_set function
-                widget.set_tab.drain.clicked.connect(lambda: connection.send_set(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
-                widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
-                widget.set_tab.water_removal.clicked.connect(lambda: connection.send_set(":SET:WREM " + str(int(widget.set_tab.water_removal.isChecked()))))
-                # connect command_input to comand_entered function
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.data_holder.device_widgets, self.data_holder.latest_command))
-                # connect Set tab set points to send_set_val function
-                # send set value and message using lambda once value has been changed
-                # stepChanged signal is defined in SpinBox and DoubleSpinBox classes
-                # https://stackoverflow.com/questions/47874952/qspinbox-signal-for-arrow-buttons
-                widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:SAT "))
-                widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_saturator_temp.value_input.text()), ":SET:TEMP:SAT "))
-                widget.set_tab.set_condenser_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:CON "))
-                widget.set_tab.set_condenser_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_condenser_temp.value_input.text()), ":SET:TEMP:CON "))
-                # averaging time: use integer formatting with times > 1 to preserve compatibility with older firmware
-                def send_averaging_time(value: float):
-                    output: float | int = value
-                    if value >= 1.0:
-                        output = round(value)
-                    connection.send_set_val(output, ":SET:TAVG ")
-                widget.set_tab.set_averaging_time.value_spinbox.stepChanged.connect(lambda value: send_averaging_time(value))
-                widget.set_tab.set_averaging_time.value_input.returnPressed.connect(lambda: send_averaging_time(float(widget.set_tab.set_averaging_time.value_input.text())))
-                # connect Pulse quality tab options to pulse_quality_update function
-                widget.pulse_quality.history_time_select.currentIndexChanged.connect(lambda: self.plot_manager.pulse_quality_update(device_id))
-                widget.pulse_quality.average_time_select.currentIndexChanged.connect(lambda: self.plot_manager.pulse_quality_update(device_id))
-                # connect pulse analysis start button to pulse_analysis_start function
-                widget.pulse_quality.start_analysis.clicked.connect(lambda: self.pulse_analysis_start(device_id, device_param))
-                # connect device nickname change to ScalableGroup's update_cpc_dict function
-                device_param.child("Device nickname").sigValueChanged.connect(param.update_cpc_dict)
+        from devices.registry import create_device_widget, setup_device_connections
 
-            if device_type in [PSM, PSM2]: # if PSM TODO optimize structure, remove repetition
-                # create PSM widget instance
-                widget = PSMWidget(device_param, device_type)
-                # connect Measure tab buttons to send_set function
-                widget.measure_tab.scan.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_scan()))
-                widget.measure_tab.step.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_step()))
-                widget.measure_tab.fixed.clicked.connect(lambda: connection.send_set(widget.measure_tab.compile_fixed()))
-                # connect ten_hz button to ten_hz_clicked function
-                widget.measure_tab.ten_hz.clicked.connect(lambda: ten_hz_clicked(device_param, widget))
-                # connect SetTab SetWidgets to send_set_val function and set settings update flag to True
-                # growth tube temperature set
-                widget.set_tab.set_growth_tube_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:GT "))
-                widget.set_tab.set_growth_tube_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                widget.set_tab.set_growth_tube_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_growth_tube_temp.value_input.text()), ":SET:TEMP:GT "))
-                widget.set_tab.set_growth_tube_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                # saturator temperature set
-                widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:SAT "))
-                widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_saturator_temp.value_input.text()), ":SET:TEMP:SAT "))
-                widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                # inlet temperature set
-                widget.set_tab.set_inlet_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:INL "))
-                widget.set_tab.set_inlet_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                widget.set_tab.set_inlet_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_inlet_temp.value_input.text()), ":SET:TEMP:INL "))
-                widget.set_tab.set_inlet_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                # heater temperature set
-                widget.set_tab.set_heater_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:PRE "))
-                widget.set_tab.set_heater_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                widget.set_tab.set_heater_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_heater_temp.value_input.text()), ":SET:TEMP:PRE "))
-                widget.set_tab.set_heater_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                # drainage temperature set
-                widget.set_tab.set_drainage_temp.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:TEMP:DRN "))
-                widget.set_tab.set_drainage_temp.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_drainage_temp.value_input.text()), ":SET:TEMP:DRN "))
-                widget.set_tab.set_drainage_temp.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                # cpc inlet flow set (send value to PSM)
-                #widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda value: connection.send_set_val(value, ":SET:FLOW:CPC "))
-                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda value: psm_flow_send(device_param, value))
-                widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                #widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: connection.send_set_val(float(widget.set_tab.set_cpc_inlet_flow.value_input.text()), ":SET:FLOW:CPC "))
-                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: psm_flow_send(device_param, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
-                widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                # cpc sample flow set (send value to connected CPC if it exists)
-                # TODO is psm_update required when setting cpc sample flow?
-                widget.set_tab.set_cpc_sample_flow.value_spinbox.stepChanged.connect(lambda value: cpc_flow_send(device_param, value))
-                widget.set_tab.set_cpc_sample_flow.value_input.returnPressed.connect(lambda: cpc_flow_send(device_param, float(widget.set_tab.set_cpc_sample_flow.value_input.text())))
-                # if device type is PSM, connect co flow set
-                if device_type == PSM:
-                    widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                    widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                    # set value to hidden 'CO flow' parameter in parameter tree
-                    widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(lambda value: device_param.child('CO flow').setValue(str(round(value, 3))))
-                    widget.set_tab.set_co_flow.value_input.returnPressed.connect(lambda: device_param.child('CO flow').setValue(widget.set_tab.set_co_flow.value_input.text()))
-                # connect command_input to command_entered and psm_update functions
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: command_entered(device_id, device_param, self.data_holder.device_widgets, self.data_holder.latest_command))
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: psm_update(device_id, self.data_holder.psm_settings_updates))
-                # connect liquid operations
-                widget.set_tab.autofill.clicked.connect(lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
-                #widget.set_tab.autofill.clicked.connect(lambda: self.psm_update(device_id, self.data_holder.psm_settings_updates))
-                widget.set_tab.drain.clicked.connect(lambda: connection.send_set(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
-                #widget.set_tab.drain.clicked.connect(lambda: self.psm_update(device_id, self.data_holder.psm_settings_updates))
-                widget.set_tab.drying.clicked.connect(lambda: connection.send_set(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
-                #widget.set_tab.drying.clicked.connect(lambda: self.psm_update(device_id, self.data_holder.psm_settings_updates))
+        # Extract device parameters
+        device_param = child
+        device_type = child.child("Device type").value()
+        device_id = child.child("DevID").value()
+        device_port = child.child("COM port")
+        connection = device_param.child('Connection').value()
 
-            if device_type == ELECTROMETER: # if ELECTROMETER
-                widget = ElectrometerWidget(device_param) # create ELECTROMETER widget instance
+        # Set up common signal connections for all devices
+        device_param.child("Serial number").sigValueChanged.connect(
+            lambda: self.data_logger.reset_device_filenames(device_id))
+        device_param.child("Device nickname").sigValueChanged.connect(
+            lambda: self.data_logger.reset_device_filenames(device_id))
+        device_param.child("Device nickname").sigValueChanged.connect(
+            lambda: self.rename_tab(device_param))
+        device_param.child("Serial number").sigValueChanged.connect(
+            lambda: self.rename_device(device_param))
 
-            if device_type == CO2_SENSOR: # if CO2
-                widget = CO2Widget(device_param) # create CO2 widget instance
-            
-            if device_type == RHTP: # if RHTP
-                widget = RHTPWidget(device_param) # create RHTP widget instance
-                # check if there are other RHTP devices and if so, set 'Plot to main' according to them
-                for dev in self.params.child('Device settings').children():
-                    if dev.child('Device type').value() == RHTP and dev.child('DevID').value() != device_id:
-                        # call rhtp_axis_changed() to change 'Plot to main' selection of new device
-                        # delay ensures change is made to updated "Plot to main" RHTP menu
-                        QTimer.singleShot(50, lambda: self.rhtp_axis_changed(dev.child('Plot to main').value()))
-                        break # break loop after first RHTP device is found
-                # connect device parameter's 'Plot to main' value change to rhtp_axis_changed()
-                # delay ensures connection is made from updated "Plot to main" RHTP menu
-                QTimer.singleShot(60, lambda: device_param.child("Plot to main").sigValueChanged.connect(lambda parameter: self.rhtp_axis_changed(parameter.value())))
-            
-            if device_type == AFM: # if AFM
-                widget = AFMWidget(device_param) # create AFM widget instance
-                # check if there are other AFM devices and if so, set 'Plot to main' according to them
-                for dev in self.params.child('Device settings').children():
-                    if dev.child('Device type').value() == AFM and dev.child('DevID').value() != device_id:
-                        # call afm_axis_changed() to change 'Plot to main' selection of new device
-                        # delay ensures change is made to updated "Plot to main" AFM menu
-                        QTimer.singleShot(50, lambda: self.afm_axis_changed(dev.child('Plot to main').value()))
-                        break
-                # connect device parameter's 'Plot to main' value change to afm_axis_changed()
-                # delay ensures connection is made from updated "Plot to main" AFM menu
-                QTimer.singleShot(60, lambda: device_param.child("Plot to main").sigValueChanged.connect(lambda parameter: self.afm_axis_changed(parameter.value())))
-            
-            if device_type == EDILUTER: # if eDiluter
-                widget = eDiluterWidget(device_param) # create eDiluter widget instance
-                # connect set_tab's mode buttons to send_set function
-                widget.set_tab.init.clicked.connect(lambda: connection.send_set("do set app.measurement.state INIT"))
-                widget.set_tab.warmup.clicked.connect(lambda: connection.send_set("do set app.measurement.state WARMUP"))
-                widget.set_tab.standby.clicked.connect(lambda: connection.send_set("do set app.measurement.state STANDBY"))
-                widget.set_tab.measurement.clicked.connect(lambda: connection.send_set("do set app.measurement.state MEASUREMENT"))
-                # connect dilution factor 1 buttons to send_set function
-                widget.set_tab.df_1.prev_button.clicked.connect(lambda: connection.send_set("do set dilution.1st.prev true"))
-                widget.set_tab.df_1.next_button.clicked.connect(lambda: connection.send_set("do set dilution.1st.next true"))
-                # connect dilution factor 2 buttons to send_set function
-                widget.set_tab.df_2.prev_button.clicked.connect(lambda: connection.send_set("do set dilution.2nd.prev true"))
-                widget.set_tab.df_2.next_button.clicked.connect(lambda: connection.send_set("do set dilution.2nd.next true"))
-                # connect command_input to command_entered function
-                widget.set_tab.command_widget.command_input.returnPressed.connect(lambda: self.command_entered(device_id, device_param, self.data_holder.device_widgets, self.data_holder.latest_command))
-            
-            if device_type == TSI_CPC: # if TSI CPC
-                # create TSI widget instance
-                widget = TSIWidget(device_param)
-                # add baud rate parameter
-                device_param.addChild({'name': 'Baud rate', 'type': 'int', 'value': 115200})
-                # connect baud rate parameter to connection's set_baud_rate function
-                device_param.child('Baud rate').sigValueChanged.connect(lambda: connection.set_baud_rate(device_param.child('Baud rate').value()))
-                # connect device nickname change to ScalableGroup's update_cpc_dict function
-                device_param.child("Device nickname").sigValueChanged.connect(param.update_cpc_dict)
-            
-            if device_type == EXAMPLE_DEVICE: # if Example device
-                widget = ExampleDeviceWidget(device_param) # create Example device widget instance
-            
-            # connect x range change of plot_tab's viewbox(es) to x_range_changed function (autoscale y)
-            if device_type == ELECTROMETER:
-                for plot in widget.plot_tab.plots:
-                    plot.getViewBox().sigXRangeChanged.connect(self.x_range_changed)
-            elif device_type in [RHTP, AFM]:
-                for viewbox in widget.plot_tab.viewboxes:
-                    viewbox.sigXRangeChanged.connect(self.x_range_changed)
-            else:
-                widget.plot_tab.viewbox.sigXRangeChanged.connect(self.x_range_changed)
+        # Connect COM port change to SerialDeviceConnection
+        if osx_mode:
+            device_port.sigValueChanged.connect(
+                lambda: connection.change_port(str(device_port.value())))
+        else:
+            device_port.sigValueChanged.connect(
+                lambda: connection.change_port('COM' + str(device_port.value())))
 
-            # add widget instance to data_holder.device_widgets dictionary with device ID as key
-            self.data_holder.device_widgets[device_id] = widget
-            # init data for this device with nan values
-            self.data_holder.reset_for_device(device_id, device_type)
-            self.data_holder.init_plot_data_for_device(device_id, device_type)
-            # add widget instance to tab widget
-            self.device_tabs.addTab(widget, widget.name)
-            # add device id to data_holder.device_errors dictionary
-            self.data_holder.device_errors[device_id] = False
+        # Create widget using device registry
+        try:
+            widget = create_device_widget(device_type, device_param)
+        except ValueError as e:
+            print(f"Error creating device widget: {e}")
+            return
+
+        # Set up device-specific connections using device registry
+        setup_device_connections(device_type, widget, device_param, connection, self)
+
+        # Connect viewbox x-range change for autoscale
+        from config import ELECTROMETER, RHTP, AFM
+        if device_type == ELECTROMETER:
+            for plot in widget.plot_tab.plots:
+                plot.getViewBox().sigXRangeChanged.connect(self.x_range_changed)
+        elif device_type in [RHTP, AFM]:
+            for viewbox in widget.plot_tab.viewboxes:
+                viewbox.sigXRangeChanged.connect(self.x_range_changed)
+        else:
+            widget.plot_tab.viewbox.sigXRangeChanged.connect(self.x_range_changed)
+
+        # Register widget and initialize data structures
+        self.data_holder.device_widgets[device_id] = widget
+        self.data_holder.reset_for_device(device_id, device_type)
+        self.data_holder.init_plot_data_for_device(device_id, device_type)
+
+        # Add widget to GUI and initialize error tracking
+        self.device_tabs.addTab(widget, widget.name)
+        self.data_holder.device_errors[device_id] = False
     
     # triggered when a device is removed from the parameter tree
     # sigChildRemoved(self, parent, child, index) - Emitted when a child (device) is removed

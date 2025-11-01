@@ -35,74 +35,90 @@ class PlotManager:
 
                         # if CPC is connected, calculate missing values
                         if cpc_device.child('Connected').value():
-                            cpc_data = self.data_holder.latest_data[cpc_id]
+                            # Get PSM widget and use direct device reference
+                            psm_widget = self.data_holder.device_widgets[psm_id]
+                            cpc_widget = psm_widget.connected_cpc_device
+                            if not cpc_widget:
+                                continue
+                            cpc_data = cpc_widget.current_data
 
                             # Inlet flow = (CPC flow + CO flow) - Saturator flow - Excess flow
 
-                            # get cpc flow rate from PSM latest_settings
-                            cpc_flow = float(self.data_holder.latest_settings[psm_id][5])
+                            # get cpc flow rate from PSM settings
+                            psm_settings = self.data_holder.get_device_settings(psm_id)
+                            cpc_flow = float(psm_settings.cpc_inlet_flow) if psm_settings else 0.0
+
+                            # Get PSM data
+                            psm_data = psm_widget.current_data
+
                             if dev_type == PSM:
                                 # get co flow rate from PSM widget
-                                co_flow = round(self.data_holder.device_widgets[psm_id].set_tab.set_co_flow.value_spinbox.value(), 3)
+                                co_flow = round(psm_widget.set_tab.set_co_flow.value_spinbox.value(), 3)
                                 if co_flow == 0: # if co flow is 0, not set by user
-                                    self.data_holder.device_widgets[psm_id].set_tab.set_co_flow.set_red_color() # set CO flow rate widget to red
+                                    psm_widget.set_tab.set_co_flow.set_red_color() # set CO flow rate widget to red
                                     self.data_holder.error_status = 1 # set data_holder.error_status flag to 1
                                 else:
-                                    self.data_holder.device_widgets[psm_id].set_tab.set_co_flow.set_default_color()
-                                inlet_flow = cpc_flow + co_flow - float(self.data_holder.latest_data[psm_id][2]) - float(self.data_holder.latest_data[psm_id][3])
+                                    psm_widget.set_tab.set_co_flow.set_default_color()
+                                inlet_flow = cpc_flow + co_flow - float(psm_data.saturator_flow) - float(psm_data.excess_flow)
                             
                             elif dev_type == PSM2:
-                                # get vacuum mfc flow rate from latest data
-                                vacuum_flow = float(self.data_holder.latest_data[psm_id][15])
+                                # get vacuum mfc flow rate from PSM data
+                                vacuum_flow = float(psm_data.vacuum_flow)
                                 # TODO vacuum flow GUI value is updated in PSMWidget's update_values, check if it works and remove line below
-                                #self.data_holder.device_widgets[psm_id].status_tab.flow_vacuum.change_value(str(round(vacuum_flow, 3)))
-                                inlet_flow = cpc_flow + vacuum_flow - float(self.data_holder.latest_data[psm_id][2]) - float(self.data_holder.latest_data[psm_id][3])
-                                inlet_flow0 = cpc_flow + vacuum_flow - 4 + float(self.data_holder.latest_data[psm_id][2]) + float(self.data_holder.latest_data[psm_id][3])
+                                #psm_widget.status_tab.flow_vacuum.change_value(str(round(vacuum_flow, 3)))
+                                inlet_flow = cpc_flow + vacuum_flow - float(psm_data.saturator_flow) - float(psm_data.excess_flow)
+                                inlet_flow0 = cpc_flow + vacuum_flow - 4 + float(psm_data.saturator_flow) + float(psm_data.excess_flow)
                             
-                            # store inlet flow into PSM latest_settings, rounded to 3 decimals
-                            self.data_holder.latest_settings[psm_id][6] = round(inlet_flow, 3)
+                            # store inlet flow into PSM settings, rounded to 3 decimals
+                            if psm_settings:
+                                psm_settings.inlet_flow_rate = round(inlet_flow, 3)
                             # show inlet flow in PSM widget
-                            self.data_holder.device_widgets[psm_id].status_tab.flow_inlet.change_value(str(round(inlet_flow, 3)))
+                            psm_widget.status_tab.flow_inlet.change_value(str(round(inlet_flow, 3)))
 
                             # if received polynomial correction is 0 (placeholder)
-                            if self.data_holder.latest_poly_correction[psm_id] == 0:
+                            if psm_data.poly_correction == 0:
                                 # calculate polynomial correction factor
                                 if dev_type == PSM:
                                     pcor = array([-0.0272052, 0.11394213, -0.08959011, -0.20675596, 0.24343024, 1.10531145])
                                 elif dev_type == PSM2:
                                     pcor = array([0.12949491, -0.50587616, 0.57214191, 0.76108161])
-                                poly_correction  = polyval(pcor, float(self.data_holder.latest_data[psm_id][2]))
+                                poly_correction  = polyval(pcor, float(psm_data.saturator_flow))
                             else: # if received polynomial correction is other than 0, use received value
-                                poly_correction = self.data_holder.latest_poly_correction[psm_id]
+                                poly_correction = psm_data.poly_correction
 
                             # calculate dilution correction factor
                             # Dilution ratio = (inlet flow + Excess flow + Saturator flow) / Inlet flow
-                            dilution_correction_factor = (inlet_flow + float(self.data_holder.latest_data[psm_id][3]) + float(self.data_holder.latest_data[psm_id][2])) / inlet_flow
+                            dilution_correction_factor = (inlet_flow + float(psm_data.excess_flow) + float(psm_data.saturator_flow)) / inlet_flow
                             if dev_type == PSM2:
-                                dilution_correction_factor = (inlet_flow + 4 - float(self.data_holder.latest_data[psm_id][3]) - float(self.data_holder.latest_data[psm_id][2])) / inlet_flow0
-                            
+                                dilution_correction_factor = (inlet_flow + 4 - float(psm_data.excess_flow) - float(psm_data.saturator_flow)) / inlet_flow0
+
                             # calculate concentration from PSM
                             # Concentration from PSM = CPC concentration * Dilution ratio / Polynomial correction
-                            concentration_from_psm = float(self.data_holder.latest_data[cpc_id][0]) * dilution_correction_factor / poly_correction
-                            # add to PSM latest_data
-                            self.data_holder.latest_data[psm_id][0] = round(concentration_from_psm, 2)
+                            concentration_from_psm = float(cpc_data.concentration) * dilution_correction_factor / poly_correction
+                            # Update PSM current_data
+                            psm_data.concentration_psm = round(concentration_from_psm, 2)
 
-                            # if Connected CPC is Airmodus CPC, add CPC data to PSM latest_data
+                            # if Connected CPC is Airmodus CPC, copy CPC data to PSM current_data
                             if cpc_device.child('Device type').value() == CPC:
-                                # compile connected CPC data
-                                connected_cpc_data = [
-                                    cpc_data[0], round(dilution_correction_factor, 3), # concentration,  dilution correction factor
-                                    cpc_data[3], cpc_data[4], cpc_data[5], cpc_data[6],# T: saturator, condenser, optics, cabin
-                                    cpc_data[8], cpc_data[9], cpc_data[7],# P: critical orifice, nozzle, absolute (inlet)
-                                    cpc_data[11], cpc_data[2], cpc_data[1],# liquid level, pulses, pulse duration
-                                    cpc_data[13], cpc_data[14] # number of errors, system status (hex)
-                                ]
-                                # replace PSM's latest_data CPC placeholders with connected CPC data
-                                self.data_holder.latest_data[psm_id][-16:-2] = connected_cpc_data # 14 values before status hex and note hex
-                            # if Connected device is TSI CPC, add concentration and dilution correction factor to PSM latest_data
+                                # Copy CPC data using named fields
+                                psm_data.cpc_concentration = cpc_data.concentration
+                                psm_data.cpc_dilution_correction = round(dilution_correction_factor, 3)
+                                psm_data.cpc_temp_sat = cpc_data.temp_saturator
+                                psm_data.cpc_temp_con = cpc_data.temp_condenser
+                                psm_data.cpc_temp_opt = cpc_data.temp_optics
+                                psm_data.cpc_temp_cab = cpc_data.temp_cabin
+                                psm_data.cpc_pres_crit = cpc_data.pres_critical_orifice
+                                psm_data.cpc_pres_noz = cpc_data.pres_nozzle
+                                psm_data.cpc_pres_in = cpc_data.pres_inlet
+                                psm_data.cpc_liquid = cpc_data.liquid_level
+                                psm_data.cpc_pulses = cpc_data.number_of_pulses
+                                psm_data.cpc_dead_time = cpc_data.dead_time
+                                psm_data.cpc_total_errors = cpc_data.total_errors
+                                psm_data.cpc_status_hex = cpc_data.status_hex
+                            # if Connected device is TSI CPC, add concentration and dilution correction factor
                             elif cpc_device.child('Device type').value() == TSI_CPC:
-                                self.data_holder.latest_data[psm_id][-16] = cpc_data[0] # concentration
-                                self.data_holder.latest_data[psm_id][-15] = round(dilution_correction_factor, 3) # dilution correction factor
+                                psm_data.cpc_concentration = cpc_data.concentration
+                                psm_data.cpc_dilution_correction = round(dilution_correction_factor, 3)
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -166,9 +182,11 @@ class PlotManager:
                         if dev_id in self.data_holder.pulse_analysis_index:
                             if self.data_holder.pulse_analysis_index[dev_id] is not None: # when index is None, analysis has reached its end
                                 try:
+                                    # Get device data
+                                    cpc_data = self.data_holder.get_device_data(dev_id)
                                     # calculate current pulse duration
-                                    dead_time = self.data_holder.latest_data[dev_id][1]
-                                    number_of_pulses = self.data_holder.latest_data[dev_id][2]
+                                    dead_time = cpc_data.dead_time
+                                    number_of_pulses = cpc_data.number_of_pulses
                                     if number_of_pulses == 0:
                                         pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
                                     else:
@@ -192,31 +210,35 @@ class PlotManager:
                                 if psm.child('Device type').value() in [PSM, PSM2] and psm.child('Connected').value():
                                     if psm.child('Connected CPC').value() == dev_id:
                                         # if PSM connection exists, add latest PSM concentration value to data_holder.plot_data
-                                        self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter] = self.data_holder.latest_data[psm.child('DevID').value()][0]
+                                        psm_data = self.data_holder.get_device_data(psm.child('DevID').value())
+                                        self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter] = psm_data.concentration_psm
                                         psm_connection = True
                                         break
                             # if not connected to PSM, add CPC concentration value to data_holder.plot_data
                             if psm_connection == False:
-                                self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][0]
+                                cpc_data = self.data_holder.get_device_data(dev_id)
+                                self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter] = cpc_data.concentration
                             # add raw concentration value to data_holder.plot_data
-                            self.data_holder.plot_data[str(dev_id)+':raw'][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][0]
+                            cpc_data = self.data_holder.get_device_data(dev_id)
+                            self.data_holder.plot_data[str(dev_id)+':raw'][self.data_holder.time_counter] = cpc_data.concentration
                             
                             # update pulse duration and pulse ratio lists
                             if dev.child('Device type').value() == CPC:
                                 try:
-                                    #print("concentration", self.latest_data[dev_id][0], "* sample flow", self.latest_settings[dev_id][2], "=", self.latest_data[dev_id][0] * self.latest_settings[dev_id][2])
+                                    cpc_data = self.data_holder.get_device_data(dev_id)
+                                    cpc_settings = self.data_holder.get_device_settings(dev_id)
                                     # check if (concentration * sample flow) is above 50 and below 5000 (valid)
-                                    check_value = self.data_holder.latest_data[dev_id][0] * self.data_holder.latest_settings[dev_id][2]
+                                    check_value = cpc_data.concentration * cpc_settings.measured_cpc_flow if cpc_settings else 0
                                     if check_value > 50 and check_value < 5000:
                                         # calculate pulse duration
-                                        if self.data_holder.latest_data[dev_id][2] == 0:
+                                        if cpc_data.number_of_pulses == 0:
                                             pulse_duration = nan # if number of pulses is 0, set pulse duration to nan
                                         else:
                                             # pulse duration = dead time * 1000 (micro to nano) / number of pulses
-                                            pulse_duration = round(self.data_holder.latest_data[dev_id][1] * 1000 / self.data_holder.latest_data[dev_id][2], 2)
+                                            pulse_duration = round(cpc_data.dead_time * 1000 / cpc_data.number_of_pulses, 2)
                                         # store pulse duration and pulse ratio values to data_holder.plot_data
                                         self.data_holder.plot_data[str(dev_id)+':pd'][-1] = pulse_duration
-                                        self.data_holder.plot_data[str(dev_id)+':pr'][-1] = self.data_holder.latest_data[dev_id][12]
+                                        self.data_holder.plot_data[str(dev_id)+':pr'][-1] = cpc_data.pulse_ratio
                                     else: # if concentration is outside range (invalid)
                                         # store nan values to data_holder.plot_data
                                         self.data_holder.plot_data[str(dev_id)+':pd'][-1] = nan
@@ -230,37 +252,44 @@ class PlotManager:
 
                     elif dev_type in [PSM, PSM2]: # PSM
                         # add latest saturator flow rate value to data_holder.time_counter index of data_holder.plot_data
-                        self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][2]
+                        psm_data = self.data_holder.get_device_data(dev_id)
+                        self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter] = psm_data.saturator_flow
                     elif dev_type == ELECTROMETER: # ELECTROMETER
                         # add latest voltage values to data_holder.time_counter index of data_holder.plot_data
-                        self.data_holder.plot_data[str(dev_id)+':1'][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][0]
-                        self.data_holder.plot_data[str(dev_id)+':2'][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][1]
-                        self.data_holder.plot_data[str(dev_id)+':3'][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][2]
+                        elec_data = self.data_holder.get_device_data(dev_id)
+                        self.data_holder.plot_data[str(dev_id)+':1'][self.data_holder.time_counter] = elec_data.voltage1
+                        self.data_holder.plot_data[str(dev_id)+':2'][self.data_holder.time_counter] = elec_data.voltage2
+                        self.data_holder.plot_data[str(dev_id)+':3'][self.data_holder.time_counter] = elec_data.voltage3
                     elif dev_type == CO2_SENSOR: # CO2 sensor
                         # add latest CO2 value to data_holder.time_counter index of data_holder.plot_data
-                        self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][0]
+                        co2_data = self.data_holder.get_device_data(dev_id)
+                        self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter] = co2_data.co2
                     elif dev_type == RHTP: # RHTP
                         # add latest values (RH, T, P) to data_holder.time_counter index of data_holder.plot_data
-                        self.data_holder.plot_data[str(dev_id)+':rh'][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][0]
-                        self.data_holder.plot_data[str(dev_id)+':t'][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][1]
-                        self.data_holder.plot_data[str(dev_id)+':p'][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][2]
+                        rhtp_data = self.data_holder.get_device_data(dev_id)
+                        self.data_holder.plot_data[str(dev_id)+':rh'][self.data_holder.time_counter] = rhtp_data.humidity
+                        self.data_holder.plot_data[str(dev_id)+':t'][self.data_holder.time_counter] = rhtp_data.temperature
+                        self.data_holder.plot_data[str(dev_id)+':p'][self.data_holder.time_counter] = rhtp_data.pressure
                     elif dev_type == AFM: # AFM
                         # add latest values (flow, RH, T, P) to data_holder.time_counter index of data_holder.plot_data
-                        self.data_holder.plot_data[str(dev_id)+':f'][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][0]
-                        self.data_holder.plot_data[str(dev_id)+':sf'][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][1]
-                        self.data_holder.plot_data[str(dev_id)+':rh'][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][2]
-                        self.data_holder.plot_data[str(dev_id)+':t'][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][3]
-                        self.data_holder.plot_data[str(dev_id)+':p'][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][4]
+                        afm_data = self.data_holder.get_device_data(dev_id)
+                        self.data_holder.plot_data[str(dev_id)+':f'][self.data_holder.time_counter] = afm_data.flow
+                        self.data_holder.plot_data[str(dev_id)+':sf'][self.data_holder.time_counter] = afm_data.saturator_flow
+                        self.data_holder.plot_data[str(dev_id)+':rh'][self.data_holder.time_counter] = afm_data.humidity
+                        self.data_holder.plot_data[str(dev_id)+':t'][self.data_holder.time_counter] = afm_data.temperature
+                        self.data_holder.plot_data[str(dev_id)+':p'][self.data_holder.time_counter] = afm_data.pressure
                     elif dev_type == EDILUTER: # eDiluter
                         # add latest T1 value to data_holder.time_counter index of data_holder.plot_data
-                        self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter] = self.data_holder.latest_data[dev_id][3]
+                        ediluter_data = self.data_holder.get_device_data(dev_id)
+                        self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter] = ediluter_data.temp1
                 if dev_type == -1: # Example device
                     # generate random value for plotting and logging
                     random_value = round(random.random() * 100, 2) # 0-100
                     # add random value to data_holder.time_counter index of data_holder.plot_data
                     self.data_holder.plot_data[str(dev_id)][self.data_holder.time_counter] = random_value
-                    # add random value to latest_data as list object
-                    self.data_holder.latest_data[dev_id] = [random_value]
+                    # Update example device current_data
+                    example_data = self.data_holder.get_device_data(dev_id)
+                    example_data.random_value = random_value
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -432,16 +461,20 @@ class PlotManager:
                                 break
                         # if connected CPC is Airmodus CPC, check if connected CPC sample flow has changed
                         if cpc_device.child('Device type').value() == CPC:
-                            cpc_sample_flow = float(self.data_holder.latest_settings[cpc_id][2])
+                            cpc_settings = self.data_holder.get_device_settings(cpc_id)
+                            cpc_sample_flow = float(cpc_settings.measured_cpc_flow) if cpc_settings else 0.0
                             # if CPC sample flow is different from value displayed in Set tab, update displayed value
                             if self.data_holder.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.value() != cpc_sample_flow:
                                 self.data_holder.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.setValue(cpc_sample_flow)
                         
                         # if CPC inlet flow is different from value displayed in Status tab, update displayed value
-                        if self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != str(self.data_holder.latest_settings[dev_id][5]) + " lpm":
-                            # set status_tab flow_cpc color to normal and change text
-                            self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_color(0)
-                            self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_value(str(self.data_holder.latest_settings[dev_id][5]) + " lpm")
+                        psm_settings = self.data_holder.get_device_settings(dev_id)
+                        if psm_settings:
+                            cpc_flow_str = str(psm_settings.cpc_inlet_flow) + " lpm"
+                            if self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != cpc_flow_str:
+                                # set status_tab flow_cpc color to normal and change text
+                                self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_color(0)
+                                self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_value(cpc_flow_str)
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -521,7 +554,9 @@ class PlotManager:
             sliced_pr = self.data_holder.plot_data[str(device_id) + ':pr'][-1:-1 * (draw_limit_s + 1):-1 * draw_limit_h]
             widget.data_points.setData(sliced_pd, sliced_pr)
 
-            check_value = self.data_holder.latest_data[device_id][0] * self.data_holder.latest_settings[device_id][2]
+            cpc_data = self.data_holder.get_device_data(device_id)
+            cpc_settings = self.data_holder.get_device_settings(device_id)
+            check_value = cpc_data.concentration * cpc_settings.measured_cpc_flow if cpc_settings else 0
             if 50 < check_value < 5000:
                 widget.current_point.setData(x=[self.data_holder.plot_data[str(device_id) + ':pd'][-1]], y=[self.data_holder.plot_data[str(device_id) + ':pr'][-1]])
                 widget.current_duration.setText(str(round(self.data_holder.plot_data[str(device_id) + ':pd'][-1], 3)))

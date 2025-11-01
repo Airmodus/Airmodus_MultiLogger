@@ -2,26 +2,6 @@ from numpy import full, nan, roll
 from config import MAX_TIME_SEC, CPC, PSM, PSM2
 from params import p  # For accessing params in some helpers if needed
 
-# compile data list for CPC .dat file
-def compile_cpc_data(meas, status_hex, total_errors):
-    # determine pulse ratio
-    if str(meas[3]) == "nan":
-        pulse_ratio = "nan"
-    elif meas[1] == 0:
-        pulse_ratio = 0
-    else:
-        pulse_ratio = round(meas[3]/meas[1], 2) # calculate and round to 2 decimals
-
-    cpc_data = [ # TODO nominal flow concentration
-        meas[0], meas[2], meas[1], # concentration, dead time, number of pulses during average
-        meas[5], meas[7], meas[6], meas[8], # T: saturator, condenser, optics, cabin
-        meas[9], meas[10], meas[11], meas[12], # P: inlet, critical orifice, nozzle, cabin
-        int(meas[14]), pulse_ratio, # liquid level, pulse ratio
-        total_errors, status_hex # total number of errors, hexadecimal system status
-        # TODO add OPC voltage level when added to firmware
-    ]
-    return cpc_data
-
 # compile settings list for CPC .par file
 def compile_cpc_settings(prnt, pall):
     cpc_settings = [
@@ -32,37 +12,6 @@ def compile_cpc_settings(prnt, pall):
         # TODO add Firmware version
     ]
     return cpc_settings
-
-# compile data list for PSM .dat file
-def compile_psm_data(meas, status_hex, note_hex, scan_status, psm_version):
-    # determine PSM status
-    if int(status_hex, 16) == 0:
-        psm_status = 1
-    else:
-        psm_status = 0
-    # determine PSM note
-    if int(note_hex, 16) == 0:
-        psm_note = 1
-    else:
-        psm_note = 0
-
-    # concentration form PSM is calculated and stored later in write_data
-    # cut-off diameter is left with a "nan" placeholder for now
-    psm_data = [
-        "nan", "nan", meas[0], meas[1], # concentration from PSM, cut-off diameter, saturator flow rate, excess flow rate
-        meas[3], meas[2], meas[4], meas[6], meas[5], meas[7], # psm saturator t, growth tube t, inlet t, drainage t, heater t, psm cabin t
-        meas[9], meas[10], meas[11], meas[12], # inlet p, inlet-sat p, sat-excess p, critical orifice p,
-        scan_status, # scan status number (9 if undefined)
-        psm_status, psm_note, # PSM status (1 ok / 0 nok), PSM notes (1 ok / 0 notes)
-        # CPC nan placeholders, replaced later if CPC is connected
-        "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan", "nan",
-        status_hex, note_hex # PSM status (hex), PSM notes (hex)
-    ]
-    # if PSM 2.0, insert vacuum flow rate (before PSM status number)
-    if psm_version == PSM2:
-        psm_data.insert(15, meas[13]) # vacuum flow rate
-
-    return psm_data
 
 # compile settings list for PSM .par file
 def compile_psm_settings(prnt, co_flow, dilution_parameters, psm_version):
@@ -170,7 +119,7 @@ def command_entered(dev_id, dev_param, device_widgets, latest_command):
 
 
 __all__ = [
-    'compile_cpc_data', 'compile_cpc_settings', 'compile_psm_data', 'compile_psm_settings',
+    'compile_cpc_settings', 'compile_psm_settings',
     '_manage_plot_array', '_roll_pulse_array', 'psm_update', 'psm_flow_send', 'cpc_flow_send',
     'ten_hz_clicked', 'command_entered'
 ]

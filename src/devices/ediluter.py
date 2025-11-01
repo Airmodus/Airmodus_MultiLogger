@@ -6,6 +6,7 @@ from plots.device_plots import SinglePlot
 from widgets import StartButton, IndicatorWidget, CommandWidget
 from config import EDILUTER
 from devices.base_device import ComplexDevice
+from devices.device_data import EDiluterData
 
 # eDiluter widget
 class eDiluterWidget(ComplexDevice):
@@ -58,6 +59,98 @@ class eDiluterWidget(ComplexDevice):
         """eDiluter auto-pushes data, no read command needed."""
         return None
 
+    def process_parsed_messages(self, parsed_messages, device_param, data_holder):
+        """
+        Process eDiluter messages with buffering and GUI updates.
+        """
+        import logging
+
+        result = {
+            'data_updated': False,
+            'settings_updated': False,
+            'needs_gui_update': False
+        }
+
+        data_received = False
+
+        # Check for extra data from last round
+        if self.dev_id in data_holder.extra_data:
+            # Extra data exists - will be processed below
+            del data_holder.extra_data[self.dev_id]
+
+        # Process each parsed message
+        for parsed in parsed_messages:
+            if parsed['type'] == 'data':
+                if data_received:
+                    # Buffer extra data for next update cycle
+                    data_holder.extra_data[self.dev_id] = parsed['data']
+                else:
+                    # First data - already stored in current_data by parse_message
+                    data_received = True
+                    result['data_updated'] = True
+
+            elif parsed['type'] == 'error' and parsed['command'] == 'auto-push':
+                # Incomplete message
+                print("readIndata - " + parsed.get('error', 'eDiluter error'))
+                logging.error(parsed.get('error', 'eDiluter error'))
+
+            # Show messages in command widget if requested
+            if parsed.get('show_in_command_widget', False):
+                self.set_tab.command_widget.update_text_box(parsed['raw'])
+
+        # Update eDiluter status tab
+        if result['data_updated']:
+            self.update_values(self.current_data.to_array())
+            result['needs_gui_update'] = True
+
+        return result
+
+    def handle_serial_data(self, connection, data_holder=None):
+        """
+        Handle eDiluter serial data with partial message buffering.
+
+        eDiluter messages can be split across multiple reads.
+        """
+        results = []
+        try:
+            raw_data = connection.connection.read_all()
+            if not raw_data:
+                return results
+
+            # Decode and split by \r
+            messages = raw_data.decode().split("\r")
+
+            # Handle partial message from previous read
+            if self.dev_id in data_holder.partial_data:
+                messages[0] = data_holder.partial_data[self.dev_id] + messages[0]
+                del data_holder.partial_data[self.dev_id]
+
+            # Check if last message is complete (ends with \r)
+            if messages[-1] == "":
+                messages = messages[:-1]  # Complete, remove empty element
+            else:
+                # Incomplete, save for next read
+                data_holder.partial_data[self.dev_id] = messages[-1]
+                messages = messages[:-1]
+
+            # Parse each complete message
+            for message in messages:
+                if message:
+                    parsed = self.parse_message(message, data_holder)
+                    results.append(parsed)
+
+        except Exception as e:
+            results.append({
+                'type': 'error',
+                'command': 'serial_read',
+                'data': None,
+                'error': str(e),
+                'raw': '',
+                'update_gui': False
+            })
+
+        return results
+
     def update_errors(self, status_hex, *args):
         """eDiluter doesn't have error monitoring via status hex."""
         return 0
@@ -88,7 +181,21 @@ class eDiluterWidget(ComplexDevice):
                         # Split and strip whitespace
                         data = [i.strip() for i in data.split(",")]
 
-                        self.latest_data = data
+                        # Update data object
+                        self.current_data.status = data[0]
+                        self.current_data.pres1 = float(data[1])
+                        self.current_data.pres2 = float(data[2])
+                        self.current_data.temp1 = float(data[3])
+                        self.current_data.temp2 = float(data[4])
+                        self.current_data.temp3 = float(data[5])
+                        self.current_data.temp4 = float(data[6])
+                        self.current_data.temp5 = float(data[7])
+                        self.current_data.temp6 = float(data[8])
+                        self.current_data.df1 = float(data[9])
+                        self.current_data.df2 = float(data[10])
+                        self.current_data.df_total = float(data[11])
+
+                        # Data stored in self.current_data by base class
 
                         return {
                             'type': 'data',
