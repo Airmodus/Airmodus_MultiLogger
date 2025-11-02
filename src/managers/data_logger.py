@@ -3,7 +3,7 @@ from datetime import datetime as dt
 import logging
 import traceback
 from numpy import isnan, nan
-from config import osx_mode, TSI_CPC, CPC, PSM, PSM2, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, PULSE_ANALYSIS_THRESHOLDS
+from config import osx_mode, TSI_CPC, EXAMPLE_DEVICE, PULSE_ANALYSIS_THRESHOLDS
 
 class DataLogger:
     def __init__(self, data_holder, params):
@@ -69,6 +69,88 @@ class DataLogger:
                     # update start day
                     self.data_holder.start_day = current_day
 
+    def _create_data_file(self, dev, dev_id, timestamp, file_extension):
+        """
+        Create a new data file (.dat, .par, etc.) for a device.
+
+        Returns:
+            str: The filename (with path separator but without full path)
+        """
+        # format timestamp for filename
+        timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
+
+        # get serial number from device settings
+        serial_number = dev.child('Serial number').value()
+        if serial_number != "":
+            serial_number = '_' + serial_number
+
+        # get device type from device settings
+        device_type = dev.child('Device type').value()  # device type number
+        device_type_name = self.data_holder.device_names[device_type]  # device type name
+
+        # get device nickname from device settings
+        device_nickname = dev.child('Device nickname').value()
+        if device_nickname != "":
+            device_nickname = '_' + device_nickname
+
+        # get file tag from data settings
+        file_tag = self.params.child('Data settings').child('File tag').value()
+        if file_tag != "":
+            file_tag = '_' + file_tag
+
+        # compile filename
+        if osx_mode:
+            filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.' + file_extension
+        else:
+            filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.' + file_extension
+
+        # create empty file
+        with open(self.data_holder.file_path + filename, "w", encoding='UTF-8'):
+            pass
+
+        return filename
+
+    def _create_10hz_file(self, dev, dev_id, timestamp):
+        """
+        Create a 10Hz CSV file for CPC devices.
+
+        Returns:
+            str: The filename (with path separator but without full path)
+        """
+        # format timestamp for filename
+        timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
+
+        # get serial number from device settings
+        serial_number = dev.child('Serial number').value()
+        if serial_number != "":
+            serial_number = '_' + serial_number
+
+        # get device type from device settings
+        device_type = dev.child('Device type').value()
+        device_type_name = self.data_holder.device_names[device_type]
+
+        # get device nickname from device settings
+        device_nickname = dev.child('Device nickname').value()
+        if device_nickname != "":
+            device_nickname = '_' + device_nickname
+
+        # get file tag from data settings
+        file_tag = self.params.child('Data settings').child('File tag').value()
+        if file_tag != "":
+            file_tag = '_' + file_tag
+
+        # compile filename with _10hz suffix
+        if osx_mode:
+            filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
+        else:
+            filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
+
+        # create file and write header
+        with open(self.data_holder.file_path + filename, "w", encoding='UTF-8') as file:
+            file.write('YYYY.MM.DD hh:mm:ss,Concentration 1 (#/cc),Concentration 2 (#/cc),Concentration 3 (#/cc),Concentration 4 (#/cc),Concentration 5 (#/cc),Concentration 6 (#/cc),Concentration 7 (#/cc),Concentration 8 (#/cc),Concentration 9 (#/cc),Concentration 10 (#/cc)')
+
+        return filename
+
     def write_data(self):
         """Write data to file(s)."""
         # if saving is on
@@ -89,248 +171,86 @@ class DataLogger:
                     try:
                         # store device id to variable for clarity
                         dev_id = dev.child('DevID').value()
-                        # if device is not yet in data_holder.dat_filenames dict, create .dat file and add filename to dict
+
+                        # Get device widget and verify it has data_writer
+                        device_widget = self.data_holder.get_device(dev_id)
+                        if not device_widget or not hasattr(device_widget, 'data_writer'):
+                            continue
+
+                        data_writer = device_widget.data_writer
+
+                        # if device is not yet in data_holder.dat_filenames dict, create files
                         if dev_id not in self.data_holder.dat_filenames:
-                            # format timestamp for filename
-                            timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
-                            # get serial number from device settings
-                            serial_number = dev.child('Serial number').value()
-                            # if serial number is not empty, add underscore to beginning
-                            if serial_number != "":
-                                serial_number = '_' + serial_number
-                            # get device type from device settings
-                            device_type = dev.child('Device type').value() # device type number
-                            device_type_name = self.data_holder.device_names[device_type] # device type name
-                            # get device nickname from device settings
-                            device_nickname = dev.child('Device nickname').value()
-                            # if nickname is not empty, add underscore to beginning
-                            if device_nickname != "":
-                                device_nickname = '_' + device_nickname
-                            # get file tag from data settings
-                            file_tag = self.params.child('Data settings').child('File tag').value()
-                            # if file tag is not empty, add underscore to beginning
-                            if file_tag != "":
-                                file_tag = '_' + file_tag
-                            # compile filename and add to data_holder.dat_filenames
-                            if osx_mode:
-                                filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.dat'
-                            else:
-                                filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.dat'
+                            # Create .dat file
+                            filename = self._create_data_file(dev, dev_id, timestamp, 'dat')
                             self.data_holder.dat_filenames[dev_id] = filename
-                            with open(self.data_holder.file_path + filename ,"w",encoding='UTF-8'):
-                                pass
-                           
-                            # if CPC or PSM, create .par file and add filename to data_holder.par_filenames
-                            if dev.child('Device type').value() in [CPC, PSM, PSM2]:
-                                if osx_mode:
-                                    filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.par'
-                                else:
-                                    filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.par'
+
+                            # Create .par file if device writes .par files
+                            if 'par' in data_writer.get_file_types():
+                                filename = self._create_data_file(dev, dev_id, timestamp, 'par')
                                 self.data_holder.par_filenames[dev_id] = filename
-                                with open(self.data_holder.file_path + filename ,"w",encoding='UTF-8'):
-                                    pass
-                                self.data_holder.par_updates[dev.child('DevID').value()] = 1 # set .par update flag, ensuring new .par file is updated at start
-                       
-                        # check if device is Airmodus CPC and 10hz parameter is on
-                        if dev.child('Device type').value() == CPC and dev.child('10 hz').value():
-                            # if device is not in data_holder.ten_hz_filenames dict, create .csv file and add filename to data_holder.ten_hz_filenames
+                                self.data_holder.par_updates[dev_id] = 1  # set .par update flag
+
+                        # Check if device needs special files (e.g., 10Hz logging)
+                        if data_writer.has_special_files(dev):
                             if dev_id not in self.data_holder.ten_hz_filenames:
-                                # format timestamp for filename
-                                timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
-                                # get serial number from device settings
-                                serial_number = dev.child('Serial number').value()
-                                # if serial number is not empty, add underscore to beginning
-                                if serial_number != "":
-                                    serial_number = '_' + serial_number
-                                # get device type from device settings
-                                device_type = dev.child('Device type').value() # device type number
-                                device_type_name = self.data_holder.device_names[device_type] # device type name
-                                # get device nickname from device settings
-                                device_nickname = dev.child('Device nickname').value()
-                                # if nickname is not empty, add underscore to beginning
-                                if device_nickname != "":
-                                    device_nickname = '_' + device_nickname
-                                # get file tag from data settings
-                                file_tag = self.params.child('Data settings').child('File tag').value()
-                                # if file tag is not empty, add underscore to beginning
-                                if file_tag != "":
-                                    file_tag = '_' + file_tag
-                                # compile filename and add to data_holder.ten_hz_filenames
-                                if osx_mode:
-                                    filename = '/' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
-                                else:
-                                    filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
+                                filename = self._create_10hz_file(dev, dev_id, timestamp)
                                 self.data_holder.ten_hz_filenames[dev_id] = filename
-                                # create file and write header
-                                with open(self.data_holder.file_path + filename ,"w",encoding='UTF-8') as file:
-                                    # write header
-                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration 1 (#/cc),Concentration 2 (#/cc),Concentration 3 (#/cc),Concentration 4 (#/cc),Concentration 5 (#/cc),Concentration 6 (#/cc),Concentration 7 (#/cc),Concentration 8 (#/cc),Concentration 9 (#/cc),Concentration 10 (#/cc)')
                            
-                        # get filename from dictionary and add path to front
+                        # Write .dat file
                         filename = self.data_holder.file_path + self.data_holder.dat_filenames[dev_id]
-                       
-                        # Check the type and length of header
+
+                        # Check if header exists
                         with open(filename, 'r', encoding='UTF-8') as file:
                             file.seek(0)
                             header_row1 = file.readline()
-                            header_len = len(header_row1)
-                            # At the moment only check is a header exists
-                            if header_len == 0:
-                                write_headers = 1
-                            else:
-                                write_headers = 0
-                        # append file with new data
+                            write_headers = len(header_row1) == 0
+
+                        # Append file with new data
                         with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
-                            # write headers if they don't exist
-                            if write_headers == 1:
-                                if dev.child('Device type').value() == CPC: # CPC
-                                    # TODO complete CPC headers, check if ok
-                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration (#/cc),Dead time (µs),Number of pulses,Saturator T (C),Condenser T (C),Optics T (C),Cabin T (C),Inlet P (kPa),Critical orifice P (kPa),Nozzle P (kPa),Cabin P (kPa),Liquid level,Pulse ratio,Total CPC errors,System status error')
-                                elif dev.child('Device type').value() == PSM: # PSM
-                                    # TODO check if PSM headers are ok
-                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)')
-                                elif dev.child('Device type').value() == PSM2: # PSM 2.0
-                                    # TODO check if correct
-                                    file.write('YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,Vacuum flow (lpm),PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)')
-                                elif dev.child('Device type').value() == ELECTROMETER: # ELECTROMETER
-                                    file.write('YYYY.MM.DD hh:mm:ss,Voltage 1 (V),Voltage 2 (V),Voltage 3 (V)')
-                                elif dev.child('Device type').value() == CO2_SENSOR: # CO2
-                                    file.write('YYYY.MM.DD hh:mm:ss,CO2 (ppm),T (C),RH (%)')
-                                elif dev.child('Device type').value() == RHTP: # RHTP
-                                    file.write('YYYY.MM.DD hh:mm:ss,RH (%),T (C),P (Pa)')
-                                elif dev.child('Device type').value() == AFM: # AFM
-                                    file.write('YYYY.MM.DD hh:mm:ss,Flow (lpm),Standard flow (slpm),RH (%),T (C),P (Pa)')
-                                elif dev.child('Device type').value() == EDILUTER: # eDiluter
-                                    file.write('YYYY.MM.DD hh:mm:ss,Status,P1,P2,T1,T2,T3,T4,T5,T6,DF1,DF2,DFTot')
-                                elif dev.child('Device type').value() == EXAMPLE_DEVICE:
-                                    file.write('YYYY.MM.DD hh:mm:ss,Random value (0-100)')
-                                else:
-                                    file.write('YYYY.MM.DD hh:mm:ss,value1,value2,value3')
-                           
+                            # Write header if it doesn't exist
+                            if write_headers:
+                                file.write(data_writer.get_dat_header())
+
                             # Write the actual data
-                            file.write("\n") # create new line
-                            file.write(timeStampStr+',') # add timestamp
-                            # convert data to string using typed dataclass to_array()
-                            device_data = self.data_holder.get_device_data(dev_id)
-                            write_data = ','.join(str(vals) for vals in device_data.to_array())
-                            # write data
+                            file.write("\n")
+                            file.write(timeStampStr + ',')
+                            # Get data from data_writer
+                            write_data = data_writer.get_dat_data(dev, self.data_holder, timeStampStr)
                             file.write(write_data)
                        
-                        # if CPC or PSM, append .par file with new settings
-                        if dev.child('Device type').value() in [CPC, PSM, PSM2]:
-                            # get filename from dictionary and add path to front
+                        # Write .par file if device has one and should be updated
+                        if 'par' in data_writer.get_file_types() and data_writer.should_write_par(dev, self.data_holder):
+                            # Get filename from dictionary and add path to front
                             filename = self.data_holder.file_path + self.data_holder.par_filenames[dev_id]
-                            # Check the type and length of header
+
+                            # Check if header exists
                             with open(filename, 'r', encoding='UTF-8') as file:
                                 file.seek(0)
                                 header_row1 = file.readline()
-                                header_len = len(header_row1)
-                                # At the moment only check is a header exists
-                                if header_len == 0:
-                                    write_headers = 1
-                                else:
-                                    write_headers = 0
-                       
-                            # append file with new data
+                                write_headers = len(header_row1) == 0
+
+                            # Append file with new data
                             with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
-                                # write headers if they don't exist
-                                if write_headers == 1:
-                                    if dev.child('Device type').value() == CPC: # CPC
-                                        file.write('YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau,Command input')
-                                    elif dev.child('Device type').value() == PSM: # PSM
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
-                                    elif dev.child('Device type').value() == PSM2: # PSM2
-                                        file.write('YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input')
-                               
-                                # reset local update_par flag
-                                update_par = 0
-                                # if device's .par update flag is set, write data
-                                if self.data_holder.par_updates[dev_id] == 1:
-                                    update_par = 1
-                               
-                                # else if a command has been entered, write data
-                                elif dev_id in self.data_holder.latest_command:
-                                    update_par = 1
-                               
-                                # else check if device is PSM and if there are changes in connected CPC
-                                elif dev.child('Device type').value() in [PSM, PSM2]:
-                                    # check if Connected CPC parameter has been changed
-                                    if dev.cpc_changed == True: # check device's cpc_changed flag
-                                        update_par = 1
-                                        dev.cpc_changed = False # reset cpc_changed flag
-                                    # else check if connected CPC is not 'None'
-                                    elif dev.child('Connected CPC').value() != 'None':
-                                        # check if connected CPC is in par_updates dictionary and its .par update flag is set
-                                        if dev.child('Connected CPC').value() in self.data_holder.par_updates and self.data_holder.par_updates[dev.child('Connected CPC').value()] == 1:
-                                            update_par = 1
-                               
-                                # if update_par flag is set
-                                if update_par == 1:
-                                    file.write("\n")
-                                    # Add timestamp
-                                    file.write(timeStampStr+',')
-                                    # Convert data to string from device settings dataclass
-                                    device_settings = self.data_holder.get_device_settings(dev_id)
-                                    write_data = ','.join(str(vals) for vals in device_settings.to_array()) if device_settings else ''
+                                # Write header if it doesn't exist
+                                if write_headers:
+                                    file.write(data_writer.get_par_header())
+
+                                # Write settings data
+                                file.write("\n")
+                                file.write(timeStampStr + ',')
+                                write_data = data_writer.get_par_data(dev, self.data_holder, timeStampStr)
+                                if write_data:
                                     file.write(write_data)
-                                    # if device type is PSM
-                                    if dev.child('Device type').value() in [PSM, PSM2]: # if PSM
-                                        # get connected CPC ID
-                                        cpc_id = dev.child('Connected CPC').value()
-                                        # if connected CPC is not 'None'
-                                        if cpc_id != 'None':
-                                            # get connected CPC device parameter
-                                            for cpc in self.params.child('Device settings').children():
-                                                if cpc.child('DevID').value() == cpc_id:
-                                                    cpc_device = cpc
-                                                    break
-                                            # if CPC is connected Airmodus CPC, write connected CPC settings
-                                            if cpc_device.child('Connected').value() and cpc_device.child('Device type').value() == CPC:
-                                                cpc_idn = cpc_device.child('Serial number').value()
-                                                cpc_settings = self.data_holder.get_device_settings(cpc_id)
-                                                file.write(',') # separate PSM and CPC settings with comma
-                                                # compile connected CPC settings from typed dataclass
-                                                if cpc_settings:
-                                                    connected_cpc_settings = [
-                                                        cpc_idn, # connected CPC serial number (IDN)
-                                                        cpc_settings.autofill, cpc_settings.drain, cpc_settings.water_removal, # autofill, drain, water removal
-                                                        cpc_settings.saturator_temp, cpc_settings.condenser_temp, cpc_settings.spare1, # T set: saturator, condenser, optics
-                                                        cpc_settings.measured_cpc_flow, cpc_settings.averaging_time # inlet flow rate (measured), aveaging time
-                                                    ]
-                                                else:
-                                                    connected_cpc_settings = []
-                                                # write connected CPC settings
-                                                write_data = ','.join(str(vals) for vals in connected_cpc_settings)
-                                                file.write(write_data)
-                                           
-                                            else: # if CPC is not connected or not Airmodus CPC, write nan values
-                                                file.write(',nan,nan,nan,nan,nan,nan,nan,nan,nan')
-                                       
-                                        else: # if no connected CPC selected, write nan values
-                                            file.write(',nan,nan,nan,nan,nan,nan,nan,nan,nan')
-                                       
-                                    # check if device has latest command
-                                    device_widget = self.data_holder.get_device(dev_id)
-                                    if device_widget and device_widget.latest_command is not None:
-                                        # write latest command to file and clear from device
-                                        file.write(',' + device_widget.latest_command)
-                                        device_widget.latest_command = None
+
+                            # Reset par_updates flag after writing
+                            if dev_id in self.data_holder.par_updates:
+                                self.data_holder.par_updates[dev_id] = 0
                        
-                        # check if device is Airmodus CPC and 10hz parameter is on
-                        if dev.child('Device type').value() == CPC and dev.child('10 hz').value():
-                            # Get device widget to access ten_hz_data
-                            device_widget = self.data_holder.get_device(dev_id)
-                            if device_widget and hasattr(device_widget, 'ten_hz_data'):
-                                # get filename from dictionary and add path to front
-                                filename = self.data_holder.file_path + self.data_holder.ten_hz_filenames[dev_id]
-                                # append file with new data
-                                with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
-                                    file.write("\n")
-                                    # Add timestamp
-                                    file.write(timeStampStr+',')
-                                    # Convert data to string
-                                    write_data = ','.join(str(vals) for vals in device_widget.ten_hz_data)
-                                    file.write(write_data)
+                        # Write special files if device needs them (e.g., 10Hz)
+                        if data_writer.has_special_files(dev):
+                            data_writer.write_special_files(dev, self.data_holder, timeStampStr,
+                                                           self.data_holder.ten_hz_filenames)
                     # if saving fails, set saving status to 0
                     except Exception as e:
                         print(traceback.format_exc())

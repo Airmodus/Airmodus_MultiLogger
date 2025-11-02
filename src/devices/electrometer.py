@@ -4,6 +4,7 @@ from config import ELECTROMETER
 from devices.base_device import SimpleDevice
 from devices.device_data import ElectrometerData
 from plotting.device_plot_configs import ElectrometerPlotConfig
+from devices.data_writers import ElectrometerDataWriter
 
 # ELECTROMETER widget
 class ElectrometerWidget(SimpleDevice):
@@ -15,6 +16,8 @@ class ElectrometerWidget(SimpleDevice):
 
         # Plot configuration (composition over inheritance)
         self.plot_config = ElectrometerPlotConfig(self)
+        # Data writer configuration (composition over inheritance)
+        self.data_writer = ElectrometerDataWriter(self)
 
     def get_plot_keys(self):
         """Electrometer has three voltage channels."""

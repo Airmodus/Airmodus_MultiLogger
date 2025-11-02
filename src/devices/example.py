@@ -2,6 +2,7 @@ from plots.device_plots import SinglePlot
 from config import EXAMPLE_DEVICE
 from devices.base_device import SimpleDevice, DefaultSinglePlotConfig
 from devices.registry import register_device
+from devices.data_writers import ExampleDataWriter
 
 # Example device widget - demonstrates minimal device pattern
 @register_device(EXAMPLE_DEVICE)
@@ -15,6 +16,8 @@ class ExampleDeviceWidget(SimpleDevice):
 
         # Use default plot configuration (auto-plots first value from current_data)
         self.plot_config = DefaultSinglePlotConfig(self)
+        # Data writer configuration (composition over inheritance)
+        self.data_writer = ExampleDataWriter(self)
 
     def get_read_command(self):
         """Example device auto-pushes data, no read command needed."""

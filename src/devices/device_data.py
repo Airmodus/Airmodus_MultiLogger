@@ -103,41 +103,39 @@ class PSMData:
 
     def to_array(self) -> list:
         """Convert to array in order expected by legacy code."""
-        base = [
-            self.saturator_flow,
-            self.excess_flow,
-            self.concentration_psm,
-            self.temp_growth_tube,
-            self.temp_saturator,
-            self.temp_inlet,
-            self.temp_heater,
-            self.pres_inlet,
-            self.sat_flow_setpoint,
-            self.pres_critical_orifice,
-            self.cpc_inlet_flow,
-            self.temp_drainage,
-            self.temp_cabin,
-            self.poly_correction,
-            self.scan_status,
-            # PSM2 vacuum flow inserted here if PSM2
-            # Connected CPC data (14 fields)
-            self.cpc_concentration,
-            self.cpc_dilution_correction,
-            self.cpc_temp_sat,
-            self.cpc_temp_con,
-            self.cpc_temp_opt,
-            self.cpc_temp_cab,
-            self.cpc_pres_crit,
-            self.cpc_pres_noz,
-            self.cpc_pres_in,
-            self.cpc_liquid,
-            self.cpc_pulses,
-            self.cpc_dead_time,
-            self.cpc_total_errors,
-            self.cpc_status_hex
+        return [
+            self.saturator_flow,              # 0
+            self.excess_flow,                 # 1
+            self.concentration_psm,           # 2
+            self.temp_growth_tube,            # 3
+            self.temp_saturator,              # 4
+            self.temp_inlet,                  # 5
+            self.temp_heater,                 # 6
+            self.pres_inlet,                  # 7
+            self.sat_flow_setpoint,           # 8
+            self.pres_critical_orifice,       # 9
+            self.cpc_inlet_flow,              # 10
+            self.temp_drainage,               # 11
+            self.temp_cabin,                  # 12
+            self.poly_correction,             # 13
+            self.scan_status,                 # 14
+            self.vacuum_flow,                 # 15 - Always included (nan for Retrofit, value for PSM2)
+            # Connected CPC data (14 fields) starts at index 16
+            self.cpc_concentration,           # 16
+            self.cpc_dilution_correction,     # 17
+            self.cpc_temp_sat,                # 18
+            self.cpc_temp_con,                # 19
+            self.cpc_temp_opt,                # 20
+            self.cpc_temp_cab,                # 21
+            self.cpc_pres_crit,               # 22
+            self.cpc_pres_noz,                # 23
+            self.cpc_pres_in,                 # 24
+            self.cpc_liquid,                  # 25
+            self.cpc_pulses,                  # 26
+            self.cpc_dead_time,               # 27
+            self.cpc_total_errors,            # 28
+            self.cpc_status_hex               # 29
         ]
-        # Insert vacuum_flow at index 15 for PSM2 (handled by device)
-        return base
 
 
 @dataclass
@@ -380,7 +378,8 @@ class PSMSettings:
     def to_array(self) -> list:
         """
         Convert to array matching compile_psm_settings() format.
-        [0-4] temps, [5] cpc_flow, [6] inlet_flow, [7?] CO_flow, [...] dilution, [...] CPC settings
+        [0-4] temps, [5] cpc_flow, [6] inlet_flow, [7?] CO_flow, [...] dilution
+        Note: CPC settings are appended separately by data_logger.py (lines 288-310)
         """
         result = [
             self.temp_growth_tube,     # [0]
@@ -396,11 +395,12 @@ class PSMSettings:
         if not (isinstance(self.co_flow, float) and isnan(self.co_flow)):
             result.append(self.co_flow)
 
-        # Add dilution parameters
-        result.extend(self.dilution_parameters)
+        # Add dilution parameters if present
+        if self.dilution_parameters:
+            result.extend(self.dilution_parameters)
 
-        # Add CPC settings
-        result.extend(self.cpc_settings)
+        # CPC settings are NOT included here - they're handled by data_logger
+        # when writing .par files (see data_logger.py lines 288-310)
 
         return result
 

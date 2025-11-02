@@ -3,6 +3,7 @@ from config import RHTP
 from devices.base_device import SimpleDevice
 from devices.device_data import RHTPData
 from plotting.device_plot_configs import RHTPPlotConfig
+from devices.data_writers import RHTPDataWriter
 
 # RHTP widget
 class RHTPWidget(SimpleDevice):
@@ -14,6 +15,8 @@ class RHTPWidget(SimpleDevice):
 
         # Plot configuration (composition over inheritance)
         self.plot_config = RHTPPlotConfig(self)
+        # Data writer configuration (composition over inheritance)
+        self.data_writer = RHTPDataWriter(self)
 
     def get_plot_keys(self):
         """RHTP has relative humidity, temperature, and pressure."""

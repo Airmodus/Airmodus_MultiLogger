@@ -3,6 +3,7 @@ from config import AFM
 from devices.base_device import SimpleDevice
 from devices.device_data import AFMData
 from plotting.device_plot_configs import AFMPlotConfig
+from devices.data_writers import AFMDataWriter
 
 # AFM widget
 class AFMWidget(SimpleDevice):
@@ -14,6 +15,8 @@ class AFMWidget(SimpleDevice):
 
         # Plot configuration (composition over inheritance)
         self.plot_config = AFMPlotConfig(self)
+        # Data writer configuration (composition over inheritance)
+        self.data_writer = AFMDataWriter(self)
 
     def get_plot_keys(self):
         """AFM has flow, standard flow, RH, temperature, and pressure."""

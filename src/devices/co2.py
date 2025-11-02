@@ -3,6 +3,7 @@ from plots.device_plots import SinglePlot
 from config import CO2_SENSOR
 from devices.base_device import SimpleDevice, DefaultSinglePlotConfig
 from devices.registry import register_device
+from devices.data_writers import CO2DataWriter
 
 # CO2 sensor widget
 @register_device(CO2_SENSOR)
@@ -16,6 +17,8 @@ class CO2Widget(SimpleDevice):
 
         # Use default plot configuration (auto-plots first value from current_data)
         self.plot_config = DefaultSinglePlotConfig(self)
+        # Data writer configuration (composition over inheritance)
+        self.data_writer = CO2DataWriter(self)
 
     def get_read_command(self):
         """CO2 sensor requires a read command."""

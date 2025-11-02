@@ -8,6 +8,7 @@ from config import EDILUTER
 from devices.base_device import ComplexDevice
 from devices.device_data import EDiluterData
 from plotting.device_plot_configs import EDiluterPlotConfig
+from devices.data_writers import EDiluterDataWriter
 
 # eDiluter widget
 class eDiluterWidget(ComplexDevice):
@@ -29,6 +30,8 @@ class eDiluterWidget(ComplexDevice):
 
         # Plot configuration (composition over inheritance)
         self.plot_config = EDiluterPlotConfig(self)
+        # Data writer configuration (composition over inheritance)
+        self.data_writer = EDiluterDataWriter(self)
 
     def get_plot_keys(self):
         """eDiluter has a single dilution factor plot."""

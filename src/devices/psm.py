@@ -19,6 +19,7 @@ from devices.base_device import ComplexDevice
 from devices.device_data import PSMData, PSMSettings
 from utils import compile_psm_settings
 from plotting.device_plot_configs import PSMPlotConfig
+from devices.data_writers import PSMDataWriter
 
 # PSM widget
 class PSMWidget(ComplexDevice):
@@ -57,6 +58,8 @@ class PSMWidget(ComplexDevice):
 
         # Plot configuration (composition over inheritance)
         self.plot_config = PSMPlotConfig(self)
+        # Data writer configuration (composition over inheritance)
+        self.data_writer = PSMDataWriter(self)
 
     def get_plot_keys(self):
         """PSM has a single concentration plot."""

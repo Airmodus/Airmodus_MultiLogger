@@ -17,6 +17,7 @@ from devices.base_device import ComplexDevice
 from devices.device_data import CPCData, CPCSettings
 from utils import compile_cpc_settings
 from plotting.device_plot_configs import CPCPlotConfig
+from devices.data_writers import CPCDataWriter
 
 # CPC widget containing CPC related GUI elements as tabs
 class CPCWidget(ComplexDevice):
@@ -51,6 +52,8 @@ class CPCWidget(ComplexDevice):
 
         # Plot configuration (composition over inheritance)
         self.plot_config = CPCPlotConfig(self)
+        # Data writer configuration (composition over inheritance)
+        self.data_writer = CPCDataWriter(self)
 
     def get_plot_keys(self):
         """CPC has concentration and raw concentration plots."""
