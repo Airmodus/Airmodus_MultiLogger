@@ -16,11 +16,17 @@ from plots.device_plots import SinglePlot
 from devices.base_device import ComplexDevice
 from devices.device_data import CPCData, CPCSettings
 from utils import compile_cpc_settings
+from plotting.device_plot_configs import CPCPlotConfig
 
 # CPC widget containing CPC related GUI elements as tabs
 class CPCWidget(ComplexDevice):
     def __init__(self, device_parameter, *args, **kwargs):
         super().__init__(device_parameter, device_type=CPC, *args, **kwargs)
+
+        # CPC-specific data (device owns its data)
+        self.ten_hz_data = full(10, nan)  # 10 Hz logging data buffer
+        self.pulse_analysis_index = None  # None = not in analysis mode, 0-6 = threshold index
+
         # create set tab widget for cpc settings
         self.set_tab = CPCSetTab()
         self.addTab(self.set_tab, "Set")
@@ -42,6 +48,17 @@ class CPCWidget(ComplexDevice):
             self.status_tab.liquid_level, self.status_tab.temp_cabin,
             self.status_tab.pres_critical_orifice, self.status_tab.pulse_quality
         ]
+
+        # Plot configuration (composition over inheritance)
+        self.plot_config = CPCPlotConfig(self)
+
+    def get_plot_keys(self):
+        """CPC has concentration and raw concentration plots."""
+        return ['', ':raw']
+
+    def get_rolling_buffer_keys(self):
+        """CPC has 24-hour rolling buffers for pulse analysis."""
+        return {':pd': 86400, ':pr': 86400}
 
     # convert CPC status hex to binary and update error label colors
     def update_errors(self, status_hex, cabin_p_error):
@@ -153,8 +170,8 @@ class CPCWidget(ComplexDevice):
 
         # Handle 10 Hz data if enabled
         if device_param.child('10 hz').value():
-            data_holder.latest_ten_hz[self.dev_id] = data_holder.extra_data.pop(
-                str(self.dev_id) + ":10hz", data_holder.latest_ten_hz[self.dev_id])
+            self.ten_hz_data = data_holder.extra_data.pop(
+                str(self.dev_id) + ":10hz", self.ten_hz_data)
 
         # Process each parsed message
         for parsed in parsed_messages:
@@ -189,8 +206,8 @@ class CPCWidget(ComplexDevice):
 
             elif parsed['type'] == 'ten_hz':
                 # Handle 10 Hz logging data
-                if isnan(float(data_holder.latest_ten_hz[self.dev_id][0])):
-                    data_holder.latest_ten_hz[self.dev_id] = parsed['data']
+                if isnan(float(self.ten_hz_data[0])):
+                    self.ten_hz_data = parsed['data']
                 else:
                     data_holder.extra_data[str(self.dev_id)+":10hz"] = parsed['data']
 
@@ -229,7 +246,7 @@ class CPCWidget(ComplexDevice):
         settings_update = (str(prnt_list[0]) != "nan" and str(pall_list[0]) != "nan")
 
         # Skip settings update if pulse analysis is in progress
-        if self.dev_id in data_holder.pulse_analysis_index:
+        if self.pulse_analysis_index is not None:
             settings_update = False
 
         if settings_update:
@@ -461,6 +478,80 @@ class CPCWidget(ComplexDevice):
                 'raw': message,
                 'update_gui': False
             }
+
+    # Device Manager Integration Methods
+
+    def has_status_tab(self):
+        """CPC has a status tab."""
+        return True
+
+    def get_status_tab(self):
+        """Return CPC status tab."""
+        return self.status_tab
+
+    def supports_10hz_mode(self):
+        """CPC supports 10 Hz mode."""
+        return True
+
+    def send_read_commands(self, dev_conn, device_param):
+        """
+        Send CPC read commands based on mode.
+
+        Handles three modes:
+        1. Pulse analysis mode: Send pulse analysis messages
+        2. 10 Hz mode: Send 10 Hz messages
+        3. Normal mode: Send standard measurement messages
+        """
+        from config import PULSE_ANALYSIS_THRESHOLDS
+
+        # Check if in pulse analysis mode
+        if self.pulse_analysis_index is not None and self.pulse_analysis_index >= 0:
+            threshold = PULSE_ANALYSIS_THRESHOLDS[self.pulse_analysis_index]
+            dev_conn.send_pulse_analysis_messages(threshold)
+        # Check if in 10 Hz mode
+        elif device_param.child('10 hz').value():
+            dev_conn.send_multiple_messages(CPC, ten_hz=True)
+        # Normal mode
+        else:
+            dev_conn.send_multiple_messages(CPC)
+
+    def validate_10hz_mode(self, params, device_param):
+        """
+        Validate and synchronize CPC 10 Hz mode.
+
+        When 10 Hz is enabled:
+        - Set TAVG to 0.1 if not already
+        - Validate that at least one PSM with 10 Hz is connected
+
+        When 10 Hz is disabled:
+        - Set TAVG to 1.0 if currently < 1
+        """
+        from config import PSM, PSM2
+
+        dev_id = device_param.child('DevID').value()
+        ten_hz_enabled = device_param.child('10 hz').value()
+
+        if ten_hz_enabled:
+            # When 10 Hz ON: Set TAVG to 0.1 if needed
+            if device_param.child('Connected').value():
+                if self.settings and self.settings.averaging_time != 0.1:
+                    device_param.child('Connection').value().send_message(":SET:TAVG 0.1")
+
+            # Validate PSM connection - check if any PSM has this CPC connected with 10Hz
+            ten_hz_connected = any(
+                psm.child('Connected CPC').value() == dev_id and psm.child('10 hz').value()
+                for psm in params.child('Device settings').children()
+                if psm.child('Device type').value() in [PSM, PSM2]
+            )
+
+            # If no PSM with 10Hz is connected, disable 10Hz mode
+            if not ten_hz_connected:
+                device_param.child('10 hz').setValue(False)
+        else:
+            # When 10 Hz OFF: Set TAVG to 1.0 if currently < 1
+            if device_param.child('Connected').value():
+                if self.settings and self.settings.averaging_time < 1:
+                    device_param.child('Connection').value().send_message(":SET:TAVG 1")
 
 # set tab widget containing settings and message input
 # used in CPCWidget

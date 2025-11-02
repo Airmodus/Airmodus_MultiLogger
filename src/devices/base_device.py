@@ -58,6 +58,15 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         self.settings = create_device_settings(device_type)
         self.errors = {}
 
+        # Serial communication state
+        self._partial_data = ""  # Buffer for incomplete messages (PSM, eDiluter)
+
+        # Command logging (for .par files)
+        self.latest_command = None  # Latest user-entered command message
+
+        # Multi-message buffering timeout counter
+        self._extra_data_counter = 0  # Used by PSM to clear stale buffers after 60s
+
     @abstractmethod
     def get_read_command(self):
         """
@@ -70,6 +79,183 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         Example:
             return ":MEAS:ALL"  # For CPC
             return [":MEAS:SCAN", ":MEAS:STEP", ":MEAS:FIXD"]  # For PSM (handles multiple)
+        """
+        pass
+
+    @abstractmethod
+    def get_plot_keys(self):
+        """
+        Get the plot key suffixes for this device.
+
+        This method defines which plot data arrays should be created for this device.
+        Keys are combined with device ID to form plot_data dict keys.
+
+        Returns:
+            list of str: Plot key suffixes (e.g., ['', ':raw'] for CPC with two channels)
+                        Single-value devices return ['']
+                        Multi-channel devices return [':suffix1', ':suffix2', ...]
+
+        Examples:
+            CPC: ['', ':raw'] → creates plot_data['5'] and plot_data['5:raw']
+            ELECTROMETER: [':1', ':2', ':3'] → creates plot_data['3:1'], plot_data['3:2'], plot_data['3:3']
+            PSM: [''] → creates plot_data['7']
+        """
+        pass
+
+    def get_rolling_buffer_keys(self):
+        """
+        Get rolling buffer configurations for long-term data storage.
+
+        Override this method in devices that need rolling buffers separate from
+        standard plot data (e.g., CPC pulse analysis 24h buffers).
+
+        Returns:
+            dict: {key_suffix: buffer_size} or {} if no rolling buffers
+                 key_suffix: Plot key suffix (e.g., ':pd', ':pr')
+                 buffer_size: Number of elements (e.g., 86400 for 24 hours at 1 Hz)
+
+        Example:
+            CPC: {':pd': 86400, ':pr': 86400} → 24-hour pulse duration/ratio buffers
+            Most devices: {} → no rolling buffers needed
+        """
+        return {}
+
+    # Device Manager Integration Methods
+    # These methods allow devices to control their own lifecycle and behavior
+    # without device_manager needing device-type checks
+
+    def supports_idn_inquiry(self):
+        """
+        Whether device supports *IDN? identity inquiry.
+
+        Override to return True for devices that respond to *IDN? command.
+
+        Returns:
+            bool: True if device supports IDN inquiry, False otherwise
+        """
+        return False
+
+    def supports_firmware_inquiry(self):
+        """
+        Whether device supports firmware version inquiry.
+
+        Override to return True for devices that have firmware version commands.
+
+        Returns:
+            bool: True if device supports firmware inquiry, False otherwise
+        """
+        return False
+
+    def has_command_widget(self):
+        """
+        Whether device has a command widget for showing connection messages.
+
+        Override to return True for devices with set_tab.command_widget.
+
+        Returns:
+            bool: True if device has command widget, False otherwise
+        """
+        return False
+
+    def has_status_tab(self):
+        """
+        Whether device has a status tab for error icon display.
+
+        Override to return True for devices with status_tab.
+
+        Returns:
+            bool: True if device has status tab, False otherwise
+        """
+        return False
+
+    def get_status_tab(self):
+        """
+        Get the status tab widget for error icon display.
+
+        Override to return the status_tab attribute if it exists.
+
+        Returns:
+            QWidget or None: Status tab widget or None
+        """
+        return None
+
+    def has_device_specific_errors(self):
+        """
+        Whether device has additional device-specific error states beyond standard errors.
+
+        Override to return True for devices with special error conditions
+        (e.g., PSM CO flow error).
+
+        Returns:
+            bool: True if device has specific error states, False otherwise
+        """
+        return False
+
+    def supports_10hz_mode(self):
+        """
+        Whether device supports 10 Hz logging mode.
+
+        Override to return True for devices that have 10 Hz mode (CPC, PSM).
+
+        Returns:
+            bool: True if device supports 10 Hz mode, False otherwise
+        """
+        return False
+
+    def on_connection_established(self, device_param):
+        """
+        Called when device connection is established.
+
+        Override to perform device-specific connection setup like:
+        - Clearing firmware version
+        - Resetting dilution parameters
+        - Initializing device state
+
+        Args:
+            device_param: Parameter tree reference for this device
+        """
+        pass
+
+    def on_disconnection(self, device_param):
+        """
+        Called when device disconnects.
+
+        Override to perform device-specific cleanup like:
+        - Showing disconnection message
+        - Resetting state
+
+        Args:
+            device_param: Parameter tree reference for this device
+        """
+        pass
+
+    def send_read_commands(self, dev_conn, device_param):
+        """
+        Send device-specific read commands to request data.
+
+        Override to implement device-specific command sending logic like:
+        - CPC: Pulse analysis, 10Hz mode, or normal commands
+        - PSM: Settings fetch, dilution parameters
+        - ELECTROMETER: Buffer reset + measurement command
+        - Auto-push devices: Do nothing
+
+        Args:
+            dev_conn: Connection object with send_message() method
+            device_param: Parameter tree reference for this device
+        """
+        pass
+
+    def validate_10hz_mode(self, params, device_param):
+        """
+        Validate and synchronize 10 Hz mode settings.
+
+        Override in devices that support 10 Hz mode to implement:
+        - CPC: Manage TAVG based on 10Hz state, validate PSM connection
+        - PSM: Ensure connected CPC has 10Hz enabled
+
+        Args:
+            params: Root parameter tree (for accessing other devices)
+            device_param: Parameter tree reference for this device
         """
         pass
 
@@ -318,12 +504,73 @@ class SimpleDevice(BaseDevice):
     auto-push data over serial without requiring read commands.
     """
 
+    def get_plot_keys(self):
+        """
+        Default: single-value devices return [''].
+        Override in multi-channel devices (ELECTROMETER, RHTP, AFM).
+        """
+        return ['']
+
     def get_read_command(self):
         """
         Simple devices typically auto-push data or have basic commands.
         Override if device needs a specific read command.
         """
         return None
+
+    # Helper methods for common parsing patterns
+    def is_idn_response(self, message):
+        """Check if message is an IDN response."""
+        return message.startswith("*IDN ")
+
+    def handle_standard_idn(self, message):
+        """Parse and return standardized IDN response."""
+        from utils import parse_idn_response
+        return parse_idn_response(message)
+
+    def data_response(self, message, command='data'):
+        """
+        Create data response dict with auto-conversion from current_data.
+
+        Args:
+            message: Raw message string
+            command: Command name
+
+        Returns:
+            dict: Standardized data response with data from current_data.to_array()
+        """
+        from utils import create_data_response
+        data_array = self.current_data.to_array() if hasattr(self.current_data, 'to_array') else []
+        return create_data_response(message, command, data_array)
+
+    def error_response(self, message, error, command='unknown'):
+        """
+        Create error response dict.
+
+        Args:
+            message: Raw message string
+            error: Error message or Exception object
+            command: Command name
+
+        Returns:
+            dict: Standardized error response
+        """
+        from utils import create_error_response
+        return create_error_response(message, command, error)
+
+    def send_read_commands(self, dev_conn, device_param):
+        """
+        Default implementation for simple read-command devices.
+
+        Clears buffers and sends the read command from get_read_command().
+        Override for more complex behavior.
+        """
+        cmd = self.get_read_command()
+        if cmd:
+            dev_conn.connection.reset_input_buffer()
+            dev_conn.connection.reset_output_buffer()
+            dev_conn.connection.read_all()
+            dev_conn.send_message(cmd)
 
     def parse_message(self, message, data_holder=None):
         """
@@ -395,5 +642,84 @@ class ComplexDevice(BaseDevice):
         """Complex devices must implement error monitoring."""
         pass
 
+    # ComplexDevice default implementations
 
-__all__ = ['BaseDevice', 'SimpleDevice', 'ComplexDevice']
+    def supports_idn_inquiry(self):
+        """Complex devices typically support IDN inquiry."""
+        return True
+
+    def has_command_widget(self):
+        """Complex devices have command widgets."""
+        return True
+
+    def on_disconnection(self, device_param):
+        """Show disconnection message in command widget."""
+        if self.set_tab and hasattr(self.set_tab, 'command_widget'):
+            self.set_tab.command_widget.update_text_box("Device disconnected.")
+
+
+class DefaultSinglePlotConfig:
+    """
+    Default plot configuration for simple single-value devices.
+
+    This eliminates the need to create custom plot config classes for devices
+    that only plot a single value from current_data.to_array()[0].
+    """
+
+    def __init__(self, device_widget):
+        """Initialize with device widget reference."""
+        self.device = device_widget
+
+    def get_plot_keys(self):
+        """Single value devices use empty string key."""
+        return ['']
+
+    def get_rolling_buffer_keys(self):
+        """No rolling buffers by default."""
+        return {}
+
+    def get_plot_values(self, dev_id, time_counter, plot_data, device_param, data_holder=None):
+        """Extract first value from device's current_data."""
+        if self.device.current_data and hasattr(self.device.current_data, 'to_array'):
+            data_array = self.device.current_data.to_array()
+            if len(data_array) > 0:
+                plot_data[str(dev_id)][time_counter] = data_array[0]
+
+    def update_main_plot(self, dev_id, time_counter, x_time_list, plot_data,
+                        curve, device_param, plot_to_main_value):
+        """Update main plot with single value."""
+        if plot_to_main_value:
+            curve.setData(
+                x=x_time_list[:time_counter+1],
+                y=plot_data[str(dev_id)][:time_counter+1]
+            )
+        else:
+            curve.setData(x=[], y=[])
+
+    def update_individual_plots(self, dev_id, time_counter, x_time_list, plot_data):
+        """Update device's individual plot tab."""
+        if hasattr(self.device, 'plot_tab') and self.device.plot_tab:
+            if hasattr(self.device.plot_tab, 'curve'):
+                self.device.plot_tab.curve.setData(
+                    x=x_time_list[:time_counter+1],
+                    y=plot_data[str(dev_id)][:time_counter+1]
+                )
+
+    def get_main_plot_key(self, selector_value=None):
+        """Return empty string for single value."""
+        return ''
+
+    def get_viewbox_type(self):
+        """Use device's own viewbox."""
+        return self.device.dev_type
+
+    def get_legend_value(self, dev_id, time_counter, plot_data, selector_value=None):
+        """Get value to display in legend."""
+        return plot_data[str(dev_id)][time_counter]
+
+    def get_start_time_key(self):
+        """Use primary key for start time detection."""
+        return ''
+
+
+__all__ = ['BaseDevice', 'SimpleDevice', 'ComplexDevice', 'DefaultSinglePlotConfig']

@@ -18,6 +18,7 @@ from plots.device_plots import SinglePlot
 from devices.base_device import ComplexDevice
 from devices.device_data import PSMData, PSMSettings
 from utils import compile_psm_settings
+from plotting.device_plot_configs import PSMPlotConfig
 
 # PSM widget
 class PSMWidget(ComplexDevice):
@@ -50,6 +51,16 @@ class PSMWidget(ComplexDevice):
         # if PSM 2.0, add vacuum flow widget to list
         if device_type == PSM2:
             self.psm_status_widgets.append(self.status_tab.flow_vacuum)
+
+        # PSM-specific flags
+        self.needs_settings_fetch = True  # Fetch settings on initial connection
+
+        # Plot configuration (composition over inheritance)
+        self.plot_config = PSMPlotConfig(self)
+
+    def get_plot_keys(self):
+        """PSM has a single concentration plot."""
+        return ['']
 
     # convert PSM status hex to binary and update error label colors
     def update_errors(self, status_hex):
@@ -148,16 +159,16 @@ class PSMWidget(ComplexDevice):
         }
 
         # Clear extra data buffer after 60 seconds of consecutive buffering
-        if self.dev_id in data_holder.extra_data and data_holder.extra_data_counter[self.dev_id] >= 60:
+        if self.dev_id in data_holder.extra_data and self._extra_data_counter >= 60:
             del data_holder.extra_data[self.dev_id]
             logging.info("PSM %s extra data buffer cleared", device_param.child('Serial number').value())
 
         # Initialize from extra_data buffer
         was_present = self.dev_id in data_holder.extra_data
         if was_present:
-            data_holder.extra_data_counter[self.dev_id] += 1
+            self._extra_data_counter += 1
         else:
-            data_holder.extra_data_counter[self.dev_id] = 0
+            self._extra_data_counter = 0
 
         data_holder.par_updates[self.dev_id] = 0
         settings_fetched = False
@@ -175,8 +186,7 @@ class PSMWidget(ComplexDevice):
 
                 result['data_updated'] = True
 
-                # Store polynomial correction
-                data_holder.latest_poly_correction[self.dev_id] = parsed.get('poly_correction', 0.0)
+                # Note: polynomial correction already stored in self.current_data.poly_correction
 
                 # Set error flags
                 if parsed.get('has_errors', False):
@@ -184,13 +194,12 @@ class PSMWidget(ComplexDevice):
                     data_holder.device_errors[self.dev_id] = True
 
             elif parsed['type'] == 'settings':
-                # Store PRNT settings
-                data_holder.latest_psm_prnt[self.dev_id] = parsed['data']
+                # Store PRNT settings (legacy - settings already in self.settings dataclass)
                 settings_fetched = True
 
             elif parsed['type'] == 'dilution':
-                # Store dilution parameters
-                data_holder.psm_dilution[self.dev_id] = parsed['data']
+                # Store dilution parameters directly in settings
+                self.settings.dilution_parameters = parsed['data']
 
             elif parsed['type'] == 'self_test':
                 # Display self-test errors
@@ -221,23 +230,21 @@ class PSMWidget(ComplexDevice):
                     print("PSM error: " + str(parsed['error']))
 
         # Compile settings if all required data is available
-        if data_holder.psm_settings_updates[self.dev_id] and settings_fetched and self.dev_id in data_holder.psm_dilution:
+        if self.needs_settings_fetch and settings_fetched and self.settings.dilution_parameters is not None:
             try:
                 # Get CO flow rate (PSM Retrofit only)
                 from config import PSM
-                # Update settings with co_flow and dilution parameters
+                # Update settings with co_flow (dilution_parameters already set above)
                 if self.dev_type == PSM:
                     self.settings.co_flow = round(self.set_tab.set_co_flow.value_spinbox.value(), 3)
                 else:
                     self.settings.co_flow = nan
 
-                self.settings.dilution_parameters = data_holder.psm_dilution[self.dev_id]
-
                 # Get settings array from device's typed settings dataclass
                 # Note: inlet_flow_rate is updated by plot_manager, CPC settings added by data_logger
 
                 data_holder.par_updates[self.dev_id] = 1
-                data_holder.psm_settings_updates[self.dev_id] = False
+                self.needs_settings_fetch = False
                 result['settings_updated'] = True
             except Exception as e:
                 print(traceback.format_exc())
@@ -262,16 +269,16 @@ class PSMWidget(ComplexDevice):
             messages = raw_data.decode().split("\r")
 
             # Handle partial message from previous read
-            if self.dev_id in data_holder.partial_data:
-                messages[0] = data_holder.partial_data[self.dev_id] + messages[0]
-                del data_holder.partial_data[self.dev_id]
+            if self._partial_data:
+                messages[0] = self._partial_data + messages[0]
+                self._partial_data = ""
 
             # Check if last message is complete (ends with \r)
             if messages[-1] == "":
                 messages = messages[:-1]  # Complete, remove empty element
             else:
                 # Incomplete, save for next read
-                data_holder.partial_data[self.dev_id] = messages[-1]
+                self._partial_data = messages[-1]
                 messages = messages[:-1]
 
             # Parse each complete message
@@ -543,6 +550,76 @@ class PSMWidget(ComplexDevice):
                 'raw': message,
                 'update_gui': False
             }
+
+    # Device Manager Integration Methods
+
+    def supports_firmware_inquiry(self):
+        """PSM supports firmware inquiry."""
+        return True
+
+    def has_status_tab(self):
+        """PSM has a status tab."""
+        return True
+
+    def get_status_tab(self):
+        """Return PSM status tab."""
+        return self.status_tab
+
+    def has_device_specific_errors(self):
+        """PSM has CO flow error (PSM Retrofit only)."""
+        from config import PSM
+        if self.device_type == PSM:
+            return hasattr(self.set_tab, 'set_co_flow') and self.set_tab.set_co_flow.error
+        return False
+
+    def supports_10hz_mode(self):
+        """PSM supports 10 Hz mode."""
+        return True
+
+    def on_connection_established(self, device_param):
+        """
+        Reset PSM state on connection.
+
+        Clears firmware version and dilution parameters so they are re-fetched.
+        """
+        # Clear firmware version
+        device_param.child('Firmware version').setValue("")
+
+        # Clear dilution parameters in device settings
+        if self.settings:
+            self.settings.dilution_parameters = None
+
+    def send_read_commands(self, dev_conn, device_param):
+        """
+        Send PSM read commands for settings and dilution parameters.
+
+        Sends:
+        - :SYST:PRNT if settings need to be fetched
+        - :SYST:VCMP if dilution parameters are missing
+        """
+        if self.needs_settings_fetch:
+            dev_conn.send_message(":SYST:PRNT")
+
+        if self.settings and self.settings.dilution_parameters is None:
+            dev_conn.send_delayed_message(":SYST:VCMP", 150)
+
+    def validate_10hz_mode(self, params, device_param):
+        """
+        Validate and synchronize PSM 10 Hz mode.
+
+        When PSM 10 Hz is enabled, ensure connected CPC also has 10 Hz enabled.
+        """
+        from config import CPC
+
+        if device_param.child('10 hz').value():
+            cpc_id = device_param.child('Connected CPC').value()
+            if cpc_id != 'None':
+                # Find connected CPC and enable its 10 Hz mode
+                for cpc in params.child('Device settings').children():
+                    if cpc.child('DevID').value() == cpc_id and cpc.child('Device type').value() == CPC:
+                        if not cpc.child('10 hz').value():
+                            cpc.child('10 hz').setValue(True)
+                        break
 
 
 class PSMSetTab(QSplitter):

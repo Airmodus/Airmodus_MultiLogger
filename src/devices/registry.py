@@ -3,10 +3,41 @@ Device Registry - Declarative configuration for all device types.
 
 This registry eliminates the need for device-specific if/elif chains in app.py.
 To add a new device, simply add one entry to this registry.
+
+New devices can use the @register_device decorator for automatic registration.
 """
 
 from config import (CPC, PSM, PSM2, ELECTROMETER, CO2_SENSOR, RHTP, AFM,
                    EDILUTER, TSI_CPC, EXAMPLE_DEVICE)
+
+
+# Decorator for automatic device registration
+def register_device(device_type, setup_connections_func=None, has_special_setup=False):
+    """
+    Decorator to automatically register a device widget class.
+
+    Usage:
+        @register_device(MY_DEVICE, simple=True)
+        class MyDeviceWidget(SimpleDevice):
+            ...
+
+    Args:
+        device_type: Device type constant from config
+        setup_connections_func: Optional function to set up device-specific connections
+        has_special_setup: Whether device needs special viewbox setup
+
+    Returns:
+        Decorator function that registers the class
+    """
+    def decorator(widget_class):
+        # Register the device in the global registry
+        DEVICE_REGISTRY[device_type] = DeviceConfig(
+            widget_class=widget_class,
+            setup_connections_func=setup_connections_func,
+            has_special_setup=has_special_setup
+        )
+        return widget_class
+    return decorator
 
 
 class DeviceConfig:
@@ -120,21 +151,21 @@ def setup_psm_connections(widget, device_param, connection, app):
         set_widget.value_spinbox.stepChanged.connect(
             lambda value, cmd=command: connection.send_set_val(value, cmd))
         set_widget.value_spinbox.stepChanged.connect(
-            lambda: psm_update(device_id, app.data_holder.psm_settings_updates))
+            lambda: psm_update(device_id, app.data_holder.device_widgets))
         set_widget.value_input.returnPressed.connect(
             lambda cmd=command, attr=attr_name: connection.send_set_val(float(getattr(widget.set_tab, attr).value_input.text()), cmd))
         set_widget.value_input.returnPressed.connect(
-            lambda: psm_update(device_id, app.data_holder.psm_settings_updates))
+            lambda: psm_update(device_id, app.data_holder.device_widgets))
 
     # CPC inlet flow
     widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(
         lambda value: psm_flow_send(device_param, value))
     widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(
-        lambda: psm_update(device_id, app.data_holder.psm_settings_updates))
+        lambda: psm_update(device_id, app.data_holder.device_widgets))
     widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(
         lambda: psm_flow_send(device_param, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
     widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(
-        lambda: psm_update(device_id, app.data_holder.psm_settings_updates))
+        lambda: psm_update(device_id, app.data_holder.device_widgets))
 
     # CPC sample flow
     widget.set_tab.set_cpc_sample_flow.value_spinbox.stepChanged.connect(
@@ -146,9 +177,9 @@ def setup_psm_connections(widget, device_param, connection, app):
     from config import PSM
     if device_type == PSM:
         widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(
-            lambda: psm_update(device_id, app.data_holder.psm_settings_updates))
+            lambda: psm_update(device_id, app.data_holder.device_widgets))
         widget.set_tab.set_co_flow.value_input.returnPressed.connect(
-            lambda: psm_update(device_id, app.data_holder.psm_settings_updates))
+            lambda: psm_update(device_id, app.data_holder.device_widgets))
         widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(
             lambda value: device_param.child('CO flow').setValue(str(round(value, 3))))
         widget.set_tab.set_co_flow.value_input.returnPressed.connect(
@@ -159,7 +190,7 @@ def setup_psm_connections(widget, device_param, connection, app):
         lambda: command_entered(device_id, device_param, app.data_holder.device_widgets,
                                app.data_holder.latest_command))
     widget.set_tab.command_widget.command_input.returnPressed.connect(
-        lambda: psm_update(device_id, app.data_holder.psm_settings_updates))
+        lambda: psm_update(device_id, app.data_holder.device_widgets))
 
     # Liquid operations
     widget.set_tab.autofill.clicked.connect(
@@ -257,19 +288,15 @@ def setup_afm_connections(widget, device_param, connection, app):
         lambda parameter: app.afm_axis_changed(parameter.value())))
 
 
-# Import device widget classes
 from devices.cpc import CPCWidget
 from devices.psm import PSMWidget
-from devices.co2 import CO2Widget
 from devices.rhtp import RHTPWidget
 from devices.afm import AFMWidget
 from devices.ediluter import eDiluterWidget
 from devices.electrometer import ElectrometerWidget
 from devices.tsi_cpc import TSIWidget
-from devices.example import ExampleDeviceWidget
 
 
-# Device Registry - Single source of truth for all device types
 DEVICE_REGISTRY = {
     CPC: DeviceConfig(
         widget_class=CPCWidget,
@@ -295,11 +322,7 @@ DEVICE_REGISTRY = {
         has_special_setup=True  # Has special viewbox setup
     ),
 
-    CO2_SENSOR: DeviceConfig(
-        widget_class=CO2Widget,
-        setup_connections_func=None,
-        has_special_setup=False
-    ),
+    # CO2_SENSOR: Now registered via @register_device decorator in co2.py
 
     RHTP: DeviceConfig(
         widget_class=RHTPWidget,
@@ -325,11 +348,7 @@ DEVICE_REGISTRY = {
         has_special_setup=False
     ),
 
-    EXAMPLE_DEVICE: DeviceConfig(
-        widget_class=ExampleDeviceWidget,
-        setup_connections_func=None,
-        has_special_setup=False
-    ),
+    # EXAMPLE_DEVICE: Now registered via @register_device decorator in example.py
 }
 
 
@@ -382,6 +401,7 @@ def has_special_viewbox_setup(device_type):
 
 __all__ = [
     'DEVICE_REGISTRY',
+    'register_device',
     'create_device_widget',
     'setup_device_connections',
     'has_special_viewbox_setup',

@@ -3,6 +3,7 @@ from plots.device_plots import ElectrometerPlot
 from config import ELECTROMETER
 from devices.base_device import SimpleDevice
 from devices.device_data import ElectrometerData
+from plotting.device_plot_configs import ElectrometerPlotConfig
 
 # ELECTROMETER widget
 class ElectrometerWidget(SimpleDevice):
@@ -11,6 +12,13 @@ class ElectrometerWidget(SimpleDevice):
         # create plot widget for Electrometer
         self.plot_tab = ElectrometerPlot()
         self.addTab(self.plot_tab, "Electrometer plot")
+
+        # Plot configuration (composition over inheritance)
+        self.plot_config = ElectrometerPlotConfig(self)
+
+    def get_plot_keys(self):
+        """Electrometer has three voltage channels."""
+        return [':1', ':2', ':3']
 
     def get_read_command(self):
         """Electrometer requires a read command."""
@@ -44,5 +52,16 @@ class ElectrometerWidget(SimpleDevice):
                 'error': str(e),
                 'update_gui': False
             }
+
+    def send_read_commands(self, dev_conn, device_param):
+        """
+        Send Electrometer read command.
+
+        Resets buffers and sends measurement command.
+        """
+        dev_conn.connection.reset_input_buffer()
+        dev_conn.connection.reset_output_buffer()
+        dev_conn.connection.read_all()
+        dev_conn.send_message(":MEAS:V")
 
 __all__ = ['ElectrometerWidget']

@@ -56,10 +56,12 @@ def _roll_pulse_array(arr):
     arr[-1] = nan
     return arr
 
-# sets psm_settings_updates flag for specified PSM device
+# sets needs_settings_fetch flag for specified PSM device
 # when flag is True, PSM settings are requested from device in get_dev_data
-def psm_update(device_id, psm_settings_updates):
-    psm_settings_updates[device_id] = True
+def psm_update(device_id, device_widgets):
+    device = device_widgets.get(device_id)
+    if device and hasattr(device, 'needs_settings_fetch'):
+        device.needs_settings_fetch = True
 
 # sends set flow rate to PSM
 def psm_flow_send(device, value):
@@ -101,7 +103,8 @@ def ten_hz_clicked(psm_param, psm_widget):
 def command_entered(dev_id, dev_param, device_widgets, latest_command):
     try:
         # get message from command input and clear input
-        command_widget = device_widgets[dev_id].set_tab.command_widget
+        device_widget = device_widgets[dev_id]
+        command_widget = device_widget.set_tab.command_widget
         message = command_widget.command_input.text()
         command_widget.command_input.clear()
         # update command_widget's text box
@@ -110,16 +113,81 @@ def command_entered(dev_id, dev_param, device_widgets, latest_command):
         # send message to device
         dev_param.child('Connection').value().send_message(message)
 
-        # if saving is on, store command to latest_command dictionary
+        # if saving is on, store command in device's latest_command property
         if p.child('Data settings').child('Save data').value():
-            latest_command[dev_id] = message
-    
+            device_widget.latest_command = message
+
     except Exception as e:
         device_widgets[dev_id].set_tab.command_widget.update_text_box(str(e))
+
+
+# Common device parsing utilities
+def parse_idn_response(message):
+    """
+    Parse *IDN response and return standardized result dict.
+
+    Args:
+        message: Raw message string like "*IDN SERIAL123"
+
+    Returns:
+        dict: Standardized info response with serial number
+    """
+    serial_number = message.split(" ", 1)[1].strip() if " " in message else ""
+    return {
+        'type': 'info',
+        'command': '*IDN',
+        'data': serial_number,
+        'raw': message,
+        'update_gui': False
+    }
+
+
+def create_data_response(message, command, data_array):
+    """
+    Create standardized data response dict.
+
+    Args:
+        message: Raw message string
+        command: Command name (e.g., ':MEAS:DATA')
+        data_array: List or array of parsed data values
+
+    Returns:
+        dict: Standardized data response
+    """
+    return {
+        'type': 'data',
+        'data': data_array,
+        'command': command,
+        'raw': message,
+        'update_gui': False
+    }
+
+
+def create_error_response(message, command, error):
+    """
+    Create standardized error response dict.
+
+    Args:
+        message: Raw message string
+        command: Command name or 'unknown'
+        error: Error message or Exception object
+
+    Returns:
+        dict: Standardized error response
+    """
+    return {
+        'type': 'error',
+        'command': command,
+        'data': None,
+        'raw': message,
+        'error': str(error),
+        'update_gui': False
+    }
 
 
 __all__ = [
     'compile_cpc_settings', 'compile_psm_settings',
     '_manage_plot_array', '_roll_pulse_array', 'psm_update', 'psm_flow_send', 'cpc_flow_send',
-    'ten_hz_clicked', 'command_entered'
+    'ten_hz_clicked', 'command_entered',
+    'parse_idn_response', 'create_data_response', 'create_error_response'
 ]

@@ -408,8 +408,8 @@ class MainWindow(QMainWindow):
 
         # Register widget and initialize data structures
         self.data_holder.device_widgets[device_id] = widget
-        self.data_holder.reset_for_device(device_id, device_type)
-        self.data_holder.init_plot_data_for_device(device_id, device_type)
+        self.data_holder.reset_for_device(device_id, widget)
+        self.data_holder.init_plot_data_for_device(device_id, widget)
 
         # Add widget to GUI and initialize error tracking
         self.device_tabs.addTab(widget, widget.name)

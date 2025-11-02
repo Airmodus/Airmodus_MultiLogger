@@ -27,12 +27,8 @@ class DeviceManager:
         # Note: list_com_ports is still in MainWindow; delegate if needed or move here later
         com_port_list = self.list_com_ports()  # Temp: access via params if MainWindow ref added, or pass as arg
         self.data_holder.device_errors = {key: False for key in self.data_holder.device_errors}
-        
+
         for dev in self.params.child('Device settings').children():
-            if dev.child('Device type').value() == EXAMPLE_DEVICE:
-                if not self.data_holder.first_connection:
-                    self.data_holder.first_connection = True
-            
             connected = dev.child('Connected').value()
             if self.osx_mode:
                 port = str(dev.child('COM port').value())
@@ -64,29 +60,38 @@ class DeviceManager:
             except Exception:
                 pass
             
-            # IDN inquiry and updates
-            dev_type = dev.child('Device type').value()
+            # IDN inquiry and connection state management
             dev_id = dev.child('DevID').value()
-            if dev_type in [CPC, PSM, PSM2, CO2_SENSOR, RHTP, AFM]:
+            device_widget = self.data_holder.get_device(dev_id)
+
+            if device_widget:
+                # Handle connection established
                 if connected and not dev.child('Connected').value():
-                    if dev_id not in self.data_holder.idn_inquiry_devices:
-                        self.data_holder.idn_inquiry_devices.append(dev_id)
-                    if dev_type in [PSM, PSM2]:
-                        dev.child('Firmware version').setValue("")
-                        if dev_id in self.data_holder.psm_dilution:
-                            del self.data_holder.psm_dilution[dev_id]
-                    if dev_type in [CPC, PSM, PSM2, EDILUTER]:
+                    # Register for IDN inquiry if device supports it
+                    if device_widget.supports_idn_inquiry():
+                        if dev_id not in self.data_holder.idn_inquiry_devices:
+                            self.data_holder.idn_inquiry_devices.append(dev_id)
+
+                    # Device-specific connection setup
+                    device_widget.on_connection_established(dev)
+
+                    # Update UI styling if device has command widget
+                    if device_widget.has_command_widget():
                         if dev_id in self.device_widgets:
                             self.device_widgets[dev_id].setObjectName("connected")
                             self.device_widgets[dev_id].setStyleSheet("")
-            
-            if dev_type in [CPC, PSM, PSM2, EDILUTER]:
+
+                # Handle disconnection
                 if not connected and dev.child('Connected').value():
-                    if dev_id in self.device_widgets:
-                        self.device_widgets[dev_id].set_tab.command_widget.update_text_box("Device disconnected.")
-                        self.device_widgets[dev_id].setObjectName("disconnected")
-                        self.device_widgets[dev_id].setStyleSheet("")
-            
+                    # Device-specific cleanup
+                    device_widget.on_disconnection(dev)
+
+                    # Update UI styling if device has command widget
+                    if device_widget.has_command_widget():
+                        if dev_id in self.device_widgets:
+                            self.device_widgets[dev_id].setObjectName("disconnected")
+                            self.device_widgets[dev_id].setStyleSheet("")
+
             dev.child('Connected').setValue(connected)
             if not self.data_holder.first_connection:
                 self.data_holder.first_connection = connected
@@ -229,44 +234,24 @@ class DeviceManager:
         """Send read commands to connected devices."""
         for dev in self.params.child('Device settings').children():
             if dev.child('Connected').value():
-                dev_type = dev.child('Device type').value()
                 dev_id = dev.child('DevID').value()
                 dev_conn = dev.child('Connection').value()
-                try:
-                    if dev_type in [CPC, TSI_CPC]:
-                        if dev_type == CPC and dev_id in self.data_holder.pulse_analysis_index:
-                            if self.data_holder.pulse_analysis_index[dev_id] is not None:
-                                threshold = PULSE_ANALYSIS_THRESHOLDS[self.data_holder.pulse_analysis_index[dev_id]]
-                                dev_conn.send_pulse_analysis_messages(threshold)
-                        elif dev_type == CPC and dev.child('10 hz').value():
-                            dev_conn.send_multiple_messages(dev_type, ten_hz=True)
-                        else:
-                            dev_conn.send_multiple_messages(dev_type)
-                    elif dev_type in [PSM, PSM2]:
-                        if self.data_holder.psm_settings_updates[dev_id]:
-                            dev_conn.send_message(":SYST:PRNT")
-                        if dev_id not in self.data_holder.psm_dilution:
-                            dev_conn.send_delayed_message(":SYST:VCMP", 150)
-                    elif dev_type == ELECTROMETER:
-                        dev_conn.connection.reset_input_buffer()
-                        dev_conn.connection.reset_output_buffer()
-                        dev_conn.connection.read_all()
-                        dev_conn.send_message(":MEAS:V")
-                    elif dev_type == CO2_SENSOR:
-                        dev_conn.connection.reset_input_buffer()
-                        dev_conn.connection.reset_output_buffer()
-                        dev_conn.connection.read_all()
-                        dev_conn.send_message(":MEAS:CO2")
-                   
-                    # Auto-push devices: IDN/firmware
-                    if dev_type in [CPC, PSM, PSM2, CO2_SENSOR, RHTP, AFM]:
-                        if dev_id in self.data_holder.idn_inquiry_devices:
-                            self._idn_inquiry(dev_conn.connection)
-                        elif dev_type in [PSM, PSM2]:
-                            if dev.child('Firmware version').value() == "":
-                                self._firmware_inquiry(dev_conn.connection)
-                except Exception as e:
-                    logging.error(traceback.format_exc())
+                device_widget = self.data_holder.get_device(dev_id)
+
+                if device_widget:
+                    try:
+                        # Device-specific read commands
+                        device_widget.send_read_commands(dev_conn, dev)
+
+                        # IDN/firmware inquiry
+                        if device_widget.supports_idn_inquiry():
+                            if dev_id in self.data_holder.idn_inquiry_devices:
+                                self._idn_inquiry(dev_conn.connection)
+                            elif device_widget.supports_firmware_inquiry():
+                                if dev.child('Firmware version').value() == "":
+                                    self._firmware_inquiry(dev_conn.connection)
+                    except Exception as e:
+                        logging.error(traceback.format_exc())
  
 
     def _idn_inquiry(self, connection):
@@ -312,46 +297,13 @@ class DeviceManager:
         # go through devices
         for dev in self.params.child('Device settings').children():
             try:
-                # if device is Airmodus CPC, set TAVG according to 10 hz parameter and check connection to PSM
-                dev_type = dev.child('Device type').value()
                 dev_id = dev.child('DevID').value()
-                if dev_type == CPC:
-                    if dev.child('10 hz').value():
-                        if dev.child('Connected').value():
-                            # if TAVG is not 0.1, set it to 0.1
-                            cpc_settings = self.data_holder.get_device_settings(dev_id)
-                            if cpc_settings and cpc_settings.averaging_time != 0.1:
-                                dev.child('Connection').value().send_message(":SET:TAVG 0.1")
-                        # check CPC connection to PSM with 10hz on
-                        ten_hz_connected = any(
-                            psm.child('Connected CPC').value() == dev_id and psm.child('10 hz').value()
-                            for psm in self.params.child('Device settings').children()
-                            if psm.child('Device type').value() in [PSM, PSM2]
-                        )
-                        if not ten_hz_connected:
-                            dev.child('10 hz').setValue(False)
-                        
-                    # if 10 hz is off
-                    else:
-                        # if device is connected
-                        if dev.child('Connected').value():
-                            # if TAVG is smaller than 1, set it to 1
-                            cpc_settings = self.data_holder.get_device_settings(dev_id)
-                            if cpc_settings and cpc_settings.averaging_time < 1:
-                                dev.child('Connection').value().send_message(":SET:TAVG 1")
-                
-                # if device is PSM and 10 hz is on, check if connected CPC has 10 hz on
-                elif dev_type in [PSM, PSM2]:
-                    if dev.child('10 hz').value():
-                        cpc_id = dev.child('Connected CPC').value()
-                        if cpc_id != 'None':
-                            for cpc in self.params.child('Device settings').children():
-                                # check if connected CPC is Airmodus CPC
-                                if cpc.child('DevID').value() == cpc_id and cpc.child('Device type').value() == CPC:
-                                        # if connected CPC has 10 hz off, set it on
-                                    if not cpc.child('10 hz').value():
-                                        cpc.child('10 hz').setValue(True)
-                                    break
+                device_widget = self.data_holder.get_device(dev_id)
+
+                # Delegate 10 Hz validation to device
+                if device_widget and device_widget.supports_10hz_mode():
+                    device_widget.validate_10hz_mode(self.params, dev)
+
             except Exception as e:
                 logging.error(traceback.format_exc())
 
@@ -364,37 +316,36 @@ class DeviceManager:
             try:
                 device_id = dev.child('DevID').value()
                 error = self.data_holder.device_errors[device_id]
-                device_type = dev.child('Device type').value()
                 device_widget = self.data_holder.device_widgets[device_id]
                 tab_index = self.device_tabs.indexOf(device_widget)
                 connected = dev.child('Connected').value()
 
-                # Disconnected devices (except Example device)
-                if not connected and device_type != EXAMPLE_DEVICE:
+                # Disconnected devices
+                if not connected:
                     self.device_tabs.setTabIcon(tab_index, self.data_holder.disconnected_icon)
                     self.data_holder.error_status = 1
                 # Devices with errors
                 elif error:
                     self.device_tabs.setTabIcon(tab_index, self.data_holder.error_icon)
-                    if device_type in [CPC, PSM, PSM2]:
-                        status_tab_index = device_widget.indexOf(device_widget.status_tab)
+                    if device_widget.has_status_tab():
+                        status_tab_index = device_widget.indexOf(device_widget.get_status_tab())
                         device_widget.setTabIcon(status_tab_index, self.data_holder.error_icon)
                 # Connected devices without errors
                 else:
                     self.device_tabs.setTabIcon(tab_index, QIcon())
-                    if device_type in [CPC, PSM, PSM2]:
-                        status_tab_index = device_widget.indexOf(device_widget.status_tab)
+                    if device_widget.has_status_tab():
+                        status_tab_index = device_widget.indexOf(device_widget.get_status_tab())
                         device_widget.setTabIcon(status_tab_index, QIcon())
 
-                # PSM-specific CO flow error check
-                if device_type == PSM:
-                    if device_widget.set_tab.set_co_flow.error:
-                        self.device_tabs.setTabIcon(tab_index, self.data_holder.error_icon)
-                        set_tab_index = device_widget.indexOf(device_widget.set_tab)
-                        device_widget.setTabIcon(set_tab_index, self.data_holder.error_icon)
-                    else:
-                        set_tab_index = device_widget.indexOf(device_widget.set_tab)
-                        device_widget.setTabIcon(set_tab_index, QIcon())
+                # Device-specific error checks (e.g., PSM CO flow error)
+                if device_widget.has_device_specific_errors():
+                    self.device_tabs.setTabIcon(tab_index, self.data_holder.error_icon)
+                    set_tab_index = device_widget.indexOf(device_widget.set_tab)
+                    device_widget.setTabIcon(set_tab_index, self.data_holder.error_icon)
+                elif hasattr(device_widget, 'set_tab'):
+                    # Clear set tab icon if no device-specific errors
+                    set_tab_index = device_widget.indexOf(device_widget.set_tab)
+                    device_widget.setTabIcon(set_tab_index, QIcon())
             except Exception as e:
                 print(traceback.format_exc())
                 logging.exception(e)

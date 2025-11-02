@@ -10,6 +10,14 @@ class DataLogger:
         self.data_holder = data_holder
         self.params = params
 
+    def _is_device_in_pulse_analysis(self, dev_id):
+        """Check if device is in pulse analysis mode."""
+        device_widget = self.data_holder.get_device(dev_id)
+        if device_widget and hasattr(device_widget, 'pulse_analysis_index'):
+            # 0-6 = analyzing, -1 = ending, None = not analyzing
+            return device_widget.pulse_analysis_index is not None and device_widget.pulse_analysis_index >= 0
+        return False
+
     def save_changed(self):
         """Triggered when saving is toggled on/off."""
         # if saving is toggled on
@@ -74,7 +82,7 @@ class DataLogger:
                 if dev.child('Device type').value() == TSI_CPC:
                     pass
                 # if device is in pulse analysis mode, do nothing
-                elif dev.child('DevID').value() in self.data_holder.pulse_analysis_index:
+                elif self._is_device_in_pulse_analysis(dev.child('DevID').value()):
                     pass
                 # if device is connected OR example device
                 elif dev.child('Connected').value() or dev.child('Device type').value() == EXAMPLE_DEVICE:
@@ -301,15 +309,18 @@ class DataLogger:
                                         else: # if no connected CPC selected, write nan values
                                             file.write(',nan,nan,nan,nan,nan,nan,nan,nan,nan')
                                        
-                                    # check if device is in latest_command dictionary
-                                    if dev_id in self.data_holder.latest_command:
-                                        # write latest command to file and remove from dictionary
-                                        file.write(',' + self.data_holder.latest_command.pop(dev_id))
+                                    # check if device has latest command
+                                    device_widget = self.data_holder.get_device(dev_id)
+                                    if device_widget and device_widget.latest_command is not None:
+                                        # write latest command to file and clear from device
+                                        file.write(',' + device_widget.latest_command)
+                                        device_widget.latest_command = None
                        
                         # check if device is Airmodus CPC and 10hz parameter is on
                         if dev.child('Device type').value() == CPC and dev.child('10 hz').value():
-                            # check if device is in latest_ten_hz dictionary
-                            if dev_id in self.data_holder.latest_ten_hz:
+                            # Get device widget to access ten_hz_data
+                            device_widget = self.data_holder.get_device(dev_id)
+                            if device_widget and hasattr(device_widget, 'ten_hz_data'):
                                 # get filename from dictionary and add path to front
                                 filename = self.data_holder.file_path + self.data_holder.ten_hz_filenames[dev_id]
                                 # append file with new data
@@ -318,7 +329,7 @@ class DataLogger:
                                     # Add timestamp
                                     file.write(timeStampStr+',')
                                     # Convert data to string
-                                    write_data = ','.join(str(vals) for vals in self.data_holder.latest_ten_hz[dev_id])
+                                    write_data = ','.join(str(vals) for vals in device_widget.ten_hz_data)
                                     file.write(write_data)
                     # if saving fails, set saving status to 0
                     except Exception as e:
@@ -336,8 +347,9 @@ class DataLogger:
         # write data to pulse analysis file if pulse analysis is on
         for dev in self.params.child('Device settings').children():
             dev_id = dev.child('DevID').value()
-            if dev_id in self.data_holder.pulse_analysis_index:
-                if self.data_holder.pulse_analysis_index[dev_id] is not None: # when index is None, analysis has reached its end
+            device_widget = self.data_holder.get_device(dev_id)
+            if device_widget and hasattr(device_widget, 'pulse_analysis_index'):
+                if device_widget.pulse_analysis_index is not None: # when index is None, analysis has reached its end
                     try:
                         # Get device data
                         cpc_data = self.data_holder.get_device_data(dev_id)
@@ -349,18 +361,18 @@ class DataLogger:
                         else:
                             # pulse duration = dead time * 1000 (micro to nano) / number of pulses
                             pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
-                        # get current threshold value with data_holder.pulse_analysis_index
-                        threshold_value = PULSE_ANALYSIS_THRESHOLDS[self.data_holder.pulse_analysis_index[dev_id]]
+                        # get current threshold value with device.pulse_analysis_index
+                        threshold_value = PULSE_ANALYSIS_THRESHOLDS[device_widget.pulse_analysis_index]
                         # get filename from dictionary (includes file path)
                         filename = self.data_holder.pulse_analysis_filenames[dev_id]
                         # append file with new data
                         with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
                             file.write('\n') # create new line
                             file.write(str(threshold_value) + ',' + str(number_of_pulses) + ',' + str(dead_time) + ',' + str(pulse_duration))
-                        # increase data_holder.pulse_analysis_index by 1
-                        self.data_holder.pulse_analysis_index[dev_id] += 1
+                        # increase device.pulse_analysis_index by 1
+                        device_widget.pulse_analysis_index += 1
                         # if all thresholds have been gone through, end pulse analysis
-                        if self.data_holder.pulse_analysis_index[dev_id] >= len(PULSE_ANALYSIS_THRESHOLDS):
+                        if device_widget.pulse_analysis_index >= len(PULSE_ANALYSIS_THRESHOLDS):
                             self.pulse_analysis_stop(dev_id, dev)
                     except Exception as e:
                         print(traceback.format_exc())
@@ -379,13 +391,14 @@ class DataLogger:
             print(traceback.format_exc())
             logging.exception(e)
         # clear current threshold value
-        self.data_holder.device_widgets[device_id].pulse_quality.current_threshold.setText("")
-        # set data_holder.pulse_analysis_index to None (signaling end of pulse analysis)
-        self.data_holder.pulse_analysis_index[device_id] = None
-        # remove device id from data_holder.pulse_analysis_index dictionary with delay
+        device_widget = self.data_holder.device_widgets[device_id]
+        device_widget.pulse_quality.current_threshold.setText("")
+        # set device.pulse_analysis_index to -1 (signaling analysis ending, waiting for threshold restore)
+        # then set to None after delay to resume normal measurement
         # delay ensures CPC has time to set original threshold before measurement continues
         from PyQt5.QtCore import QTimer
-        QTimer.singleShot(1000, lambda: self.data_holder.pulse_analysis_index.pop(device_id))
+        device_widget.pulse_analysis_index = -1  # -1 = ending, waiting for threshold restore
+        QTimer.singleShot(1000, lambda: setattr(device_widget, 'pulse_analysis_index', None))
         # remove device id from data_holder.pulse_analysis_filenames dictionary
         if device_id in self.data_holder.pulse_analysis_filenames:
             self.data_holder.pulse_analysis_filenames.pop(device_id)
@@ -408,10 +421,11 @@ class DataLogger:
         if start == QMessageBox.No:
             return
         try:
-            # add device to data_holder.pulse_analysis_index dictionary with index value 0
-            self.data_holder.pulse_analysis_index[device_id] = 0
+            # set device.pulse_analysis_index to 0 (start analysis)
+            device_widget = self.data_holder.device_widgets[device_id]
+            device_widget.pulse_analysis_index = 0
             # update pulse analysis status
-            self.data_holder.device_widgets[device_id].pulse_quality.update_pa_status(True)
+            device_widget.pulse_quality.update_pa_status(True)
             # disable command input
             self.data_holder.device_widgets[device_id].set_tab.command_widget.disable_command_input()
 

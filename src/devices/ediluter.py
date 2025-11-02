@@ -7,6 +7,7 @@ from widgets import StartButton, IndicatorWidget, CommandWidget
 from config import EDILUTER
 from devices.base_device import ComplexDevice
 from devices.device_data import EDiluterData
+from plotting.device_plot_configs import EDiluterPlotConfig
 
 # eDiluter widget
 class eDiluterWidget(ComplexDevice):
@@ -25,7 +26,14 @@ class eDiluterWidget(ComplexDevice):
         # create dictionary with mode names and corresponding widgets
         self.mode_dict = {"INIT": self.set_tab.init, "WARMUP": self.set_tab.warmup,
                           "STANDBY": self.set_tab.standby, "MEASUREMENT": self.set_tab.measurement}
-    
+
+        # Plot configuration (composition over inheritance)
+        self.plot_config = EDiluterPlotConfig(self)
+
+    def get_plot_keys(self):
+        """eDiluter has a single dilution factor plot."""
+        return ['']
+
     # update all data values in status tab and set tab
     # current list: Status, P1, P2, T1, T2, T3, T4, T5, T6, DF1, DF2, DFTot
     def update_values(self, current_list):
@@ -121,16 +129,16 @@ class eDiluterWidget(ComplexDevice):
             messages = raw_data.decode().split("\r")
 
             # Handle partial message from previous read
-            if self.dev_id in data_holder.partial_data:
-                messages[0] = data_holder.partial_data[self.dev_id] + messages[0]
-                del data_holder.partial_data[self.dev_id]
+            if self._partial_data:
+                messages[0] = self._partial_data + messages[0]
+                self._partial_data = ""
 
             # Check if last message is complete (ends with \r)
             if messages[-1] == "":
                 messages = messages[:-1]  # Complete, remove empty element
             else:
                 # Incomplete, save for next read
-                data_holder.partial_data[self.dev_id] = messages[-1]
+                self._partial_data = messages[-1]
                 messages = messages[:-1]
 
             # Parse each complete message

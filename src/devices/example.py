@@ -1,15 +1,20 @@
 from plots.device_plots import SinglePlot
 from config import EXAMPLE_DEVICE
-from devices.base_device import SimpleDevice
-from devices.device_data import ExampleDeviceData
+from devices.base_device import SimpleDevice, DefaultSinglePlotConfig
+from devices.registry import register_device
 
-# Example device widget
+# Example device widget - demonstrates minimal device pattern
+@register_device(EXAMPLE_DEVICE)
 class ExampleDeviceWidget(SimpleDevice):
     def __init__(self, device_parameter, *args, **kwargs):
         super().__init__(device_parameter, device_type=EXAMPLE_DEVICE, *args, **kwargs)
-        # create plot widget for example device
+
+        # Create plot widget
         self.plot_tab = SinglePlot(device_type=EXAMPLE_DEVICE)
         self.addTab(self.plot_tab, "Example device plot")
+
+        # Use default plot configuration (auto-plots first value from current_data)
+        self.plot_config = DefaultSinglePlotConfig(self)
 
     def get_read_command(self):
         """Example device auto-pushes data, no read command needed."""
@@ -17,39 +22,27 @@ class ExampleDeviceWidget(SimpleDevice):
 
     def parse_message(self, message, data_holder=None):
         """Parse example device data."""
-        try:
-            # Handle IDN responses
-            if "*IDN " in message:
-                serial_number = message.split(" ", 1)[1].strip()
-                return {
-                    'type': 'info',
-                    'command': '*IDN',
-                    'data': serial_number,
-                    'raw': message,
-                    'update_gui': False
-                }
+        # Base class handles IDN responses
+        if self.is_idn_response(message):
+            return self.handle_standard_idn(message)
 
+        try:
             # Parse data (expecting a single float value)
             value = float(message.strip())
 
             # Update data object
             self.current_data.random_value = value
 
-            # Data stored in self.current_data by base class
-            return {
-                'type': 'data',
-                'data': [value],
-                'command': 'auto-push',
-                'raw': message,
-                'update_gui': False
-            }
+            # Use base class helper to create response
+            return self.data_response(message, 'auto-push')
+
         except Exception as e:
+            # Example device - ignore errors silently
             return {
-                'type': 'error',
+                'type': 'info',
                 'command': 'unknown',
                 'data': None,
                 'raw': message,
-                'error': str(e),
                 'update_gui': False
             }
 

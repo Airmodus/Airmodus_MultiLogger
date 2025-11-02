@@ -8,16 +8,8 @@ class DataHolder:
     """Holds all app data dicts/lists. No logic—just storage."""
     def __init__(self):
 
-        # Data related (exact copy from _init_data_structs)
-        self.latest_psm_prnt = {} # contains latest PSM prnt values
-        self.latest_poly_correction = {} # contains latest polynomial correction values from PSM
-        self.latest_command = {} # contains latest user entered command message
-        self.latest_ten_hz = {} # contains latest 10 hz OPC concentration log values
+        # Data related - multi-message buffering (shared coordination state)
         self.extra_data = {} # contains extra data, used when multiple data prints are received at once
-        self.extra_data_counter = {} # contains extra data counter, used to determine when extra data buffer is safe to clear
-        self.partial_data = {} # contains partial data, used when incomplete messages are received
-        self.pulse_analysis_index = {} # contains CPC pulse analysis index, used for pulse analysis progress tracking
-        self.psm_dilution = {} # contains PSM dilution parameters
         # Plot related
         self.plot_data = {} # contains plotted values
         self.curve_dict = {} # contains curve objects for main plot
@@ -33,7 +25,6 @@ class DataHolder:
         self.pulse_analysis_filenames = {} # contains filenames of pulse analysis files (CPC)
         # Flags
         self.par_updates = {} # contains .par update flags: 1 = update, 0 = no update
-        self.psm_settings_updates = {} # contains PSM settings update flags: 1 = update, 0 = no update
         self.device_errors = {} # contains device error flags: 0 = ok, 1 = errors
         self.idn_inquiry_devices = [] # contains IDs of devices that need IDN inquiry
         # Device names (static, move here for centralization)
@@ -59,65 +50,42 @@ class DataHolder:
         self.inquiry_flag = False # when COM ports change, this is set to True to inquire device IDNs
         self.inquiry_time = time()
 
-    def init_plot_data_for_device(self, dev_id, dev_type):
+    def init_plot_data_for_device(self, dev_id, device_widget):
         """Initialize plot_data arrays for a new device with NaN defaults."""
         from numpy import full, nan
-        x_len = len(self.x_time_list) 
+        x_len = len(self.x_time_list)
 
-        if dev_type in [CPC, TSI_CPC, ELECTROMETER, RHTP, AFM]:
-            if dev_type in [CPC, TSI_CPC]:
-                types = ['', ':raw']
-            elif dev_type == ELECTROMETER:
-                types = [':1', ':2', ':3']
-            elif dev_type == RHTP:
-                types = [':rh', ':t', ':p']
-            elif dev_type == AFM:
-                types = [':f', ':sf', ':rh', ':t', ':p']
-            
-            for t in types:
-                key = str(dev_id) + t
-                self.plot_data[key] = full(x_len, nan)
-                self.plot_data[key] = _manage_plot_array(self.plot_data[key], 0, max_reached=False)  
-            
-            # CPC-specific pulse arrays 
-            if dev_type == CPC:
-                self.plot_data[f"{dev_id}:pd"] = full(3600, nan) 
-                self.plot_data[f"{dev_id}:pr"] = full(3600, nan)
-        else:
-            # Single-value devices 
-            key = str(dev_id)
+        # Get plot keys from device (no device-type checks!)
+        for key_suffix in device_widget.get_plot_keys():
+            key = str(dev_id) + key_suffix
             self.plot_data[key] = full(x_len, nan)
             self.plot_data[key] = _manage_plot_array(self.plot_data[key], 0, max_reached=False)
 
-    def reset_for_device(self, dev_id, dev_type):
-        """Init dicts for a new device with type-specific defaults."""
-        if dev_type == CPC:
-            self.pulse_analysis_index[dev_id] = None  # default: not in analysis mode
-            self.plot_data[f"{dev_id}:pd"] = full(86400, nan)  # 24h rolling buffer
-            self.plot_data[f"{dev_id}:pr"] = full(86400, nan)
-            self.latest_ten_hz[dev_id] = full(10, nan)
-        elif dev_type in [PSM, PSM2]:
-            self.latest_psm_prnt[dev_id] = []  # PSM-specific subset; avoids KeyError in update_plot_data
-            self.psm_settings_updates[dev_id] = True # PSM-specific: fetch settings on connect (from device_added)
-            self.latest_poly_correction[dev_id] = 0.0  # default poly factor (placeholder; updated in readIndata)
-            self.extra_data_counter[dev_id] = 0  # buffer clear timer
-            self.partial_data[dev_id] = ""  # incomplete msg storage
-        elif dev_type == EDILUTER:
-            self.extra_data_counter[dev_id] = 0  # buffer clear timer
-            self.partial_data[dev_id] = ""  # incomplete msg storage
+        # Initialize rolling buffers if device has any
+        for key_suffix, buffer_size in device_widget.get_rolling_buffer_keys().items():
+            key = str(dev_id) + key_suffix
+            self.plot_data[key] = full(buffer_size, nan)
 
+    def reset_for_device(self, dev_id, device_widget):
+        """Initialize shared coordination state - NO device-type checks!"""
+        # Device-owned data is initialized in device classes themselves
+        # Rolling buffers are initialized in init_plot_data_for_device()
+        # Only initialize truly shared coordination state here
+
+        # Generic device flags (all devices need these)
         self.par_updates[dev_id] = 0  # default: no .par update needed
-        self.device_errors[dev_id] = False  # default: no errors; set True in readIndata if needed
+        self.device_errors[dev_id] = False  # default: no errors
 
     def clear_for_device(self, dev_id):
         """Clean up dicts when device removed (call from device_removed)."""
+        # Note: Device-owned data (latest_command, ten_hz_data, pulse_analysis_index,
+        # _partial_data, _extra_data_counter, needs_settings_fetch) is cleaned up
+        # automatically when device widget is destroyed
         dict_names = [
-            'latest_psm_prnt',  # data
-            'latest_poly_correction', 'latest_command', 'latest_ten_hz',  # data
-            'extra_data', 'extra_data_counter', 'partial_data', 'psm_dilution',  # data
+            'extra_data',  # multi-message buffering
             'plot_data', 'curve_dict', 'start_times',  'device_widgets', # plots
             'dat_filenames', 'par_filenames', 'ten_hz_filenames', 'pulse_analysis_filenames',  # filenames
-            'par_updates', 'psm_settings_updates', 'device_errors'  # flags
+            'par_updates', 'device_errors'  # flags
         ]
         for dict_name in dict_names:
             d = getattr(self, dict_name, None)

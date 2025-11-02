@@ -2,6 +2,7 @@ from plots.device_plots import SinglePlot
 from config import TSI_CPC, CPC
 from devices.base_device import SimpleDevice
 from devices.device_data import TSI_CPCData
+from plotting.device_plot_configs import TSICPCPlotConfig
 
 # TSI CPC widget
 class TSIWidget(SimpleDevice):
@@ -10,6 +11,13 @@ class TSIWidget(SimpleDevice):
         # create plot widget for TSI CPC (uses CPC plot type)
         self.plot_tab = SinglePlot(device_type=CPC)
         self.addTab(self.plot_tab, "TSI CPC plot")
+
+        # Plot configuration (composition over inheritance)
+        self.plot_config = TSICPCPlotConfig(self)
+
+    def get_plot_keys(self):
+        """TSI CPC has concentration and raw concentration plots like Airmodus CPC."""
+        return ['', ':raw']
 
     def get_read_command(self):
         """TSI CPC auto-pushes data, no read command needed."""
@@ -60,5 +68,10 @@ class TSIWidget(SimpleDevice):
                 'error': str(e),
                 'update_gui': False
             }
+
+    def send_read_commands(self, dev_conn, device_param):
+        """Send TSI CPC read commands."""
+        from config import TSI_CPC
+        dev_conn.send_multiple_messages(TSI_CPC)
 
 __all__ = ['TSIWidget']

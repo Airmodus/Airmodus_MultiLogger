@@ -2,6 +2,7 @@ from plots.device_plots import AFMPlot
 from config import AFM
 from devices.base_device import SimpleDevice
 from devices.device_data import AFMData
+from plotting.device_plot_configs import AFMPlotConfig
 
 # AFM widget
 class AFMWidget(SimpleDevice):
@@ -10,6 +11,13 @@ class AFMWidget(SimpleDevice):
         # create plot widget for AFM
         self.plot_tab = AFMPlot()
         self.addTab(self.plot_tab, "AFM plot")
+
+        # Plot configuration (composition over inheritance)
+        self.plot_config = AFMPlotConfig(self)
+
+    def get_plot_keys(self):
+        """AFM has flow, standard flow, RH, temperature, and pressure."""
+        return [':f', ':sf', ':rh', ':t', ':p']
 
     def get_read_command(self):
         """AFM auto-pushes data, no read command needed."""
@@ -67,5 +75,9 @@ class AFMWidget(SimpleDevice):
                 'error': str(e),
                 'update_gui': False
             }
+
+    def supports_idn_inquiry(self):
+        """AFM supports IDN inquiry."""
+        return True
 
 __all__ = ['AFMWidget']

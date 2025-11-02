@@ -2,6 +2,7 @@ from plots.device_plots import TriplePlot
 from config import RHTP
 from devices.base_device import SimpleDevice
 from devices.device_data import RHTPData
+from plotting.device_plot_configs import RHTPPlotConfig
 
 # RHTP widget
 class RHTPWidget(SimpleDevice):
@@ -10,6 +11,13 @@ class RHTPWidget(SimpleDevice):
         # create plot widget for RHTP
         self.plot_tab = TriplePlot(device_type=RHTP)
         self.addTab(self.plot_tab, "RHTP plot")
+
+        # Plot configuration (composition over inheritance)
+        self.plot_config = RHTPPlotConfig(self)
+
+    def get_plot_keys(self):
+        """RHTP has relative humidity, temperature, and pressure."""
+        return [':rh', ':t', ':p']
 
     def get_read_command(self):
         """RHTP auto-pushes data, no read command needed."""
@@ -65,5 +73,9 @@ class RHTPWidget(SimpleDevice):
                 'error': str(e),
                 'update_gui': False
             }
+
+    def supports_idn_inquiry(self):
+        """RHTP supports IDN inquiry."""
+        return True
 
 __all__ = ['RHTPWidget']
