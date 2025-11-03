@@ -63,6 +63,25 @@ class CPCWidget(ComplexDevice):
         """CPC has 24-hour rolling buffers for pulse analysis."""
         return {':pd': 86400, ':pr': 86400}
 
+    def get_read_command_sequence(self, ten_hz=False):
+        """
+        CPC requires multiple sequential commands with timing delays.
+
+        Sequence:
+        1. :MEAS:ALL - Request all measurement data
+        2. :SYST:PRNT (150ms delay) - Request print settings
+        3. :SYST:PALL (300ms delay) - Request all system parameters
+        4. :MEAS:OPC_CONC_LOG (450ms delay) - Request 10Hz data (if enabled)
+        """
+        sequence = [
+            (':MEAS:ALL', 0),
+            (':SYST:PRNT', 150),
+            (':SYST:PALL', 300),
+        ]
+        if ten_hz:
+            sequence.append((':MEAS:OPC_CONC_LOG', 450))
+        return sequence
+
     # convert CPC status hex to binary and update error label colors
     def update_errors(self, status_hex, cabin_p_error):
         widget_amount = len(self.cpc_status_widgets) # get amount of widgets
@@ -513,10 +532,10 @@ class CPCWidget(ComplexDevice):
             dev_conn.send_pulse_analysis_messages(threshold)
         # Check if in 10 Hz mode
         elif device_param.child('10 hz').value():
-            dev_conn.send_multiple_messages(CPC, ten_hz=True)
+            dev_conn.send_multiple_messages(self, ten_hz=True)
         # Normal mode
         else:
-            dev_conn.send_multiple_messages(CPC)
+            dev_conn.send_multiple_messages(self)
 
     def validate_10hz_mode(self, params, device_param):
         """

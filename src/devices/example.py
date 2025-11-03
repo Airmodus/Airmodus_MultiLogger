@@ -3,6 +3,7 @@ from config import EXAMPLE_DEVICE
 from devices.base_device import SimpleDevice, DefaultSinglePlotConfig
 from devices.registry import register_device
 from devices.data_writers import ExampleDataWriter
+from plotting.device_plot_configs import ExampleDevicePlotConfig
 
 # Example device widget - demonstrates minimal device pattern
 @register_device(EXAMPLE_DEVICE)
@@ -14,8 +15,8 @@ class ExampleDeviceWidget(SimpleDevice):
         self.plot_tab = SinglePlot(device_type=EXAMPLE_DEVICE)
         self.addTab(self.plot_tab, "Example device plot")
 
-        # Use default plot configuration (auto-plots first value from current_data)
-        self.plot_config = DefaultSinglePlotConfig(self)
+        # Use example plot configuration (generates random test data)
+        self.plot_config = ExampleDevicePlotConfig(self)
         # Data writer configuration (composition over inheritance)
         self.data_writer = ExampleDataWriter(self)
 

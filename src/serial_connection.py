@@ -1,6 +1,5 @@
 from PyQt5.QtCore import QTimer
 from serial import Serial
-from config import TSI_CPC, CPC
 
 class SerialDeviceConnection():
     def __init__(self):
@@ -57,19 +56,28 @@ class SerialDeviceConnection():
     
     def send_delayed_message(self, message, delay):
         QTimer.singleShot(delay, lambda: self.send_message(message))
-    
-    def send_multiple_messages(self, device_type, ten_hz=False):
 
-        if device_type == CPC:
-            self.send_message(":MEAS:ALL")
-            QTimer.singleShot(150, lambda: self.send_message(":SYST:PRNT"))
-            QTimer.singleShot(300, lambda: self.send_message(":SYST:PALL"))
-            if ten_hz:
-                QTimer.singleShot(450, lambda: self.send_message(":MEAS:OPC_CONC_LOG"))
-        
-        elif device_type == TSI_CPC:
-            self.send_message("RD") # read concentration
-            QTimer.singleShot(150, lambda: self.send_message("RIE")) # read instrument errors
+    def send_multiple_messages(self, device_widget, ten_hz=False):
+        """
+        Send a sequence of commands to a device with timing delays.
+
+        This method now uses the device's get_read_command_sequence() method
+        to determine which commands to send and their timing, eliminating
+        device-specific if statements from the connection layer.
+
+        Args:
+            device_widget: The device widget instance (must have get_read_command_sequence())
+            ten_hz (bool): Whether 10Hz logging is enabled (CPC-specific)
+        """
+        # Get command sequence from device
+        command_sequence = device_widget.get_read_command_sequence(ten_hz)
+
+        # Send commands with appropriate delays
+        for command, delay in command_sequence:
+            if delay == 0:
+                self.send_message(command)
+            else:
+                self.send_delayed_message(command, delay)
     
     def send_pulse_analysis_messages(self, threshold):
         # send required messages for pulse analysis

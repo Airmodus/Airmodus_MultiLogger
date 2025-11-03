@@ -23,6 +23,19 @@ class TSIWidget(SimpleDevice):
         """TSI CPC auto-pushes data, no read command needed."""
         return None
 
+    def get_read_command_sequence(self, ten_hz=False):
+        """
+        TSI CPC requires multiple sequential commands with timing delays.
+
+        Sequence:
+        1. RD - Read concentration
+        2. RIE (150ms delay) - Read instrument errors
+        """
+        return [
+            ('RD', 0),
+            ('RIE', 150),
+        ]
+
     def parse_message(self, message, data_holder=None):
         """Parse TSI CPC data: concentration\rinstrument_errors_hex."""
         try:
@@ -71,7 +84,6 @@ class TSIWidget(SimpleDevice):
 
     def send_read_commands(self, dev_conn, device_param):
         """Send TSI CPC read commands."""
-        from config import TSI_CPC
-        dev_conn.send_multiple_messages(TSI_CPC)
+        dev_conn.send_multiple_messages(self)
 
 __all__ = ['TSIWidget']

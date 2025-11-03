@@ -82,6 +82,32 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         """
         pass
 
+    def get_read_command_sequence(self, ten_hz=False):
+        """
+        Get the sequence of serial commands to read data from this device.
+
+        This method defines the commands and their timing delays for devices
+        that require multiple sequential commands. The default implementation
+        returns a single command from get_read_command().
+
+        Args:
+            ten_hz (bool): Whether 10Hz logging is enabled (CPC-specific)
+
+        Returns:
+            list of tuple: List of (command, delay_ms) tuples.
+                          First command has 0 delay, subsequent commands have delays.
+                          Empty list if device auto-pushes data.
+
+        Example:
+            CPC: [(':MEAS:ALL', 0), (':SYST:PRNT', 150), (':SYST:PALL', 300)]
+            TSI_CPC: [('RD', 0), ('RIE', 150)]
+            Simple device: [(command, 0)] where command is from get_read_command()
+        """
+        read_cmd = self.get_read_command()
+        if read_cmd is None:
+            return []  # Auto-push device, no commands
+        return [(read_cmd, 0)]  # Default: single command with no delay
+
     @abstractmethod
     def get_plot_keys(self):
         """

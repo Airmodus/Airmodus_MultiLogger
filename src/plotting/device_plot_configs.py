@@ -154,6 +154,101 @@ class BasePlotConfig:
         """
         return ''  # Default: primary key
 
+    def should_skip_normal_plotting(self, dev_id, device_param, data_holder):
+        """
+        Check if device is in a special mode that skips normal plotting.
+
+        This is used for special operational modes like CPC pulse analysis,
+        calibration modes, etc. where normal data plotting should be suspended.
+
+        Args:
+            dev_id: Device ID
+            device_param: Device parameter from parameter tree
+            data_holder: DataHolder instance
+
+        Returns:
+            bool: True if normal plotting should be skipped
+        """
+        return False  # Default: always plot normally
+
+    def handle_special_mode(self, dev_id, time_counter, plot_data, device_param, data_holder):
+        """
+        Handle data collection during special modes.
+
+        Called when should_skip_normal_plotting() returns True.
+        Override to implement special mode data handling (e.g., pulse analysis).
+
+        Args:
+            dev_id: Device ID
+            time_counter: Current time index
+            plot_data: Plot data dictionary
+            device_param: Device parameter from parameter tree
+            data_holder: DataHolder instance
+        """
+        pass  # Default: no special mode handling
+
+    def update_auxiliary_plots(self, dev_id, time_counter, x_time_list, plot_data, data_holder):
+        """
+        Update auxiliary/secondary plots after main individual plot update.
+
+        Override in devices with additional visualizations beyond the main plot
+        (e.g., CPC pulse quality scatter plot, calibration plots).
+
+        Args:
+            dev_id: Device ID
+            time_counter: Current time index
+            x_time_list: X-axis time data
+            plot_data: Plot data dictionary
+            data_holder: DataHolder instance
+        """
+        pass  # Default: no auxiliary plots
+
+    def update_follow_mode(self, current_time, time_window):
+        """
+        Update X-axis range for Follow mode.
+
+        Override if device has non-standard plot structure (e.g., ELECTROMETER
+        with multiple separate plots instead of single plot).
+
+        Args:
+            current_time: Current timestamp
+            time_window: Time window in seconds
+        """
+        # Default: update single plot
+        if hasattr(self.device, 'plot_tab') and hasattr(self.device.plot_tab, 'plot'):
+            self.device.plot_tab.plot.setXRange(
+                current_time - time_window,
+                current_time,
+                padding=0
+            )
+
+    def get_main_axis_config(self, plot_to_main_value):
+        """
+        Get axis configuration for main plot.
+
+        Override in devices with dynamic axis labels (e.g., RHTP/AFM where
+        label changes based on selector: "RH" → "RHTP RH %").
+
+        Args:
+            plot_to_main_value: Value of "Plot to main" parameter (str or bool)
+
+        Returns:
+            dict or None: {
+                'viewbox_type': int,  # Device type constant
+                'show': bool,         # Whether to show axis
+                'label': str,         # Axis label (optional)
+                'units': str,         # Units (optional)
+                'color': str,         # Color (optional)
+            } or None if axis should be hidden
+        """
+        # Default: simple show/hide based on plot_to_main_value
+        if plot_to_main_value:
+            return {
+                'viewbox_type': self.get_viewbox_type(),
+                'show': True
+            }
+        return None
+
 
 class EDiluterPlotConfig(BasePlotConfig):
     """Plot configuration for eDiluter."""
@@ -264,6 +359,84 @@ class CPCPlotConfig(BasePlotConfig):
         """Round CPC values to 2 decimals for legend."""
         value = plot_data[str(dev_id)][time_counter]
         return round(value, 2)
+
+    def update_auxiliary_plots(self, dev_id, time_counter, x_time_list, plot_data, data_holder):
+        """Update CPC pulse quality scatter plot and labels."""
+        try:
+            widget = self.device.pulse_quality
+            draw_limit_h = widget.history_time
+            draw_limit_s = draw_limit_h * 3600
+            avg_time = widget.average_time * 3600
+
+            # Calculate averages from rolling buffers
+            avg_pulse_duration = nanmean(plot_data[str(dev_id) + ':pd'][-avg_time:])
+            avg_pulse_ratio = nanmean(plot_data[str(dev_id) + ':pr'][-avg_time:])
+
+            # Slice data for visualization (history time window)
+            sliced_pd = plot_data[str(dev_id) + ':pd'][-1:-1 * (draw_limit_s + 1):-1 * draw_limit_h]
+            sliced_pr = plot_data[str(dev_id) + ':pr'][-1:-1 * (draw_limit_s + 1):-1 * draw_limit_h]
+            widget.data_points.setData(sliced_pd, sliced_pr)
+
+            # Update current point if concentration in valid range
+            cpc_data = self.device.current_data
+            cpc_settings = self.device.settings
+            check_value = cpc_data.concentration * cpc_settings.measured_cpc_flow if cpc_settings else 0
+            if 50 < check_value < 5000:
+                widget.current_point.setData(
+                    x=[plot_data[str(dev_id) + ':pd'][-1]],
+                    y=[plot_data[str(dev_id) + ':pr'][-1]]
+                )
+                widget.current_duration.setText(str(round(plot_data[str(dev_id) + ':pd'][-1], 3)))
+                widget.current_ratio.setText(str(round(plot_data[str(dev_id) + ':pr'][-1], 3)))
+            else:
+                widget.current_point.setData(x=[], y=[])
+                widget.current_duration.setText("Concentration out of range")
+                widget.current_ratio.setText("Concentration out of range")
+
+            # Update average point
+            widget.average_point.setData(x=[avg_pulse_duration], y=[avg_pulse_ratio])
+            widget.average_duration.setText(str(round(avg_pulse_duration, 2)))
+            widget.average_ratio.setText(str(round(avg_pulse_ratio, 2)))
+        except Exception as e:
+            logging.error(traceback.format_exc())
+
+    def should_skip_normal_plotting(self, dev_id, device_param, data_holder):
+        """Check if CPC is in pulse analysis mode."""
+        if hasattr(self.device, 'pulse_analysis_index'):
+            return (self.device.pulse_analysis_index is not None and
+                    self.device.pulse_analysis_index >= 0)
+        return False
+
+    def handle_special_mode(self, dev_id, time_counter, plot_data, device_param, data_holder):
+        """Handle CPC pulse analysis mode data collection."""
+        try:
+            # Get device data
+            cpc_data = self.device.current_data
+
+            # Calculate current pulse duration
+            dead_time = cpc_data.dead_time
+            number_of_pulses = cpc_data.number_of_pulses
+            if number_of_pulses == 0:
+                pulse_duration = nan
+            else:
+                pulse_duration = round(dead_time * 1000 / number_of_pulses, 2)
+
+            # Get current threshold value
+            from config import PULSE_ANALYSIS_THRESHOLDS
+            threshold_value = PULSE_ANALYSIS_THRESHOLDS[self.device.pulse_analysis_index]
+
+            # Add analysis point to pulse quality widget
+            self.device.pulse_quality.add_analysis_point(pulse_duration, threshold_value)
+        except Exception as e:
+            print(traceback.format_exc())
+            logging.exception(e)
+            # Raise exception to signal error - plot_manager will catch and stop analysis
+            raise PulseAnalysisError(f"Pulse analysis failed for device {dev_id}") from e
+
+
+class PulseAnalysisError(Exception):
+    """Exception raised when pulse analysis encounters an error."""
+    pass
 
 
 class TSICPCPlotConfig(BasePlotConfig):
@@ -484,6 +657,16 @@ class ElectrometerPlotConfig(BasePlotConfig):
         """Return Voltage 2 for legend."""
         return plot_data[str(dev_id)+':2'][time_counter]
 
+    def update_follow_mode(self, current_time, time_window):
+        """Update all 3 ELECTROMETER plots for Follow mode."""
+        if hasattr(self.device, 'plot_tab'):
+            for plot in self.device.plot_tab.plots:
+                plot.setXRange(
+                    current_time - time_window,
+                    current_time,
+                    padding=0
+                )
+
 
 class RHTPPlotConfig(BasePlotConfig):
     """Plot configuration for RHTP (humidity, temperature, pressure)."""
@@ -549,6 +732,30 @@ class RHTPPlotConfig(BasePlotConfig):
         if key:
             return plot_data[str(dev_id)+key][time_counter]
         return ''
+
+    def get_main_axis_config(self, plot_to_main_value):
+        """
+        Get axis configuration for RHTP main plot.
+
+        Label changes based on selector: RH, T, or P.
+        """
+        if not plot_to_main_value:
+            return None
+
+        axis_configs = {
+            'RH': {'label': 'RHTP RH', 'units': '%', 'color': 'w'},
+            'T': {'label': 'RHTP T', 'units': '°C', 'color': 'w'},
+            'P': {'label': 'RHTP P', 'units': 'Pa', 'color': 'w'},
+        }
+
+        config = axis_configs.get(plot_to_main_value)
+        if config:
+            return {
+                'viewbox_type': RHTP,
+                'show': True,
+                **config
+            }
+        return None
 
 
 class AFMPlotConfig(BasePlotConfig):
@@ -625,3 +832,41 @@ class AFMPlotConfig(BasePlotConfig):
         if key:
             return plot_data[str(dev_id)+key][time_counter]
         return ''
+
+    def get_main_axis_config(self, plot_to_main_value):
+        """
+        Get axis configuration for AFM main plot.
+
+        Label changes based on selector: Flow or Standard flow.
+        """
+        if not plot_to_main_value:
+            return None
+
+        axis_configs = {
+            'Flow': {'label': 'AFM flow', 'units': 'lpm', 'color': 'w'},
+            'Standard flow': {'label': 'AFM standard flow', 'units': 'slpm', 'color': 'w'},
+        }
+
+        config = axis_configs.get(plot_to_main_value)
+        if config:
+            return {
+                'viewbox_type': AFM,
+                'show': True,
+                **config
+            }
+        return None
+
+
+class ExampleDevicePlotConfig(BasePlotConfig):
+    """Plot configuration for example/test device."""
+
+    def get_plot_values(self, dev_id, time_counter, plot_data, device_param, data_holder=None):
+        """Generate random test value for example device."""
+        import random
+        random_value = round(random.random() * 100, 2)  # 0-100
+
+        # Update device data
+        self.device.current_data.random_value = random_value
+
+        # Store in plot data
+        plot_data[str(dev_id)][time_counter] = random_value
