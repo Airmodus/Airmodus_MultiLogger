@@ -587,7 +587,7 @@ class PSMPlotConfig(BasePlotConfig):
         # Calculate dilution correction factor
         dilution_correction_factor = (inlet_flow + float(psm_data.excess_flow) + float(psm_data.saturator_flow)) / inlet_flow
         if dev_type == PSM2:
-            dilution_correction_factor = (inlet_flow + 4 - float(psm_data.excess_flow) - float(psm_data.saturator_flow)) / inlet_flow0
+            dilution_correction_factor = (inlet_flow + 4 - float(psm_data.excess_flow) - float(psm_data.saturator_flow)) / inlet_flow
 
         # Calculate concentration from PSM
         concentration_from_psm = float(cpc_data.concentration) * dilution_correction_factor / poly_correction

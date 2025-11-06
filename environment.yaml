@@ -7,3 +7,9 @@ dependencies:
   - pyqt
   - pyqtgraph=0.13.3
   - pyserial
+  # Testing dependencies
+  - pytest>=7.0
+  - pytest-qt>=4.2
+  - pytest-mock>=3.10
+  - pytest-cov>=4.0
+  - pytest-timeout>=2.1

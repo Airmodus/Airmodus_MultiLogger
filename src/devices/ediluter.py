@@ -166,6 +166,15 @@ class eDiluterWidget(ComplexDevice):
         """eDiluter doesn't have error monitoring via status hex."""
         return 0
 
+    def update_settings(self, settings):
+        """
+        eDiluter doesn't have configurable settings that need GUI updates.
+
+        The eDiluter operates in different modes (INIT, WARMUP, STANDBY, MEASUREMENT)
+        but these are status updates handled in update_values(), not settings.
+        """
+        pass
+
     def parse_message(self, message, data_holder=None):
         """
         Parse eDiluter serial messages.
@@ -214,6 +223,16 @@ class eDiluterWidget(ComplexDevice):
                             'data': data,
                             'raw': message,
                             'update_gui': True
+                        }
+                    else:
+                        # Message length is correct but missing 'Status' keyword
+                        return {
+                            'type': 'error',
+                            'command': 'auto-push',
+                            'data': None,
+                            'error': 'Malformed message: missing "Status" keyword',
+                            'raw': message,
+                            'update_gui': False
                         }
                 else:
                     # Incomplete message

@@ -234,6 +234,14 @@ class EDiluterDataWriter(BaseDataWriter):
         return 'YYYY.MM.DD hh:mm:ss,Status,P1,P2,T1,T2,T3,T4,T5,T6,DF1,DF2,DFTot'
 
 
+class TSICPCDataWriter(BaseDataWriter):
+    """Data writer for TSI CPC devices."""
+
+    def get_dat_header(self):
+        """Return TSI CPC .dat file header."""
+        return 'YYYY.MM.DD hh:mm:ss,Concentration (#/cc),Instrument errors (hex)'
+
+
 class ExampleDataWriter(BaseDataWriter):
     """Data writer for example device."""
 

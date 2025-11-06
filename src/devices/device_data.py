@@ -9,8 +9,8 @@ This module defines dataclasses for each device type, providing:
 
 from dataclasses import dataclass
 from numpy import nan, isnan
-from typing import Protocol
-
+from typing import Protocol, List
+import math
 
 class DeviceDataProtocol(Protocol):
     """Common interface all device data must implement."""
@@ -22,21 +22,21 @@ class DeviceDataProtocol(Protocol):
 @dataclass
 class CPCData:
     """Airmodus CPC data structure (14 fields in array, plus extra typed fields)."""
-    concentration: float = nan
-    dead_time: float = nan
-    number_of_pulses: int = 0
-    temp_saturator: float = nan
-    temp_condenser: float = nan
-    temp_optics: float = nan
-    temp_cabin: float = nan
-    pres_inlet: float = nan
-    pres_critical_orifice: float = nan
-    pres_nozzle: float = nan
-    pres_cabin: float = nan
-    liquid_level: int = 0
-    pulse_ratio: float = nan
-    total_errors: int = 0
-    status_hex: str = ""
+    concentration: float = nan # [0]
+    dead_time: float = nan # [2]
+    number_of_pulses: int = 0 # [1]
+    temp_saturator: float = nan # [5]
+    temp_condenser: float = nan # [7]
+    temp_optics: float = nan # [6]
+    temp_cabin: float = nan # [8]
+    pres_inlet: float = nan # [9]
+    pres_critical_orifice: float = nan # [10]
+    pres_nozzle: float = nan # [11]
+    pres_cabin: float = nan # [12]
+    liquid_level: int = 0 # [14]
+    pulse_ratio: float = nan # calculated from [3]
+    total_errors: int = 0 # calculated from [12]
+    status_hex: str = "" # [-1]
     # Extra fields not in legacy array (for pulse quality analysis)
     laser_current: float = nan
     pulse_duration: float = nan
@@ -65,24 +65,26 @@ class CPCData:
 @dataclass
 class PSMData:
     """Airmodus PSM data structure (33 fields for PSM, 34 for PSM2)."""
-    saturator_flow: float = nan
-    excess_flow: float = nan
-    temp_growth_tube: float = nan
-    temp_saturator: float = nan
-    temp_inlet: float = nan
-    temp_heater: float = nan
-    temp_drainage: float = nan
-    temp_cabin: float = nan
-    sat_flow_setpoint: float = nan
-    pres_inlet: float = nan
-    cpc_inlet_flow: float = nan
     concentration_psm: float = nan
-    pres_critical_orifice: float = nan
-    vacuum_flow: float = nan  # PSM2 only
-    poly_correction: float = 0.0
-    scan_status: str = ""
-    status_hex: str = ""
-    note_hex: str = ""
+    cut_off_diameter: float = nan
+    saturator_flow: float = nan # [0] TODO is this correct
+    excess_flow: float = nan # [1]
+    temp_growth_tube: float = nan # [2]
+    temp_saturator: float = nan # [3]
+    temp_inlet: float = nan # [4]
+    temp_heater: float = nan # [5]
+    temp_drainage: float = nan # [6]
+    temp_cabin: float = nan # [7]
+    sat_flow_setpoint: float = nan # [8]
+    pres_inlet: float = nan # [9]
+    pres_inlet_saturator: float = nan # [10]
+    pres_saturator_excess: float = nan # [11]
+    pres_critical_orifice: float = nan # [12]
+    vacuum_flow: float = nan  # PSM2 only [13]
+    poly_correction: float = 0.0 # [14]
+    scan_status: str = "" # [15]
+    status_hex: str = "" # [-2]
+    note_hex: str = "" # [-1]
     total_errors: int = 0
     liquid_errors: int = 0
     # Placeholders for connected CPC data (14 fields from CPC + 2 calculated fields)
@@ -101,41 +103,67 @@ class PSMData:
     cpc_total_errors: int = 0
     cpc_status_hex: str = ""
 
-    def to_array(self) -> list:
+    def to_array(self) -> List:
         """Convert to array in order expected by legacy code."""
-        return [
-            self.saturator_flow,              # 0
-            self.excess_flow,                 # 1
-            self.concentration_psm,           # 2
-            self.temp_growth_tube,            # 3
-            self.temp_saturator,              # 4
-            self.temp_inlet,                  # 5
-            self.temp_heater,                 # 6
-            self.pres_inlet,                  # 7
-            self.sat_flow_setpoint,           # 8
-            self.pres_critical_orifice,       # 9
-            self.cpc_inlet_flow,              # 10
-            self.temp_drainage,               # 11
-            self.temp_cabin,                  # 12
-            self.poly_correction,             # 13
-            self.scan_status,                 # 14
-            self.vacuum_flow,                 # 15 - Always included (nan for Retrofit, value for PSM2)
-            # Connected CPC data (14 fields) starts at index 16
-            self.cpc_concentration,           # 16
-            self.cpc_dilution_correction,     # 17
-            self.cpc_temp_sat,                # 18
-            self.cpc_temp_con,                # 19
-            self.cpc_temp_opt,                # 20
-            self.cpc_temp_cab,                # 21
-            self.cpc_pres_crit,               # 22
-            self.cpc_pres_noz,                # 23
-            self.cpc_pres_in,                 # 24
-            self.cpc_liquid,                  # 25
-            self.cpc_pulses,                  # 26
-            self.cpc_dead_time,               # 27
-            self.cpc_total_errors,            # 28
-            self.cpc_status_hex               # 29
+        # Build base PSM data up to scan_status (indices 0-14 in legacy)
+        base = [
+            nan,  # [legacy 0: placeholder]
+            nan,  # [1: placeholder]
+            self.saturator_flow,  # [2: but aligned to legacy sat_flow at ~4; comments below use legacy-ish labels]
+            self.excess_flow,  # [~5]
+            self.temp_saturator,  # [~6, legacy 3]
+            self.temp_growth_tube,  # [~7, legacy 2]
+            self.temp_inlet,  # [~8, legacy 4]
+            self.temp_drainage,  # [~9, legacy 6]
+            self.temp_heater,  # [~10, legacy 5]
+            self.temp_cabin,  # [~11, legacy 7]
+            self.pres_inlet,  # [~12, legacy 9]
+            self.pres_inlet_saturator,  # [~13, legacy 10]
+            self.pres_saturator_excess,  # [~14, legacy 11]
+            self.pres_critical_orifice,  # [~15, legacy 12]
+            self.scan_status,  # [~16, legacy 14]
         ]
+        
+        # Conditionally include vacuum_flow only if it's not NaN (i.e., for PSM2)
+        if not math.isnan(self.vacuum_flow):
+            base.append(self.vacuum_flow)  # Inserted at legacy-equivalent 15
+        # determine PSM status
+        if int(self.status_hex, 16) == 0:
+            psm_status = 1
+        else:
+            psm_status = 0
+        # determine PSM note
+        if int(self.note_hex, 16) == 0:
+            psm_note = 1
+        else:
+            psm_note = 0
+
+        base.append(psm_status)
+        base.append(psm_note)
+        
+        # Append connected CPC data (14 fields, starting at legacy 17 for PSM1 or 18 for PSM2)
+        cpc_data = [
+            self.cpc_concentration,  # [legacy ~17/18]
+            self.cpc_dilution_correction,  # [~18/19]
+            self.cpc_temp_sat,  # [~19/20]
+            self.cpc_temp_con,  # [~20/21]
+            self.cpc_temp_opt,  # [~21/22]
+            self.cpc_temp_cab,  # [~22/23]
+            self.cpc_pres_crit,  # [~23/24]
+            self.cpc_pres_noz,  # [~24/25]
+            self.cpc_pres_in,  # [~25/26]
+            self.cpc_liquid,  # [~26/27]
+            self.cpc_pulses,  # [~27/28]
+            self.cpc_dead_time,  # [~28/29]
+            self.cpc_total_errors,  # [~29/30]
+            self.cpc_status_hex,  # [~30/31]
+        ]
+        base.extend(cpc_data)
+        base.append(self.status_hex)
+        base.append(self.note_hex)
+        
+        return base
+    
 
 
 @dataclass
@@ -302,19 +330,15 @@ class CPCSettings:
     water_removal: float = nan
     averaging_time: float = nan
     condenser_temp: float = nan
-    spare1: float = nan  # temp_optics in older firmware
+    optics_temp: float = nan
     saturator_temp: float = nan
-    spare2: float = nan
-    spare3: float = nan
-    spare4: float = nan
-    spare5: float = nan
-
-    # Additional fields from compile_cpc_settings (from pall array)
-    nominal_inlet_flow: float = nan
     measured_cpc_flow: float = nan
-    opc_threshold: float = nan
-    opc_threshold_2: float = nan
     dead_time_correction: float = nan
+
+    # From :SYST:PALL response
+    nominal_inlet_flow: float = nan # nominal inlet flow rate
+    opc_threshold: float = nan # OPC counter threshold voltage
+    opc_threshold_2: float = nan # OPC counter threshold voltage 2
     k_factor: float = nan
     tau: float = nan
 
@@ -332,7 +356,7 @@ class CPCSettings:
             self.measured_cpc_flow,        # [2]
             self.saturator_temp,           # [3]
             self.condenser_temp,           # [4]
-            self.spare1,                   # [5] temp_optics
+            self.optics_temp,              # [5]
             self.autofill,                 # [6]
             self.opc_threshold,            # [7]
             self.opc_threshold_2,          # [8]
@@ -360,9 +384,8 @@ class PSMSettings:
     temp_inlet: float = nan
     temp_heater: float = nan
     temp_drainage: float = nan
-    cpc_inlet_flow: float = nan  # This is stored as cpc_flow_rate in array
+    cpc_inlet_flow: float = nan
 
-    # Additional fields for array generation
     inlet_flow_rate: float = nan  # Calculated and stored by plot_manager
     co_flow: float = nan  # CO flow (Retrofit PSM only)
     dilution_parameters: list = None  # Variable length, stored as list
@@ -399,8 +422,8 @@ class PSMSettings:
         if self.dilution_parameters:
             result.extend(self.dilution_parameters)
 
-        # CPC settings are NOT included here - they're handled by data_logger
-        # when writing .par files (see data_logger.py lines 288-310)
+        # CPC settings are NOT included here - they're handled by PSMDataWriter.get_par_data()
+        # which fetches and appends connected CPC settings when writing .par files
 
         return result
 

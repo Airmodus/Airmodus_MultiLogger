@@ -348,7 +348,7 @@ class CPCWidget(ComplexDevice):
                 self.current_data.pres_cabin = meas_list[12]
                 self.current_data.laser_current = meas_list[13]
                 self.current_data.liquid_level = int(meas_list[14])
-                # Calculate pulse_duration and pulse_ratio (matches compile_cpc_data logic)
+                # Calculate pulse_duration and pulse_ratio
                 if str(meas_list[3]) == "nan":
                     self.current_data.pulse_ratio = nan
                 elif meas_list[1] == 0:
@@ -363,7 +363,7 @@ class CPCWidget(ComplexDevice):
                 return {
                     'type': 'data',
                     'command': command,
-                    'data': self.current_data.to_array(),  # Use dataclass to_array() instead of compile_cpc_data
+                    'data': self.current_data.to_array(),
                     'status_hex': status_hex,
                     'total_errors': total_errors,
                     'raw': message,
@@ -382,14 +382,10 @@ class CPCWidget(ComplexDevice):
                 self.settings.water_removal = prnt_list[4]
                 self.settings.averaging_time = prnt_list[5]
                 self.settings.condenser_temp = prnt_list[6]
-                self.settings.spare1 = prnt_list[7]
+                self.settings.optics_temp = prnt_list[7]
                 self.settings.saturator_temp = prnt_list[8]
-                if len(prnt_list) > 9:
-                    self.settings.spare2 = prnt_list[9]
-                    self.settings.measured_cpc_flow = prnt_list[10]
-                    self.settings.spare4 = prnt_list[11]
-                    self.settings.dead_time_correction = prnt_list[12]
-                    self.settings.spare5 = nan if len(prnt_list) <= 13 else prnt_list[13]
+                self.settings.measured_cpc_flow = prnt_list[10]
+                self.settings.dead_time_correction = prnt_list[12]
 
                 return {
                     'type': 'settings',
@@ -402,7 +398,7 @@ class CPCWidget(ComplexDevice):
             # Handle :SYST:PALL - all parameters
             elif command == ":SYST:PALL":
                 data[22] = "NaN"  # device id
-                data[23] = "NaN"  # firmware variant letter
+                data[23] = "NaN"  # firmware variant letter TODO store device id and firmware variant letter somewhere
                 pall_list = list(map(float, data))
 
                 # Update settings object with pall fields
@@ -411,7 +407,6 @@ class CPCWidget(ComplexDevice):
                 self.settings.opc_threshold_2 = pall_list[27]
                 self.settings.k_factor = pall_list[20]
                 self.settings.tau = pall_list[25]
-                # measured_cpc_flow and dead_time_correction come from prnt
 
                 return {
                     'type': 'settings',
@@ -435,6 +430,7 @@ class CPCWidget(ComplexDevice):
             # Handle :STAT:SELF:LOG - self-test errors
             elif command == ":STAT:SELF:LOG":
                 error_length = len(CPC_ERRORS)
+                # convert hex to int and int to binary + remove 0b from string and fill with 0s
                 status_bin = bin(int(data[0], 16))[2:].zfill(error_length)
                 inverted_status_bin = status_bin[::-1]
 

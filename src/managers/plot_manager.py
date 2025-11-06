@@ -90,7 +90,7 @@ class PlotManager:
                                 print(traceback.format_exc())
                                 logging.exception(e)
                                 # Stop pulse analysis if exception occurs
-                                self.main_window.pulse_analysis_stop(dev_id, dev)
+                                self.main_window.data_logger.pulse_analysis_stop(dev_id, dev)
                             continue  # Skip normal plot data update during special mode
 
                     # Use device plot config to extract and store plot values

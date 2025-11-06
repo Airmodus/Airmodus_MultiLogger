@@ -3,6 +3,7 @@ from config import TSI_CPC, CPC
 from devices.base_device import SimpleDevice
 from devices.device_data import TSI_CPCData
 from plotting.device_plot_configs import TSICPCPlotConfig
+from devices.data_writers import TSICPCDataWriter
 
 # TSI CPC widget
 class TSIWidget(SimpleDevice):
@@ -14,6 +15,8 @@ class TSIWidget(SimpleDevice):
 
         # Plot configuration (composition over inheritance)
         self.plot_config = TSICPCPlotConfig(self)
+        # Data writer configuration (composition over inheritance)
+        self.data_writer = TSICPCDataWriter(self)
 
     def get_plot_keys(self):
         """TSI CPC has concentration and raw concentration plots like Airmodus CPC."""

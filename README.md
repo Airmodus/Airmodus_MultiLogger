@@ -87,6 +87,13 @@ python app.py
 - **PyQtGraph** (version 0.13.3): Real-time plotting library
 - **PyInstaller**: (Optional) For creating standalone executables
 
+### Testing Dependencies (Development)
+- **pytest**: Testing framework
+- **pytest-qt**: PyQt testing utilities
+- **pytest-mock**: Mocking utilities
+- **pytest-cov**: Coverage reporting
+- **pytest-timeout**: Timeout handling
+
 ### Python Standard Library Modules
 time, datetime, os, locale, platform, logging, random, traceback, json, warnings, sys
 
@@ -280,6 +287,26 @@ Detailed application log including:
 For information on extending the application, adding new devices, or understanding the architecture:
 - **[ARCHITECTURE.md](ARCHITECTURE.md)**: Technical deep dive into system design
 - **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)**: Step-by-step guide for developers
+- **[TESTING.md](TESTING.md)**: Comprehensive testing guide
+
+### Running Tests
+
+The project includes a comprehensive test suite for ensuring code quality and preventing regressions:
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage report
+pytest --cov=src --cov-report=html
+
+# Run specific test categories
+pytest -m unit          # Fast unit tests
+pytest -m integration   # Integration tests
+pytest -m gui           # GUI tests
+```
+
+See [TESTING.md](TESTING.md) for detailed testing documentation, including how to write new tests and use fixtures.
 
 ### Quick Architecture Overview
 

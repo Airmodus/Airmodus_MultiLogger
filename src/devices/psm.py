@@ -2,6 +2,7 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QSplitter, QTabWidget, QGridLayout, QWidget,
     QSizePolicy)
+from numpy import nan
 
 
 from config import PSM, PSM2, PSM_ERRORS
@@ -233,7 +234,7 @@ class PSMWidget(ComplexDevice):
                     print("PSM error: " + str(parsed['error']))
 
         # Compile settings if all required data is available
-        if self.needs_settings_fetch and settings_fetched and self.settings.dilution_parameters is not None:
+        if self.needs_settings_fetch and settings_fetched and self.settings.dilution_parameters:
             try:
                 # Get CO flow rate (PSM Retrofit only)
                 from config import PSM
@@ -378,15 +379,15 @@ class PSMWidget(ComplexDevice):
                 self.current_data.temp_cabin = float(data[7])
                 self.current_data.sat_flow_setpoint = float(data[8])
                 self.current_data.pres_inlet = float(data[9])
-                self.current_data.cpc_inlet_flow = float(data[10])
-                self.current_data.concentration_psm = float(data[11])
+                self.current_data.pres_inlet_saturator = float(data[10])
+                self.current_data.pres_saturator_excess = float(data[11])
                 self.current_data.pres_critical_orifice = float(data[12])
-                if self.device_type == PSM2 and len(data) > 13:
+                if self.device_type == PSM2: 
                     self.current_data.vacuum_flow = float(data[13])
                 self.current_data.poly_correction = poly_correction
-                self.current_data.scan_status = scan_status
-                self.current_data.status_hex = status_hex
-                self.current_data.note_hex = note_hex
+                self.current_data.scan_status = scan_status # [15]
+                self.current_data.status_hex = status_hex # [-2]
+                self.current_data.note_hex = note_hex # [-1]
                 self.current_data.total_errors = total_errors
                 self.current_data.liquid_errors = liquid_errors
 
@@ -590,7 +591,7 @@ class PSMWidget(ComplexDevice):
 
         # Clear dilution parameters in device settings
         if self.settings:
-            self.settings.dilution_parameters = None
+            self.settings.dilution_parameters = []
 
     def send_read_commands(self, dev_conn, device_param):
         """
@@ -603,7 +604,7 @@ class PSMWidget(ComplexDevice):
         if self.needs_settings_fetch:
             dev_conn.send_message(":SYST:PRNT")
 
-        if self.settings and self.settings.dilution_parameters is None:
+        if self.settings and not self.settings.dilution_parameters:
             dev_conn.send_delayed_message(":SYST:VCMP", 150)
 
     def validate_10hz_mode(self, params, device_param):
