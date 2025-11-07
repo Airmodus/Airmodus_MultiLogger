@@ -346,31 +346,41 @@ class TestPSMDataArrayConversion:
 
     def test_to_array_length(self, psm_retrofit_widget):
         """Test that to_array() produces correct array length."""
+        # Set valid hex strings (normally set by parse_message)
+        psm_retrofit_widget.current_data.status_hex = "0x000"
+        psm_retrofit_widget.current_data.note_hex = "0x000"
+
         arr = psm_retrofit_widget.current_data.to_array()
 
-        # PSM array has 30 fields (PSM data + CPC data)
-        assert len(arr) == 30
+        # PSM array has 33 fields (PSM data + psm_status + psm_note + CPC data + hex fields)
+        assert len(arr) == 33
 
     def test_to_array_includes_vacuum_flow(self, psm2_widget):
         """Test that to_array() includes vacuum flow (PSM2 field)."""
         psm2_widget.current_data.vacuum_flow = 0.5
+        psm2_widget.current_data.status_hex = "0x000"
+        psm2_widget.current_data.note_hex = "0x000"
 
         arr = psm2_widget.current_data.to_array()
 
-        # Vacuum flow is at index 15
+        # Vacuum flow is at index 15, followed by psm_status and psm_note
         assert arr[15] == 0.5
+        assert arr[16] == 1  # psm_status (1 = OK since status_hex is 0x000)
+        assert arr[17] == 1  # psm_note (1 = OK since note_hex is 0x000)
 
     def test_to_array_includes_cpc_data_fields(self, psm_retrofit_widget):
         """Test that to_array() includes connected CPC data fields."""
         psm_retrofit_widget.current_data.cpc_concentration = 1234.5
         psm_retrofit_widget.current_data.cpc_dilution_correction = 10.5
+        psm_retrofit_widget.current_data.status_hex = "0x000"
+        psm_retrofit_widget.current_data.note_hex = "0x000"
 
         arr = psm_retrofit_widget.current_data.to_array()
 
-        # CPC concentration is at index 16
-        assert arr[16] == 1234.5
-        # CPC dilution correction is at index 17
-        assert arr[17] == 10.5
+        # CPC concentration is at index 17 (after scan_status, psm_status, psm_note)
+        assert arr[17] == 1234.5
+        # CPC dilution correction is at index 18
+        assert arr[18] == 10.5
 
 
 # ============================================================================

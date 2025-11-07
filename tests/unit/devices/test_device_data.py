@@ -113,42 +113,46 @@ class TestPSMData:
 
     def test_to_array_length(self):
         """Test that to_array() returns correct number of fields."""
-        data = PSMData()
+        data = PSMData(status_hex="0x000", note_hex="0x000")
 
         arr = data.to_array()
 
-        assert len(arr) == 30, "PSM array should have 30 fields (PSM data + CPC data)"
+        assert len(arr) == 33, "PSM array should have 33 fields (PSM data + CPC data + hex fields)"
 
     def test_to_array_includes_cpc_fields(self):
         """Test that to_array() includes CPC data fields."""
-        data = PSMData()
+        data = PSMData(status_hex="0x000", note_hex="0x000")
         data.cpc_concentration = 1234.5
         data.cpc_dilution_correction = 10.5
         data.cpc_temp_sat = 40.0
 
         arr = data.to_array()
 
-        assert arr[16] == 1234.5, "Index 16 should be cpc_concentration"
-        assert arr[17] == 10.5, "Index 17 should be cpc_dilution_correction"
-        assert arr[18] == 40.0, "Index 18 should be cpc_temp_sat"
+        assert arr[17] == 1234.5, "Index 17 should be cpc_concentration"
+        assert arr[18] == 10.5, "Index 18 should be cpc_dilution_correction"
+        assert arr[19] == 40.0, "Index 19 should be cpc_temp_sat"
 
     def test_vacuum_flow_in_array(self):
-        """Test that vacuum_flow (PSM2 field) is always in array."""
-        data = PSMData()
+        """Test that vacuum_flow (PSM2 field) is included in array when not NaN."""
+        data = PSMData(status_hex="0x000", note_hex="0x000")
         data.vacuum_flow = 0.5
 
         arr = data.to_array()
 
-        assert arr[15] == 0.5, "Index 15 should be vacuum_flow"
+        assert arr[15] == 0.5, "Index 15 should be vacuum_flow for PSM2"
+        assert arr[16] == 1, "Index 16 should be psm_status"
+        assert arr[17] == 1, "Index 17 should be psm_note"
 
     def test_psm_retrofit_without_vacuum(self):
-        """Test PSM Retrofit (vacuum_flow = nan) still has field in array."""
-        data = PSMData()
+        """Test PSM Retrofit (vacuum_flow = nan) doesn't include vacuum_flow in array."""
+        data = PSMData(status_hex="0x000", note_hex="0x000")
         # vacuum_flow defaults to nan for Retrofit
 
         arr = data.to_array()
 
-        assert np.isnan(arr[15]), "Index 15 should be nan for Retrofit"
+        # For Retrofit, vacuum_flow is NOT in array, so psm_status is at index 15
+        assert arr[15] == 1, "Index 15 should be psm_status (1 = OK) for Retrofit"
+        assert arr[16] == 1, "Index 16 should be psm_note (1 = OK) for Retrofit"
 
 
 # ============================================================================
