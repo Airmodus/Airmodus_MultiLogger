@@ -67,6 +67,9 @@ class DeviceManager:
             if device_widget:
                 # Handle connection established
                 if connected and not dev.child('Connected').value():
+                    # Log connection
+                    logging.info(f"[SERIAL CONNECT] DevID={dev_id} Port={port} DeviceType={device_widget.dev_type}")
+
                     # Register for IDN inquiry if device supports it
                     if device_widget.supports_idn_inquiry():
                         if dev_id not in self.data_holder.idn_inquiry_devices:
@@ -83,6 +86,9 @@ class DeviceManager:
 
                 # Handle disconnection
                 if not connected and dev.child('Connected').value():
+                    # Log disconnection
+                    logging.info(f"[SERIAL DISCONNECT] DevID={dev_id} Port={port}")
+
                     # Device-specific cleanup
                     device_widget.on_disconnection(dev)
 

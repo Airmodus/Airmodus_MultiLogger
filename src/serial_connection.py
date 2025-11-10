@@ -1,5 +1,6 @@
 from PyQt5.QtCore import QTimer
 from serial import Serial
+import logging
 
 class SerialDeviceConnection():
     def __init__(self):
@@ -46,13 +47,17 @@ class SerialDeviceConnection():
     
     def send_message(self, message):
         # add line termination and convert to bytes
-        message = bytes((str(message)+'\r\n'), 'utf-8')
+        message_str = str(message)
+        message_bytes = bytes((message_str + '\r\n'), 'utf-8')
         try:
+            # log before sending
+            logging.debug(f"[SERIAL TX] Port={self.serial_port} Data={message_str}")
             # send message if connection exists
-            self.connection.write(message)
+            self.connection.write(message_bytes)
         except AttributeError:
-            # print message if connection does not exist
-            print("send_message - no connection, message -", message)
+            # log and print message if connection does not exist
+            logging.warning(f"[SERIAL TX FAIL] No connection - Port={self.serial_port} Data={message_str}")
+            print("send_message - no connection, message -", message_bytes)
     
     def send_delayed_message(self, message, delay):
         QTimer.singleShot(delay, lambda: self.send_message(message))

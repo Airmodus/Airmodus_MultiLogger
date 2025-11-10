@@ -10,6 +10,8 @@ from abc import ABCMeta, abstractmethod
 from PyQt5.QtWidgets import QTabWidget
 from numpy import full, nan
 from devices.device_data import create_device_data, create_device_settings
+import logging
+import traceback
 
 
 # Create a metaclass that combines Qt's metaclass with ABC's metaclass
@@ -444,19 +446,30 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         try:
             # Read all available data
             raw_data = connection.connection.read_all()
+
+            # Log raw read if data received
+            if raw_data:
+                logging.debug(f"[SERIAL RX] DevID={self.dev_id} Port={connection.serial_port} RawBytes={len(raw_data)} Data={raw_data.hex()}")
+
             if not raw_data:
                 return results
 
             # Decode and split into messages
-            messages = raw_data.decode().split("\r")[:-1]  # Remove last empty element
+            decoded = raw_data.decode()
+            logging.debug(f"[SERIAL RX DECODED] DevID={self.dev_id} Data={repr(decoded)}")
+
+            messages = decoded.split("\r")[:-1]  # Remove last empty element
 
             # Parse each message
             for message in messages:
                 if message:  # Skip empty messages
+                    logging.debug(f"[SERIAL RX MSG] DevID={self.dev_id} Message={message}")
                     parsed = self.parse_message(message, data_holder)
                     results.append(parsed)
 
         except Exception as e:
+            logging.error(f"[SERIAL RX ERROR] DevID={self.dev_id} Error={str(e)}")
+            logging.error(traceback.format_exc())
             results.append({
                 'type': 'error',
                 'command': 'serial_read',
