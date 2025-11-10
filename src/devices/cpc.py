@@ -324,7 +324,9 @@ class CPCWidget(ComplexDevice):
                 status_hex = data[-1]
 
                 # Check cabin pressure validity (0-200 kPa)
-                cabin_p_error = not (0 <= float(data[12]) <= 200)
+                # NaN is treated as "no data" (not an error)
+                cabin_p_value = float(data[12])
+                cabin_p_error = not isnan(cabin_p_value) and not (0 <= cabin_p_value <= 200)
 
                 # Update error indicators
                 total_errors = self.update_errors(status_hex, cabin_p_error)

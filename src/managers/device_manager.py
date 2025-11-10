@@ -194,7 +194,8 @@ class DeviceManager:
 
                     # handle *IDN response for serial number
                     if message.startswith('*IDN '):
-                        serial_number = message[5:].strip()
+                        # Extract only the serial number part (stop at first newline/return)
+                        serial_number = message[5:].strip().split('\r')[0].split('\n')[0]
                         self.data_holder.com_descriptions[port] = serial_number
                         close_connection(port, serial_conn)
                         del new_ports[port]  # Remove after successful processing
@@ -321,7 +322,12 @@ class DeviceManager:
         for dev in self.params.child('Device settings').children():
             try:
                 device_id = dev.child('DevID').value()
-                error = self.data_holder.device_errors[device_id]
+
+                # Skip if device not fully initialized yet
+                if device_id not in self.data_holder.device_widgets:
+                    continue
+
+                error = self.data_holder.device_errors.get(device_id, False)
                 device_widget = self.data_holder.device_widgets[device_id]
                 tab_index = self.device_tabs.indexOf(device_widget)
                 connected = dev.child('Connected').value()

@@ -62,12 +62,14 @@ class MainWindow(QMainWindow):
         self.data_holder.disconnected_icon = QIcon(resource_path + "/icons/disconnected.png")
 
         self._setup_parameter_tree()
+        self._setup_gui()
+
+        # Add any existing devices AFTER GUI setup (so device_tabs exists)
         for child in self.params.child('Device settings').children():
             self.device_added(self.params.child('Device settings'), child)
 
         self.device_manager = DeviceManager(self.params, self.data_holder, self.data_holder.device_widgets)
         self.device_manager.list_com_ports()
-        self._setup_gui()
 
         # Update device_manager with device_tabs reference after GUI setup
         self.device_manager.device_tabs = self.device_tabs
@@ -81,6 +83,22 @@ class MainWindow(QMainWindow):
 
         # load ini file if available
         self.load_ini()
+
+        # Update PSM connected CPC references after all devices are loaded
+        # This is needed because during device creation, the CPC device might not exist yet
+        from config import PSM, PSM2
+        for dev in self.params.child('Device settings').children():
+            if dev.child('Device type').value() in [PSM, PSM2]:
+                dev_id = dev.child('DevID').value()
+                psm_widget = self.data_holder.device_widgets.get(dev_id)
+                if psm_widget and hasattr(psm_widget, 'connected_cpc_device'):
+                    try:
+                        cpc_id = dev.child('Connected CPC').value()
+                        if cpc_id != 'None':
+                            cpc_widget = self.data_holder.device_widgets.get(cpc_id)
+                            psm_widget.connected_cpc_device = cpc_widget
+                    except KeyError:
+                        pass
 
     def _setup_parameter_tree(self):
         """Create and configure the ParameterTree."""
@@ -391,6 +409,9 @@ class MainWindow(QMainWindow):
         except ValueError as e:
             print(f"Error creating device widget: {e}")
             return
+
+        # Set device ID in widget (required for device to manage its own state)
+        widget.dev_id = device_id
 
         # Set up device-specific connections using device registry
         setup_device_connections(device_type, widget, device_param, connection, self)

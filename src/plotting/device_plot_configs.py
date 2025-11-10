@@ -522,17 +522,22 @@ class PSMPlotConfig(BasePlotConfig):
         psm_id = device_param.child('DevID').value()
         cpc_id = device_param.child('Connected CPC').value()
 
-        if cpc_id == 'None' or cpc_id in data_holder.pulse_analysis_index:
+        if cpc_id == 'None':
             return
+
+        # Check if connected CPC is doing pulse analysis
+        cpc_widget = data_holder.get_device(cpc_id)
+        if cpc_widget and hasattr(cpc_widget, 'pulse_analysis_index'):
+            if cpc_widget.pulse_analysis_index is not None and cpc_widget.pulse_analysis_index >= 0:
+                return  # CPC is in pulse analysis mode, don't use its data
 
         # Get connected CPC device parameter
         cpc_device = None
-        params = data_holder.params if hasattr(data_holder, 'params') else None
-        if params:
-            for cpc in params.child('Device settings').children():
-                if cpc.child('DevID').value() == cpc_id:
-                    cpc_device = cpc
-                    break
+        device_settings = device_param.parent()  # Get "Device settings" group
+        for cpc in device_settings.children():
+            if cpc.child('DevID').value() == cpc_id:
+                cpc_device = cpc
+                break
 
         if not cpc_device or not cpc_device.child('Connected').value():
             return

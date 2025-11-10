@@ -117,7 +117,7 @@ class PSMDataWriter(BaseDataWriter):
             return True
 
         # Check if device has latest_command
-        if dev_id in data_holder.latest_command:
+        if hasattr(self.device, 'latest_command') and self.device.latest_command is not None:
             return True
 
         # Check connected CPC changes

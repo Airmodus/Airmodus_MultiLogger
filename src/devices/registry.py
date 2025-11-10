@@ -203,15 +203,23 @@ def setup_psm_connections(widget, device_param, connection, app):
     # Wire up connected CPC device reference
     def update_connected_cpc():
         """Update PSM's reference to connected CPC widget."""
-        cpc_id = device_param.child('Connected CPC').value()
-        if cpc_id != 'None':
-            widget.connected_cpc_device = app.data_holder.device_widgets.get(cpc_id)
-        else:
+        try:
+            cpc_id = device_param.child('Connected CPC').value()
+            if cpc_id != 'None':
+                widget.connected_cpc_device = app.data_holder.device_widgets.get(cpc_id)
+            else:
+                widget.connected_cpc_device = None
+        except KeyError:
+            # Connected CPC parameter doesn't exist yet (still being initialized)
             widget.connected_cpc_device = None
 
     # Set initial reference and update when parameter changes
     update_connected_cpc()
-    device_param.child('Connected CPC').sigValueChanged.connect(lambda: update_connected_cpc())
+    try:
+        device_param.child('Connected CPC').sigValueChanged.connect(lambda: update_connected_cpc())
+    except KeyError:
+        # Connected CPC parameter doesn't exist yet, signal will be connected later
+        pass
 
 
 def setup_ediluter_connections(widget, device_param, connection, app):

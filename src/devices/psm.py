@@ -179,6 +179,8 @@ class PSMWidget(ComplexDevice):
 
         # Process each parsed message
         for parsed in parsed_messages:
+            if parsed is None:
+                continue  # Skip unparseable messages
             if parsed['type'] == 'data':
                 # Store measurement data with buffering (uses current_data now)
                 if isnan(float(self.current_data.saturator_flow)):
