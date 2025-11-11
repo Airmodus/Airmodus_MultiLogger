@@ -1,10 +1,6 @@
-import sys
-from time import time 
 from PyQt5.QtCore import QTimer
 from serial import Serial
-from serial.tools import list_ports
-from serial.serialutil import SerialException
-from config import osx_mode, TSI_CPC 
+import logging
 
 class SerialDeviceConnection():
     def __init__(self):
@@ -34,8 +30,8 @@ class SerialDeviceConnection():
             # Try to close with the port that was last used (needed if the port has been changed)
             self.connection.close()
             #print("Connection closed")
-        except:
-            pass
+        except Exception:
+            pass  # Connection already closed or doesn't exist
     
     # close old connection and open new connection
     def change_port(self, serial_port):
@@ -51,29 +47,42 @@ class SerialDeviceConnection():
     
     def send_message(self, message):
         # add line termination and convert to bytes
-        message = bytes((str(message)+'\r\n'), 'utf-8')
+        message_str = str(message)
+        message_bytes = bytes((message_str + '\r\n'), 'utf-8')
         try:
+            # log before sending
+            logging.debug(f"[SERIAL TX] Port={self.serial_port} Data={message_str}")
             # send message if connection exists
-            self.connection.write(message)
+            self.connection.write(message_bytes)
         except AttributeError:
-            # print message if connection does not exist
-            print("send_message - no connection, message -", message)
+            # log and print message if connection does not exist
+            logging.warning(f"[SERIAL TX FAIL] No connection - Port={self.serial_port} Data={message_str}")
+            print("send_message - no connection, message -", message_bytes)
     
     def send_delayed_message(self, message, delay):
         QTimer.singleShot(delay, lambda: self.send_message(message))
-    
-    def send_multiple_messages(self, device_type, ten_hz=False):
 
-        if device_type == 1: # CPC
-            self.send_message(":MEAS:ALL")
-            QTimer.singleShot(150, lambda: self.send_message(":SYST:PRNT"))
-            QTimer.singleShot(300, lambda: self.send_message(":SYST:PALL"))
-            if ten_hz:
-                QTimer.singleShot(450, lambda: self.send_message(":MEAS:OPC_CONC_LOG"))
-        
-        elif device_type == TSI_CPC: # TSI CPC
-            self.send_message("RD") # read concentration
-            QTimer.singleShot(150, lambda: self.send_message("RIE")) # read instrument errors
+    def send_multiple_messages(self, device_widget, ten_hz=False):
+        """
+        Send a sequence of commands to a device with timing delays.
+
+        This method now uses the device's get_read_command_sequence() method
+        to determine which commands to send and their timing, eliminating
+        device-specific if statements from the connection layer.
+
+        Args:
+            device_widget: The device widget instance (must have get_read_command_sequence())
+            ten_hz (bool): Whether 10Hz logging is enabled (CPC-specific)
+        """
+        # Get command sequence from device
+        command_sequence = device_widget.get_read_command_sequence(ten_hz)
+
+        # Send commands with appropriate delays
+        for command, delay in command_sequence:
+            if delay == 0:
+                self.send_message(command)
+            else:
+                self.send_delayed_message(command, delay)
     
     def send_pulse_analysis_messages(self, threshold):
         # send required messages for pulse analysis
@@ -82,7 +91,7 @@ class SerialDeviceConnection():
     
     # --- CPC & PSM set/command functions ---
 
-    # # send set message
+    # send set message
     def send_set(self, message):
         if message == None:
             # if message is None, do nothing
