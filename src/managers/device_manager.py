@@ -236,6 +236,9 @@ class DeviceManager:
             self.params.child('Serial ports').child('Available serial ports').setValue(com_ports_text)
             logging.debug(f"Updated GUI with new COM ports text:\n{com_ports_text}")
 
+            # Update COM port selector dropdowns for all devices
+            self.params.child('Device settings').update_com_port_dropdowns(connected_descriptions)
+
 
     def get_dev_data(self):
         """Send read commands to connected devices."""

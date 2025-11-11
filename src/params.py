@@ -35,6 +35,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         # New types of devices should be added in the "Device type" list and given unique id number
         self.addChild({'name': device_name, 'removable': True, 'type': 'group', 'children': [
                 dict(name="Device nickname", type='str', value="", renamable=True),
+                dict(name="COM port selector", type='list', values={'Select port...': None}, value=None),
                 dict(name="COM port", type=port_type),
                 dict(name="Serial number", type='str', value="", readonly=True),
                 #dict(name="Baud rate", type='int', value=115200, visible=False),
@@ -46,6 +47,9 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 ]})
 
         self.n_devices += 1 # increase device counter
+
+        # Connect COM port selector signal to sync with COM port text box
+        self.children()[-1].child('COM port selector').sigValueChanged.connect(self.sync_port_selector_to_textbox)
 
         # if added device is CPC, update cpc_dict
         if device_value in [CPC, TSI_CPC]:
@@ -122,6 +126,71 @@ class ScalableGroup(parameterTypes.GroupParameter):
     def update_cpc_changed(self, value):
         device = value.parent() # get device parameter
         device.cpc_changed = True # set cpc_changed flag to True
+
+    def update_com_port_dropdowns(self, available_ports_dict):
+        """
+        Update COM port selector dropdown values for all devices.
+
+        Args:
+            available_ports_dict: Dictionary {port: description} from data_holder.com_descriptions
+        """
+        # Build dropdown values dict: {"COM3 - Description": "COM3"}
+        if available_ports_dict:
+            port_values = {f"{port} - {desc}": port for port, desc in sorted(available_ports_dict.items())}
+            # Add default "Select port..." option at the beginning
+            port_values = {'Select port...': None, **port_values}
+        else:
+            port_values = {'No ports available': None}
+
+        # Update all device COM port selector dropdowns
+        for device in self.children():
+            if device.child('COM port selector') is not None:  # Check if parameter exists
+                # Store current value
+                current_port = device.child('COM port selector').value()
+
+                # Find the index of the COM port selector (should be at index 1, after Device nickname)
+                selector_index = None
+                for i, child in enumerate(device.children()):
+                    if child.name() == 'COM port selector':
+                        selector_index = i
+                        break
+
+                # Remove and re-insert parameter at the same position
+                device.removeChild(device.child('COM port selector'))
+                device.insertChild(selector_index, {'name': 'COM port selector', 'type': 'list', 'values': port_values})
+
+                # Restore value if still valid
+                if current_port in port_values.values():
+                    device.child('COM port selector').setValue(current_port)
+
+                # Reconnect signal to sync dropdown selection to text box
+                device.child('COM port selector').sigValueChanged.connect(self.sync_port_selector_to_textbox)
+
+    def sync_port_selector_to_textbox(self, param):
+        """
+        Sync COM port selector dropdown selection to COM port text box.
+
+        Args:
+            param: The parameter that changed (COM port selector)
+        """
+        selected_port = param.value()
+        device = param.parent()
+
+        if selected_port and selected_port not in [None, 'No ports available']:
+            # Determine if we're on macOS (string) or Windows/Linux (integer)
+            port_type = device.child('COM port').opts['type']
+
+            if port_type == 'str':
+                # macOS: Set the full port name (e.g., "/dev/cu.usbserial-1234")
+                device.child('COM port').setValue(selected_port)
+            else:
+                # Windows/Linux: Extract number from "COM3" -> 3
+                try:
+                    if selected_port.startswith('COM'):
+                        port_num = int(selected_port.replace('COM', ''))
+                        device.child('COM port').setValue(port_num)
+                except ValueError:
+                    pass  # If parsing fails, don't update
 
 # Create a dictionary, in which the names, types and default values are set
 params = [
