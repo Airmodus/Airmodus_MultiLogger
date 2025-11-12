@@ -69,10 +69,12 @@ class MainWindow(QMainWindow):
             self.device_added(self.params.child('Device settings'), child)
 
         self.device_manager = DeviceManager(self.params, self.data_holder, self.data_holder.device_widgets)
-        self.device_manager.list_com_ports()
 
         # Update device_manager with device_tabs reference after GUI setup
         self.device_manager.device_tabs = self.device_tabs
+
+        # Start initial port scan to populate dropdowns
+        QTimer.singleShot(100, self.device_manager.list_com_ports)
 
         self.plot_manager = PlotManager(self, self.data_holder, self.main_plot)
         self.data_logger = DataLogger(self.data_holder, self.params)
@@ -168,6 +170,10 @@ class MainWindow(QMainWindow):
         # connect main_plot's auto range button click to auto_range_clicked function
         self.main_plot.plot.autoBtn.clicked.connect(self.auto_range_clicked)
 
+        # connect DeviceManager port scanning signals for progressive UI updates
+        self.device_manager.port_scan_started.connect(self._on_port_scan_started)
+        self.device_manager.port_scan_complete.connect(self._on_port_scan_complete)
+        self.device_manager.port_scan_progress.connect(self._on_port_scan_progress)
 
         # connect parameter tree's sigTreeStateChanged signal to save_ini function
         self.params.sigTreeStateChanged.connect(self.save_ini)
@@ -180,6 +186,27 @@ class MainWindow(QMainWindow):
         self.data_holder.inquiry_flag = True
         self.data_holder.inquiry_time = time()
         self.data_holder.com_descriptions = {} # reset com descriptions
+        # Trigger the new threaded port scanning
+        self.device_manager.list_com_ports()
+
+    def _on_port_scan_started(self):
+        """Handle port scan start - update UI to show scanning in progress."""
+        # Update the 'Available serial ports' text to show scanning
+        self.params.child('Serial ports').child('Available serial ports').setValue('Scanning ports...')
+
+    def _on_port_scan_complete(self):
+        """Handle port scan completion - update UI to show scan complete."""
+        # Port list is already updated by DeviceManager, just log completion
+        import logging
+        logging.info("Port scan completed")
+
+    def _on_port_scan_progress(self, current: int, total: int):
+        """Handle port scan progress updates."""
+        # Update the 'Available serial ports' text to show progress
+        progress_text = f'Scanning ports... ({current}/{total})'
+        current_text = self.params.child('Serial ports').child('Available serial ports').value()
+        if current_text.startswith('Scanning'):
+            self.params.child('Serial ports').child('Available serial ports').setValue(progress_text)
     
 
     def save_ini(self):

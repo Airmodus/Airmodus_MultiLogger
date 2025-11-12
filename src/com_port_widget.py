@@ -1,8 +1,9 @@
 """
 Custom COM port selector widget that combines a text input with a dropdown selector.
+Enhanced with status indicators for port availability.
 """
 
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 from pyqtgraph.parametertree import Parameter, registerParameterType
 from pyqtgraph.parametertree.parameterTypes import WidgetParameterItem
 import platform
@@ -12,16 +13,28 @@ class ComPortWidget(QtWidgets.QWidget):
     """
     Custom widget combining a QLineEdit with a dropdown button for port selection.
     The text field allows manual entry, while the dropdown provides quick selection
-    from available ports.
+    from available ports with status indicators.
     """
 
     sigChanged = QtCore.pyqtSignal(object)  # Signal for pyqtgraph compatibility
     sigValueChanged = QtCore.pyqtSignal(object)  # Emits the port value
 
+    # Status indicator colors and symbols
+    STATUS_INDICATORS = {
+        'available': ('🟢', '#4CAF50', 'Available'),
+        'in_use': ('🔴', '#F44336', 'In Use'),
+        'connected': ('🟡', '#FFC107', 'Connected'),
+        'error': ('⚠️', '#FF9800', 'Error'),
+        'permission_denied': ('🔒', '#9E9E9E', 'Permission Denied'),
+        'unknown': ('❓', '#607D8B', 'Unknown')
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.is_osx = platform.system() == 'Darwin'
         self.available_ports = {}  # Will store {display_text: port_value}
+        self.port_statuses = {}  # Will store {port_value: status}
+        self.port_info = {}  # Will store {port_value: {serial_number, device_type, etc}}
 
         # Create layout
         layout = QtWidgets.QHBoxLayout(self)
@@ -37,9 +50,25 @@ class ComPortWidget(QtWidgets.QWidget):
         self.dropdown_button.setText("▼")
         self.dropdown_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
 
-        # Create menu for dropdown
+        # Create menu for dropdown with custom styling
         self.menu = QtWidgets.QMenu(self)
         self.dropdown_button.setMenu(self.menu)
+
+        # Apply styling for better visual appearance
+        self.menu.setStyleSheet("""
+            QMenu {
+                background-color: white;
+                border: 1px solid #ddd;
+                padding: 5px 0px;
+            }
+            QMenu::item {
+                padding: 5px 30px 5px 25px;
+                min-width: 200px;
+            }
+            QMenu::item:selected {
+                background-color: #e3f2fd;
+            }
+        """)
 
         # Add widgets to layout
         layout.addWidget(self.line_edit)
@@ -83,15 +112,21 @@ class ComPortWidget(QtWidgets.QWidget):
         # Update the text field (this will trigger sigValueChanged via _on_manual_change)
         self.line_edit.setText(display_value)
 
-    def set_available_ports(self, ports_dict):
+    def set_available_ports(self, ports_dict, port_statuses=None, port_info=None):
         """
-        Update the available ports in the dropdown.
+        Update the available ports in the dropdown with optional status indicators.
 
         Args:
             ports_dict: Dictionary mapping "PORT - Description" to port value
                        e.g., {"COM3 - Device Name": "COM3", ...}
+            port_statuses: Optional dict mapping port_value to status
+                          e.g., {"COM3": "available", "COM4": "in_use"}
+            port_info: Optional dict mapping port_value to additional info
+                      e.g., {"COM3": {"device_type": "CPC", "serial_number": "12345"}}
         """
         self.available_ports = ports_dict
+        self.port_statuses = port_statuses or {}
+        self.port_info = port_info or {}
 
         # Clear existing menu
         self.menu.clear()
@@ -104,7 +139,40 @@ class ComPortWidget(QtWidgets.QWidget):
             for display_text, port_value in ports_dict.items():
                 if port_value is None:  # Skip the "Select port..." entry
                     continue
-                action = self.menu.addAction(display_text)
+
+                # Get status for this port
+                status = self.port_statuses.get(port_value, 'unknown')
+                indicator, color, status_text = self.STATUS_INDICATORS.get(
+                    status, self.STATUS_INDICATORS['unknown']
+                )
+
+                # Get additional info if available
+                info = self.port_info.get(port_value, {})
+                device_type = info.get('device_type', '')
+                serial_number = info.get('serial_number', '')
+
+                # Build display text with status indicator
+                if device_type and device_type != 'Unknown':
+                    # Include detected device type
+                    menu_text = f"{indicator} {display_text} [{device_type}]"
+                else:
+                    menu_text = f"{indicator} {display_text}"
+
+                # Create action with enhanced tooltip
+                action = self.menu.addAction(menu_text)
+
+                # Set tooltip with detailed information
+                tooltip_parts = [f"Port: {port_value}", f"Status: {status_text}"]
+                if serial_number:
+                    tooltip_parts.append(f"Serial: {serial_number}")
+                if device_type and device_type != 'Unknown':
+                    tooltip_parts.append(f"Type: {device_type}")
+                action.setToolTip('\n'.join(tooltip_parts))
+
+                # Disable if port is in use or has error (but not if just selected)
+                if status in ['in_use', 'error', 'permission_denied']:
+                    action.setEnabled(False)
+
                 # Use lambda with default argument to capture port_value
                 action.triggered.connect(
                     lambda checked=False, pv=port_value: self._on_port_selected(pv)
@@ -146,7 +214,9 @@ class ComPortParameterItem(WidgetParameterItem):
 
         # Set initial available ports if provided in parameter options
         if 'ports' in self.param.opts:
-            widget.set_available_ports(self.param.opts['ports'])
+            port_statuses = self.param.opts.get('port_statuses', None)
+            port_info = self.param.opts.get('port_info', None)
+            widget.set_available_ports(self.param.opts['ports'], port_statuses, port_info)
 
         return widget
 
@@ -171,20 +241,22 @@ class ComPortParameter(Parameter):
 
         super().__init__(**opts)
 
-    def set_available_ports(self, ports_dict):
+    def set_available_ports(self, ports_dict, port_statuses=None, port_info=None):
         """
-        Update the available ports in the dropdown.
+        Update the available ports in the dropdown with optional status indicators.
 
         Args:
             ports_dict: Dictionary mapping "PORT - Description" to port value
+            port_statuses: Optional dict mapping port_value to status
+            port_info: Optional dict with additional port information
         """
-        self.setOpts(ports=ports_dict)
+        self.setOpts(ports=ports_dict, port_statuses=port_statuses, port_info=port_info)
 
         # Update the widget if it exists
         if hasattr(self, 'items') and len(self.items) > 0:
             for item in self.items:
                 if hasattr(item, 'widget') and item.widget is not None:
-                    item.widget.set_available_ports(ports_dict)
+                    item.widget.set_available_ports(ports_dict, port_statuses, port_info)
 
 
 # Register the custom parameter type with pyqtgraph

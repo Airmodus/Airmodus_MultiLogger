@@ -520,6 +520,7 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
             elif parsed['type'] == 'info' and parsed['command'] == '*IDN':
                 # Handle device identification
                 serial_number = parsed['data']
+                print(f"[DEBUG IDN] Device {self.dev_id}: Received IDN response, serial: {serial_number}, type: {self.dev_type}")
                 if device_param.child('Serial number').value() != serial_number:
                     device_param.child('Serial number').setValue(serial_number)
                 if self.dev_id in data_holder.idn_inquiry_devices:

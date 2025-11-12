@@ -132,7 +132,9 @@ def parse_idn_response(message):
     Returns:
         dict: Standardized info response with serial number
     """
+    print(f"[DEBUG IDN] Parsing: Raw message: {repr(message)}")
     serial_number = message.split(" ", 1)[1].strip() if " " in message else ""
+    print(f"[DEBUG IDN] Parsing: Extracted serial number: {serial_number}")
     return {
         'type': 'info',
         'command': '*IDN',
