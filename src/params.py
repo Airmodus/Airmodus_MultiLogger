@@ -1,6 +1,7 @@
 from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, EDILUTER, PSM2, TSI_CPC, AFM, EXAMPLE_DEVICE, save_path, osx_mode)
 from serial_connection import SerialDeviceConnection
+from com_port_widget import ComPortParameter
 
 # ScalableGroup for creating a menu where to set up new COM devices
 class ScalableGroup(parameterTypes.GroupParameter):
@@ -12,8 +13,10 @@ class ScalableGroup(parameterTypes.GroupParameter):
         parameterTypes.GroupParameter.__init__(self, **opts)
         self.n_devices = 0
         self.cpc_dict = {'None': 'None'}
-        # update cpc_dict when device is removed
+        self.rhtp_dict = {'None': 'None'}
+        # update cpc_dict and rhtp_dict when device is removed
         self.sigChildRemoved.connect(self.update_cpc_dict)
+        self.sigChildRemoved.connect(self.update_rhtp_dict)
 
     def addNew(self, device_type, device_name=None): # device_type is the name of the added device type
         # device_value is used to set the default value for the Device type parameter below
@@ -35,8 +38,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         # New types of devices should be added in the "Device type" list and given unique id number
         self.addChild({'name': device_name, 'removable': True, 'type': 'group', 'children': [
                 dict(name="Device nickname", type='str', value="", renamable=True),
-                dict(name="COM port selector", type='list', values={'Select port...': None}, value=None),
-                dict(name="COM port", type=port_type),
+                dict(name="COM port", type='comport', ports={}),
                 dict(name="Serial number", type='str', value="", readonly=True),
                 #dict(name="Baud rate", type='int', value=115200, visible=False),
                 dict(name = "Connection", value = SerialDeviceConnection(), visible=False),
@@ -48,9 +50,6 @@ class ScalableGroup(parameterTypes.GroupParameter):
 
         self.n_devices += 1 # increase device counter
 
-        # Connect COM port selector signal to sync with COM port text box
-        self.children()[-1].child('COM port selector').sigValueChanged.connect(self.sync_port_selector_to_textbox)
-
         # if added device is CPC, update cpc_dict
         if device_value in [CPC, TSI_CPC]:
             self.update_cpc_dict()
@@ -58,6 +57,10 @@ class ScalableGroup(parameterTypes.GroupParameter):
             # when 10 hz is True, OPC concentration is polled
             if device_value == CPC:
                 self.children()[-1].addChild({'name': '10 hz', 'type': 'bool', 'value': False, 'readonly': True, 'visible': False})
+                # Add database-related parameters for CPC (hidden - controlled via ACTRIS tab)
+                self.children()[-1].addChild({'name': 'Database enabled', 'type': 'bool', 'value': False, 'visible': False})
+                self.children()[-1].addChild({'name': 'Linked RHTP', 'type': 'list', 'values': self.rhtp_dict, 'value': 'None', 'visible': False})
+                self.children()[-1].addChild({'name': 'DB averaging interval', 'type': 'list', 'values': ['1 minute', '5 minutes', '1 hour'], 'value': '1 minute', 'visible': False})
 
         # if added device is PSM, add hidden parameters and option for 'Connected CPC'
         if device_value in [PSM, PSM2]:
@@ -77,6 +80,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
         
         # if added device is RHTP, add options for plotted value
         if device_value == RHTP:
+            self.update_rhtp_dict()
             # remove default Plot to main parameter
             self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
             # create new Plot to main parameter with options for plotted value
@@ -127,6 +131,33 @@ class ScalableGroup(parameterTypes.GroupParameter):
         device = value.parent() # get device parameter
         device.cpc_changed = True # set cpc_changed flag to True
 
+    def update_rhtp_dict(self):
+        """Update rhtp_dict with current RHTP devices."""
+        self.rhtp_dict = {'None': 'None'}  # reset rhtp_dict
+        # add device name to rhtp_dict if device is RHTP
+        for device in self.children():
+            if device.child('Device type').value() == RHTP:
+                # check if device has a nickname
+                if device.child('Device nickname').value() != "":
+                    self.rhtp_dict[device.child('Device nickname').value()] = device.child('DevID').value()
+                else:  # if no nickname, use device parameter name (device type and serial number)
+                    self.rhtp_dict[device.name()] = device.child('DevID').value()
+        # update Linked RHTP parameter for all CPC devices
+        for device in self.children():
+            if device.child('Device type').value() == CPC:
+                if device.child('Linked RHTP') is not None:
+                    # store current value (ID) of Linked RHTP parameter
+                    current_rhtp = device.child('Linked RHTP').value()
+                    # remove Linked RHTP parameter
+                    device.removeChild(device.child('Linked RHTP'))
+                    # add updated Linked RHTP parameter (hidden - only visible in ACTRIS tab)
+                    device.addChild({'name': 'Linked RHTP', 'type': 'list', 'values': self.rhtp_dict, 'visible': False})
+                    # set Linked RHTP parameter to previous value if it is still in the list
+                    if current_rhtp in self.rhtp_dict.values():
+                        device.child('Linked RHTP').setValue(current_rhtp)
+                    else:
+                        device.child('Linked RHTP').setValue('None')
+
     def update_com_port_dropdowns(self, available_ports_dict):
         """
         Update COM port selector dropdown values for all devices.
@@ -142,55 +173,12 @@ class ScalableGroup(parameterTypes.GroupParameter):
         else:
             port_values = {'No ports available': None}
 
-        # Update all device COM port selector dropdowns
+        # Update all device COM port dropdowns
         for device in self.children():
-            if device.child('COM port selector') is not None:  # Check if parameter exists
-                # Store current value
-                current_port = device.child('COM port selector').value()
-
-                # Find the index of the COM port selector (should be at index 1, after Device nickname)
-                selector_index = None
-                for i, child in enumerate(device.children()):
-                    if child.name() == 'COM port selector':
-                        selector_index = i
-                        break
-
-                # Remove and re-insert parameter at the same position
-                device.removeChild(device.child('COM port selector'))
-                device.insertChild(selector_index, {'name': 'COM port selector', 'type': 'list', 'values': port_values})
-
-                # Restore value if still valid
-                if current_port in port_values.values():
-                    device.child('COM port selector').setValue(current_port)
-
-                # Reconnect signal to sync dropdown selection to text box
-                device.child('COM port selector').sigValueChanged.connect(self.sync_port_selector_to_textbox)
-
-    def sync_port_selector_to_textbox(self, param):
-        """
-        Sync COM port selector dropdown selection to COM port text box.
-
-        Args:
-            param: The parameter that changed (COM port selector)
-        """
-        selected_port = param.value()
-        device = param.parent()
-
-        if selected_port and selected_port not in [None, 'No ports available']:
-            # Determine if we're on macOS (string) or Windows/Linux (integer)
-            port_type = device.child('COM port').opts['type']
-
-            if port_type == 'str':
-                # macOS: Set the full port name (e.g., "/dev/cu.usbserial-1234")
-                device.child('COM port').setValue(selected_port)
-            else:
-                # Windows/Linux: Extract number from "COM3" -> 3
-                try:
-                    if selected_port.startswith('COM'):
-                        port_num = int(selected_port.replace('COM', ''))
-                        device.child('COM port').setValue(port_num)
-                except ValueError:
-                    pass  # If parsing fails, don't update
+            com_port_param = device.child('COM port')
+            if com_port_param is not None and hasattr(com_port_param, 'set_available_ports'):
+                # Update the available ports in the combined widget
+                com_port_param.set_available_ports(port_values)
 
 # Create a dictionary, in which the names, types and default values are set
 params = [
@@ -212,7 +200,7 @@ params = [
         {'name': 'Available serial ports', 'type': 'text', 'value': '', 'readonly': True},
         {'name': 'Update serial ports', 'type': 'action'},
     ]},
-    
+
     ScalableGroup(name="Device settings", children=[
         # devices will be added here
     ]),

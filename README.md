@@ -12,6 +12,7 @@ An .exe version of the software can be downloaded from the repository's [Release
 - **Multi-Device Support**: Connect and monitor multiple devices simultaneously
 - **Real-Time Visualization**: Live plotting of measurements with customizable views
 - **Data Logging**: Automatic timestamped data and parameter logging
+- **Database Logging**: PostgreSQL integration for time-averaged CPC+RHTP data (ACTRIS-compliant)
 - **Device Control**: Configure and control device settings remotely
 - **Flexible Configuration**: Save and resume complete application states
 - **Auto-Reconnection**: Automatic device detection and reconnection
@@ -85,6 +86,7 @@ python app.py
 - **pySerial**: Serial port communication
 - **PyQt5**: GUI framework
 - **PyQtGraph** (version 0.13.3): Real-time plotting library
+- **psycopg2**: PostgreSQL database adapter (for ACTRIS database logging)
 - **PyInstaller**: (Optional) For creating standalone executables
 
 ### Testing Dependencies (Development)
@@ -155,11 +157,82 @@ YYYY.MM.DD hh:mm:ss,Concentration,Dead Time,Inlet Temp,...
 2025.11.03 10:15:31,1256.8,0.13,25.3,...
 ```
 
-### 5. Saving and Loading Configuration
+### 5. Database Logging (ACTRIS)
+
+The application supports logging CPC data to PostgreSQL with time-averaged measurements for ACTRIS-compliant data archiving.
+
+#### Features
+- **Combined CPC+RHTP data**: Links CPC measurements with RHTP environmental data
+- **Time averaging**: Configurable intervals (1 minute, 5 minutes, 1 hour)
+- **Shared connection**: Multiple CPCs can use the same database connection
+- **Automatic table creation**: `cpc_measurements` table created on first connection
+
+#### Database Requirements
+
+**Connection String Format:**
+```
+postgresql://username:password@host:port/database_name
+```
+
+**Examples:**
+```bash
+# Local database with password
+postgresql://postgres:mypassword@localhost:5432/actris_data
+
+# Remote database
+postgresql://user:pass@db.example.com:5432/cpc_data
+
+# Local trusted connection (no password)
+postgresql://username@localhost:5432/actris_data
+```
+
+**Required Permissions:**
+The database user must have CREATE privileges on the schema. For PostgreSQL 15+:
+```sql
+GRANT ALL ON SCHEMA public TO your_username;
+```
+
+The application automatically creates the `cpc_measurements` table if it doesn't exist.
+
+#### Using the ACTRIS Tab
+
+1. **Connect a CPC device** to the application
+2. **Navigate to the ACTRIS tab** in the CPC device window
+3. **Enter connection string** and click "Test Connection"
+4. **Link an RHTP device** from the dropdown (required)
+5. **Select averaging interval** (1 minute, 5 minutes, or 1 hour)
+6. **Enable database** by checking "Enable database for this device"
+
+#### Database Schema
+
+**Table:** `cpc_measurements`
+
+Time-averaged records include:
+- **CPC measurements**: Concentration, saturation temp, condenser temp, growth tube temp, optics temp, cabinet temp, inlet flow, critical flow, nozzle flow
+- **RHTP data**: Temperature, pressure, relative humidity
+- **Metadata**: Timestamp, averaging duration, serial numbers, status flags
+
+All numeric values are averaged over the selected interval. The application writes one record per interval.
+
+#### Troubleshooting
+
+**"permission denied for schema public":**
+- Grant CREATE privileges: `GRANT ALL ON SCHEMA public TO your_username;`
+- Required for PostgreSQL 15+ by default
+
+**"No RHTP device linked":**
+- RHTP must be connected and selected in the ACTRIS tab before enabling database
+
+**Connection string errors:**
+- Verify format matches examples above
+- Check database credentials and host accessibility
+- Use "Test Connection" button to diagnose issues
+
+### 6. Saving and Loading Configuration
 
 **Save Configuration:**
 - File → Save Configuration (or Ctrl+S)
-- Saves all device settings, parameters, and plot configurations to `resume_config.json`
+- Saves all device settings, parameters, plot configurations, and database connection string to `resume_config.json`
 
 **Auto-Resume:**
 - On startup, the application can automatically load the last saved configuration

@@ -76,6 +76,11 @@ class MainWindow(QMainWindow):
 
         self.plot_manager = PlotManager(self, self.data_holder, self.main_plot)
         self.data_logger = DataLogger(self.data_holder, self.params)
+
+        # Initialize database manager
+        from managers.database_manager import DatabaseManager
+        self.database_manager = DatabaseManager()
+
         self._connect_signals()
 
         self.timer_service = TimerService(self, self.data_holder, self.device_manager, self.plot_manager, self.data_logger)
@@ -214,6 +219,9 @@ class MainWindow(QMainWindow):
     def save_configuration(self, json_path):
         # Get the parameter tree values
         parameter_values = self.save_parameters_recursive(self.params)
+        # Add database connection string
+        if hasattr(self, 'database_manager') and hasattr(self.database_manager, 'connection_string_cached'):
+            parameter_values['database_connection_string'] = self.database_manager.connection_string_cached
         # Save the configuration to the JSON file
         with open(json_path, 'w') as file:
             json.dump(parameter_values, file)
@@ -241,6 +249,19 @@ class MainWindow(QMainWindow):
             self.load_devices(parameter_values.get('Device settings', {}))
             # Set the loaded parameter values to the parameter tree
             self.load_parameters_recursive(self.params, parameter_values)
+
+            # Load database connection string
+            if 'database_connection_string' in parameter_values:
+                conn_string = parameter_values['database_connection_string']
+                if hasattr(self, 'database_manager'):
+                    self.database_manager.connection_string_cached = conn_string
+
+                # Update all CPC ACTRIS tabs with the connection string
+                from config import CPC
+                for dev_id, widget in self.data_holder.device_widgets.items():
+                    if hasattr(widget, 'device_type') and widget.device_type == CPC:
+                        if hasattr(widget, 'database_tab'):
+                            widget.database_tab.connection_string_input.setText(conn_string)
     
     def load_devices(self, device_settings):
         # remove all devices from the parameter tree
@@ -302,7 +323,7 @@ class MainWindow(QMainWindow):
         file_dialog = QFileDialog(self)
         json_path, _ = file_dialog.getOpenFileName(self, 'Load Configuration', '', 'JSON Files (*.json)')
         self.load_configuration(json_path)
-        
+
     def x_range_changed(self, viewbox):
         # if autoscale y is on
         if self.params.child("Plot settings").child('Autoscale Y').value():
@@ -435,13 +456,40 @@ class MainWindow(QMainWindow):
         # Add widget to GUI and initialize error tracking
         self.device_tabs.addTab(widget, widget.name)
         self.data_holder.device_errors[device_id] = False
-    
+
+        # Set main_window reference for CPC database tab
+        from config import CPC
+        if device_type == CPC and hasattr(widget, 'database_tab'):
+            widget.database_tab.main_window = self
+            # Load connection string from cached value
+            if hasattr(self.database_manager, 'connection_string_cached'):
+                widget.database_tab.connection_string_input.setText(self.database_manager.connection_string_cached)
+            # Update global connection status
+            widget.database_tab.update_global_connection_status()
+
     # triggered when a device is removed from the parameter tree
     # sigChildRemoved(self, parent, child, index) - Emitted when a child (device) is removed
     def device_removed(self, param, child):
         if param == self.params.child("Device settings"):
             device_id = child.child("DevID").value()
             device_type = child.child("Device type").value()
+
+            # If it's a CPC with database enabled, unregister from database manager
+            from config import CPC
+            if device_type == CPC and hasattr(self, 'database_manager'):
+                # Check if database was enabled for this device
+                db_enabled_param = child.child('Database enabled')
+                if db_enabled_param and db_enabled_param.value():
+                    # Unregister device (will disconnect if last device)
+                    self.database_manager.unregister_device(device_id)
+
+                    # Update global status in all remaining CPC tabs
+                    for dev_id, widget in self.data_holder.device_widgets.items():
+                        if dev_id != device_id and hasattr(widget, 'device_type') and widget.device_type == CPC:
+                            if hasattr(widget, 'database_tab'):
+                                widget.database_tab.update_global_connection_status()
+                                widget.database_tab.sync_global_status_to_all_cpcs()
+
             # remove device widget from main tab widget
             self.device_tabs.removeTab(self.device_tabs.indexOf(self.data_holder.device_widgets[device_id]))
             # close serial connection if open
@@ -456,6 +504,15 @@ class MainWindow(QMainWindow):
                 pass
 
             self.data_holder.clear_for_device(device_id)
+
+    def closeEvent(self, event):
+        """Handle application close event - cleanup database connections."""
+        # Disconnect from database if connected
+        if hasattr(self, 'database_manager') and self.database_manager.connected:
+            self.database_manager.disconnect()
+
+        # Accept the close event
+        event.accept()
 
 
 # application format

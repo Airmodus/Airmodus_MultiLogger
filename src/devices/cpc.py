@@ -3,7 +3,8 @@ from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from numpy import full, nan, isnan, array_equal
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
 from PyQt5.QtWidgets import (QTabWidget, QGridLayout, QLabel, QWidget,
-    QPushButton, QComboBox, QGraphicsRectItem)
+    QPushButton, QComboBox, QGraphicsRectItem, QTableWidget, QTableWidgetItem,
+    QTextEdit, QCheckBox, QHeaderView, QLineEdit)
 from config import CPC, CPC_ERRORS
 
 from widgets import (
@@ -34,6 +35,9 @@ class CPCWidget(ComplexDevice):
         # create status tab widget showing CPC values
         self.status_tab = CPCStatusTab()
         self.addTab(self.status_tab, "Status")
+        # create database/ACTRIS tab for database settings and status
+        self.database_tab = CPCDatabaseTab(device_parameter)
+        self.addTab(self.database_tab, "ACTRIS")
         # create plot widget for Concentration
         self.plot_tab = SinglePlot(device_type=CPC)
         self.addTab(self.plot_tab, "Concentration")
@@ -868,6 +872,502 @@ class PulseQuality(QWidget):
         self.analysis_points.setData([], [])
         # clear current threshold value
         self.current_threshold.setText("")
-        
+
+
+class CPCDatabaseTab(QWidget):
+    """Database/ACTRIS tab for CPC devices showing database status and settings."""
+
+    def __init__(self, device_param, *args, **kwargs):
+        super().__init__()
+
+        self.device_param = device_param
+
+        layout = QGridLayout()
+
+        row = 0
+
+        # Connection section (global, shared across all CPCs)
+        connection_label = QLabel("<b>Database Connection (shared)</b>")
+        layout.addWidget(connection_label, row, 0, 1, 2)
+        row += 1
+
+        # Connection string input
+        conn_string_label = QLabel("Connection string:")
+        layout.addWidget(conn_string_label, row, 0)
+        self.connection_string_input = QLineEdit()
+        self.connection_string_input.setPlaceholderText("postgresql://user:password@host:port/database")
+        self.connection_string_input.textChanged.connect(self.connection_string_changed)
+        layout.addWidget(self.connection_string_input, row, 1)
+        row += 1
+
+        # Test connection button
+        self.test_connection_btn = QPushButton("Test Connection")
+        self.test_connection_btn.clicked.connect(self.test_connection_clicked)
+        layout.addWidget(self.test_connection_btn, row, 0, 1, 2)
+        row += 1
+
+        # Global connection status
+        global_status_label = QLabel("Global status:")
+        layout.addWidget(global_status_label, row, 0)
+        self.global_connection_status = QLabel("Disconnected")
+        self.global_connection_status.setStyleSheet("color: gray;")
+        layout.addWidget(self.global_connection_status, row, 1)
+        row += 1
+
+        # Active devices count
+        active_devices_label = QLabel("Active devices:")
+        layout.addWidget(active_devices_label, row, 0)
+        self.active_devices_count = QLabel("0 CPCs using database")
+        layout.addWidget(self.active_devices_count, row, 1)
+        row += 1
+
+        # Separator
+        row += 1
+
+        # Device Settings section
+        settings_label = QLabel("<b>This Device Settings</b>")
+        layout.addWidget(settings_label, row, 0, 1, 2)
+        row += 1
+
+        # Database enabled checkbox (connected to device parameter)
+        self.db_enabled_checkbox = QCheckBox("Enable database for this device")
+        self.db_enabled_checkbox.stateChanged.connect(self.db_enabled_changed)
+        layout.addWidget(self.db_enabled_checkbox, row, 0, 1, 2)
+        row += 1
+
+        # Linked RHTP dropdown
+        linked_rhtp_label = QLabel("Linked RHTP device:")
+        layout.addWidget(linked_rhtp_label, row, 0)
+        self.linked_rhtp_dropdown = QComboBox()
+        self.linked_rhtp_dropdown.setToolTip("Select the RHTP sensor to link with this CPC for database recording")
+        self.linked_rhtp_dropdown.currentIndexChanged.connect(self.linked_rhtp_changed)
+        layout.addWidget(self.linked_rhtp_dropdown, row, 1)
+        row += 1
+
+        # Averaging interval dropdown
+        interval_label = QLabel("Averaging interval:")
+        layout.addWidget(interval_label, row, 0)
+        self.interval_dropdown = QComboBox()
+        self.interval_dropdown.addItems(['1 minute', '5 minutes', '1 hour'])
+        self.interval_dropdown.setToolTip("Select the time period for data averaging")
+        self.interval_dropdown.currentTextChanged.connect(self.interval_changed)
+        layout.addWidget(self.interval_dropdown, row, 1)
+        row += 1
+
+        # Separator
+        row += 1
+
+        # Status section
+        status_label = QLabel("<b>This Device Status</b>")
+        layout.addWidget(status_label, row, 0, 1, 2)
+        row += 1
+
+        # Database status indicator
+        db_status_label = QLabel("Status:")
+        layout.addWidget(db_status_label, row, 0)
+        self.db_status_value = QLabel("Disabled")
+        layout.addWidget(self.db_status_value, row, 1)
+        row += 1
+
+        # Last write timestamp
+        last_write_label = QLabel("Last write:")
+        layout.addWidget(last_write_label, row, 0)
+        self.last_write_value = QLabel("Never")
+        layout.addWidget(self.last_write_value, row, 1)
+        row += 1
+
+        # Records written counter
+        records_label = QLabel("Records written:")
+        layout.addWidget(records_label, row, 0)
+        self.records_value = QLabel("0")
+        layout.addWidget(self.records_value, row, 1)
+        row += 1
+
+        # Latest saved data table
+        data_table_label = QLabel("<b>Latest Saved Data</b>")
+        layout.addWidget(data_table_label, row, 0, 1, 2)
+        row += 1
+
+        self.data_table = QTableWidget()
+        self.data_table.setColumnCount(9)
+        self.data_table.setHorizontalHeaderLabels([
+            "Time", "Duration", "Conc", "Temp Sat", "Temp Cond",
+            "Temp Inlet", "Pres Inlet", "RH Inlet", "Errors"
+        ])
+        self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.data_table.setRowCount(10)
+        self.data_table.setMaximumHeight(300)
+        layout.addWidget(self.data_table, row, 0, 1, 2)
+        row += 1
+
+        # Error/info section
+        error_label = QLabel("<b>Messages</b>")
+        layout.addWidget(error_label, row, 0, 1, 2)
+        row += 1
+
+        self.error_text = QTextEdit()
+        self.error_text.setReadOnly(True)
+        self.error_text.setMaximumHeight(100)
+        layout.addWidget(self.error_text, row, 0, 1, 2)
+        row += 1
+
+        # Set row stretches (data table and error text)
+        data_table_row = row - 2
+        error_text_row = row - 1
+        layout.setRowStretch(data_table_row, 2)  # Data table gets more space
+        layout.setRowStretch(error_text_row, 1)  # Error text gets some space
+
+        self.setLayout(layout)
+
+        # Get reference to main window for accessing database_manager
+        # Will be set when tab is added to device
+        self.main_window = None
+
+        # Timer for periodic refresh (every 5 seconds)
+        self.refresh_timer = QTimer()
+        self.refresh_timer.timeout.connect(self.refresh_status)
+        self.refresh_timer.start(5000)  # 5 seconds
+
+        # Initialize dropdowns with current values
+        self.populate_rhtp_dropdown()
+        self.refresh_status()  # Populate other fields and sync to parameters
+
+    def populate_rhtp_dropdown(self):
+        """Populate linked RHTP dropdown from rhtp_dict in device settings."""
+        device_settings = self.device_param.parent()
+        if not hasattr(device_settings, 'rhtp_dict'):
+            return
+
+        # Store current selection (handle case where parameter doesn't exist yet)
+        current_rhtp_id = None
+        try:
+            linked_rhtp_param = self.device_param.child('Linked RHTP')
+            if linked_rhtp_param is not None:
+                current_rhtp_id = linked_rhtp_param.value()
+        except KeyError:
+            # Parameter doesn't exist yet (during initialization)
+            pass
+
+        # Clear and rebuild dropdown
+        self.linked_rhtp_dropdown.blockSignals(True)
+        self.linked_rhtp_dropdown.clear()
+
+        # Add RHTP devices from rhtp_dict
+        for rhtp_name, rhtp_id in device_settings.rhtp_dict.items():
+            self.linked_rhtp_dropdown.addItem(rhtp_name, rhtp_id)
+
+        # Restore previous selection if it still exists
+        if current_rhtp_id is not None:
+            index = self.linked_rhtp_dropdown.findData(current_rhtp_id)
+            if index >= 0:
+                self.linked_rhtp_dropdown.setCurrentIndex(index)
+
+        self.linked_rhtp_dropdown.blockSignals(False)
+
+    def refresh_status(self):
+        """Refresh database status display and dropdowns from device parameters."""
+        # Refresh RHTP dropdown in case devices were added/removed
+        self.populate_rhtp_dropdown()
+
+        # Update linked RHTP dropdown
+        try:
+            linked_rhtp_param = self.device_param.child('Linked RHTP')
+            if linked_rhtp_param is not None:
+                rhtp_id = linked_rhtp_param.value()
+                # Find index in dropdown that matches this ID
+                index = self.linked_rhtp_dropdown.findData(rhtp_id)
+                if index >= 0:
+                    self.linked_rhtp_dropdown.blockSignals(True)
+                    self.linked_rhtp_dropdown.setCurrentIndex(index)
+                    self.linked_rhtp_dropdown.blockSignals(False)
+        except KeyError:
+            pass  # Parameter doesn't exist yet
+
+        # Update averaging interval dropdown
+        try:
+            interval_param = self.device_param.child('DB averaging interval')
+            if interval_param is not None:
+                interval = interval_param.value()
+                index = self.interval_dropdown.findText(interval)
+                if index >= 0:
+                    self.interval_dropdown.blockSignals(True)
+                    self.interval_dropdown.setCurrentIndex(index)
+                    self.interval_dropdown.blockSignals(False)
+        except KeyError:
+            pass  # Parameter doesn't exist yet
+
+        # Update database enabled status
+        try:
+            db_enabled_param = self.device_param.child('Database enabled')
+            if db_enabled_param is not None:
+                enabled = db_enabled_param.value()
+                self.db_enabled_checkbox.setChecked(enabled)
+
+                # Disable dropdowns when database is active (prevent changing settings during recording)
+                self.linked_rhtp_dropdown.setEnabled(not enabled)
+                self.interval_dropdown.setEnabled(not enabled)
+
+                if enabled:
+                    self.db_status_value.setText("Enabled")
+                    self.db_status_value.setStyleSheet("color: green;")
+                else:
+                    self.db_status_value.setText("Disabled")
+                    self.db_status_value.setStyleSheet("color: gray;")
+        except KeyError:
+            pass  # Parameter doesn't exist yet
+
+    def update_last_write(self, timestamp_str):
+        """Update last write timestamp display."""
+        self.last_write_value.setText(timestamp_str)
+
+    def update_record_count(self, count):
+        """Update records written counter."""
+        self.records_value.setText(str(count))
+
+    def update_data_table(self, rows):
+        """
+        Update latest data table with database rows.
+
+        Args:
+            rows: List of dictionaries with row data from database
+        """
+        self.data_table.setRowCount(len(rows))
+
+        for i, row in enumerate(rows):
+            # Time
+            time_val = row.get('time', '')
+            if time_val:
+                time_val = str(time_val)
+            self.data_table.setItem(i, 0, QTableWidgetItem(time_val))
+
+            # Duration
+            duration_val = str(row.get('duration', ''))
+            self.data_table.setItem(i, 1, QTableWidgetItem(duration_val))
+
+            # Concentration
+            conc_val = row.get('conc')
+            self.data_table.setItem(i, 2, QTableWidgetItem(f"{conc_val:.1f}" if conc_val is not None else ""))
+
+            # Temp Sat
+            temp_sat = row.get('temp_sat')
+            self.data_table.setItem(i, 3, QTableWidgetItem(f"{temp_sat:.1f}" if temp_sat is not None else ""))
+
+            # Temp Cond
+            temp_cond = row.get('temp_cond')
+            self.data_table.setItem(i, 4, QTableWidgetItem(f"{temp_cond:.1f}" if temp_cond is not None else ""))
+
+            # Temp Inlet (RHTP)
+            temp_inlet = row.get('temp_inlet')
+            self.data_table.setItem(i, 5, QTableWidgetItem(f"{temp_inlet:.1f}" if temp_inlet is not None else ""))
+
+            # Pressure Inlet (RHTP)
+            pres_inlet = row.get('pressure_inlet')
+            self.data_table.setItem(i, 6, QTableWidgetItem(f"{pres_inlet:.0f}" if pres_inlet is not None else ""))
+
+            # RH Inlet (RHTP)
+            rh_inlet = row.get('humidity_inlet')
+            self.data_table.setItem(i, 7, QTableWidgetItem(f"{rh_inlet:.1f}" if rh_inlet is not None else ""))
+
+            # Errors
+            errors = row.get('stat_log')
+            self.data_table.setItem(i, 8, QTableWidgetItem(str(errors) if errors is not None else ""))
+
+    def add_message(self, message):
+        """Add a message to the error/info text box."""
+        self.error_text.append(message)
+
+    def linked_rhtp_changed(self, index):
+        """Handle linked RHTP dropdown selection change."""
+        # Get the selected RHTP device ID from the dropdown
+        rhtp_id = self.linked_rhtp_dropdown.currentData()
+
+        # Update the hidden parameter
+        try:
+            linked_rhtp_param = self.device_param.child('Linked RHTP')
+            if linked_rhtp_param is not None:
+                linked_rhtp_param.setValue(rhtp_id)
+        except KeyError:
+            pass  # Parameter doesn't exist yet
+
+    def interval_changed(self, text):
+        """Handle averaging interval dropdown selection change."""
+        # Update the hidden parameter
+        try:
+            interval_param = self.device_param.child('DB averaging interval')
+            if interval_param is not None:
+                interval_param.setValue(text)
+        except KeyError:
+            pass  # Parameter doesn't exist yet
+
+    def db_enabled_changed(self, state):
+        """Handle database enabled checkbox state change with full validation and connection management."""
+        from PyQt5.QtWidgets import QMessageBox
+        from datetime import datetime
+
+        enabled = state == Qt.Checked
+
+        if not self.main_window or not hasattr(self.main_window, 'database_manager'):
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - Database manager not available")
+            self.db_enabled_checkbox.setChecked(False)
+            return
+
+        dev_id = self.device_param.child('DevID').value()
+
+        if enabled:
+            # Validation 1: Check connection string is not empty
+            conn_string = self.connection_string_input.text().strip()
+            if not conn_string:
+                QMessageBox.warning(self, "Database Error", "Please enter a connection string first.")
+                self.db_enabled_checkbox.setChecked(False)
+                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - No connection string provided")
+                return
+
+            # Validation 2: Check RHTP is linked (use dropdown value)
+            rhtp_id = self.linked_rhtp_dropdown.currentData()
+            if rhtp_id is None or rhtp_id == 'None':
+                QMessageBox.warning(
+                    self,
+                    "Database Error",
+                    "Please link an RHTP device first.\n\nSelect an RHTP device in the 'Linked RHTP' dropdown above."
+                )
+                self.db_enabled_checkbox.setChecked(False)
+                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - No RHTP device linked")
+                return
+
+            # Validation 3: Check RHTP device exists and is connected
+            rhtp_widget = self.main_window.data_holder.device_widgets.get(rhtp_id)
+            if not rhtp_widget:
+                QMessageBox.warning(self, "Database Error", "Linked RHTP device not found.")
+                self.db_enabled_checkbox.setChecked(False)
+                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - RHTP device not found")
+                return
+
+            # Register device with database manager (connects if first device)
+            success, message = self.main_window.database_manager.register_device(dev_id, conn_string)
+
+            if success:
+                # Create averager using dropdown value
+                interval_str = self.interval_dropdown.currentText()
+                interval_map = {'1 minute': 1, '5 minutes': 5, '1 hour': 60}
+                interval_minutes = interval_map.get(interval_str, 1)
+                self.main_window.database_manager.create_averager(dev_id, interval_minutes)
+
+                # Update device parameter
+                self.device_param.child('Database enabled').setValue(True)
+
+                # Update UI
+                self.db_status_value.setText("Enabled")
+                self.db_status_value.setStyleSheet("color: green;")
+                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Database enabled - {message}")
+
+                # Update global status in all CPC tabs
+                self.update_global_connection_status()
+                self.sync_global_status_to_all_cpcs()
+
+            else:
+                # Connection failed
+                QMessageBox.warning(self, "Database Error", f"Failed to enable database:\n\n{message}")
+                self.db_enabled_checkbox.setChecked(False)
+                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - {message}")
+
+        else:
+            # Disabling database
+            success, message = self.main_window.database_manager.unregister_device(dev_id)
+
+            # Update device parameter
+            self.device_param.child('Database enabled').setValue(False)
+
+            # Update UI
+            self.db_status_value.setText("Disabled")
+            self.db_status_value.setStyleSheet("color: gray;")
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Database disabled - {message}")
+
+            # Update global status in all CPC tabs
+            self.update_global_connection_status()
+            self.sync_global_status_to_all_cpcs()
+
+    def connection_string_changed(self, text):
+        """Handle connection string input change."""
+        # Store to database manager's cached connection string
+        if self.main_window and hasattr(self.main_window, 'database_manager'):
+            self.main_window.database_manager.connection_string_cached = text
+
+            # Update all other CPC ACTRIS tabs with the same connection string
+            self.sync_connection_string_to_all_cpcs(text)
+
+            # Auto-save will happen when app closes or user manually saves
+
+    def test_connection_clicked(self):
+        """Test database connection with current connection string."""
+        from PyQt5.QtWidgets import QMessageBox
+
+        conn_string = self.connection_string_input.text()
+
+        if not conn_string:
+            QMessageBox.warning(self, "Database Test", "Please enter a connection string first.")
+            return
+
+        if not self.main_window or not hasattr(self.main_window, 'database_manager'):
+            QMessageBox.warning(self, "Database Test", "Database manager not available.")
+            return
+
+        success, message = self.main_window.database_manager.test_connection(conn_string)
+
+        if success:
+            QMessageBox.information(self, "Database Test", f"Success!\n\n{message}")
+        else:
+            QMessageBox.warning(self, "Database Test", f"Connection failed:\n\n{message}")
+
+    def sync_connection_string_to_all_cpcs(self, conn_string):
+        """Update connection string in all other CPC ACTRIS tabs."""
+        if not self.main_window or not hasattr(self.main_window, 'data_holder'):
+            return
+
+        from config import CPC
+
+        # Loop through all CPC devices
+        for dev_id, widget in self.main_window.data_holder.device_widgets.items():
+            # Check if it's a CPC and has database_tab
+            if hasattr(widget, 'device_type') and widget.device_type == CPC:
+                if hasattr(widget, 'database_tab') and widget.database_tab != self:
+                    # Update connection string without triggering textChanged signal
+                    widget.database_tab.connection_string_input.blockSignals(True)
+                    widget.database_tab.connection_string_input.setText(conn_string)
+                    widget.database_tab.connection_string_input.blockSignals(False)
+
+    def update_global_connection_status(self):
+        """Update global connection status display."""
+        if not self.main_window or not hasattr(self.main_window, 'database_manager'):
+            return
+
+        db_manager = self.main_window.database_manager
+
+        # Update connection status
+        if db_manager.connected:
+            self.global_connection_status.setText("Connected")
+            self.global_connection_status.setStyleSheet("color: green;")
+        else:
+            self.global_connection_status.setText("Disconnected")
+            self.global_connection_status.setStyleSheet("color: gray;")
+
+        # Update active devices count
+        active_count = db_manager.get_active_device_count() if hasattr(db_manager, 'get_active_device_count') else 0
+        self.active_devices_count.setText(f"{active_count} CPC{'s' if active_count != 1 else ''} using database")
+
+    def sync_global_status_to_all_cpcs(self):
+        """Update global connection status in all other CPC ACTRIS tabs."""
+        if not self.main_window or not hasattr(self.main_window, 'data_holder'):
+            return
+
+        from config import CPC
+
+        # Loop through all CPC devices
+        for dev_id, widget in self.main_window.data_holder.device_widgets.items():
+            # Check if it's a CPC and has database_tab
+            if hasattr(widget, 'device_type') and widget.device_type == CPC:
+                if hasattr(widget, 'database_tab') and widget.database_tab != self:
+                    # Update global status
+                    widget.database_tab.update_global_connection_status()
+
 
 __all__ = ['CPCWidget']
