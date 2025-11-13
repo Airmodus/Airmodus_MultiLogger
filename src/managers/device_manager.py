@@ -147,13 +147,36 @@ class DeviceManager(QObject):
             port_info: Dictionary with port information
         """
         # Update descriptions with serial number if available
-        if port_info['serial_number']:
-            self.data_holder.com_descriptions[port_info['port']] = port_info['serial_number']
-        else:
-            # Use description or device type as fallback
-            self.data_holder.com_descriptions[port_info['port']] = (
-                port_info['description'] or port_info['device_type']
-            )
+        # But don't overwrite existing valid descriptions (prevents sensor data corruption)
+        current_desc = self.data_holder.com_descriptions.get(port_info['port'], '')
+
+        # Only update if:
+        # 1. There's no current description
+        # 2. Current description is "Unknown" or empty
+        # 3. New serial number is available and doesn't look like sensor data
+        should_update = (
+            not current_desc or
+            current_desc == 'Unknown' or
+            current_desc == ''
+        )
+
+        if should_update:
+            if port_info['serial_number']:
+                # Don't update if serial looks like sensor data (pure number)
+                try:
+                    float(port_info['serial_number'].replace(',', '.'))
+                    # This looks like sensor data, don't use it
+                    if not current_desc:
+                        # No current description, use device type instead
+                        self.data_holder.com_descriptions[port_info['port']] = port_info['device_type']
+                except ValueError:
+                    # Not a pure number, safe to use
+                    self.data_holder.com_descriptions[port_info['port']] = port_info['serial_number']
+            else:
+                # Use description or device type as fallback
+                self.data_holder.com_descriptions[port_info['port']] = (
+                    port_info['description'] or port_info['device_type']
+                )
 
         # Update cached port list
         if port_info['port'] not in self._com_port_list:

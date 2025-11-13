@@ -183,6 +183,12 @@ class MainWindow(QMainWindow):
 
     # set COM port inquiry flag
     def set_inquiry_flag(self):
+        # Check if a scan is already in progress to prevent double-clicking
+        if hasattr(self.device_manager, '_scanning') and self.device_manager._scanning:
+            import logging
+            logging.info("Port scan already in progress, ignoring button click")
+            return
+
         self.data_holder.inquiry_flag = True
         self.data_holder.inquiry_time = time()
         self.data_holder.com_descriptions = {} # reset com descriptions
@@ -194,11 +200,29 @@ class MainWindow(QMainWindow):
         # Update the 'Available serial ports' text to show scanning
         self.params.child('Serial ports').child('Available serial ports').setValue('Scanning ports...')
 
+        # Update button text to show scanning is in progress
+        try:
+            update_btn = self.params.child('Serial ports').child('Update serial ports')
+            # Store original title to restore later
+            if not hasattr(self, '_update_btn_original_title'):
+                self._update_btn_original_title = 'Update serial ports'
+            update_btn.setOpts(title='Scanning...')
+        except:
+            pass  # Button might not exist in some configurations
+
     def _on_port_scan_complete(self):
         """Handle port scan completion - update UI to show scan complete."""
         # Port list is already updated by DeviceManager, just log completion
         import logging
         logging.info("Port scan completed")
+
+        # Restore button text
+        try:
+            update_btn = self.params.child('Serial ports').child('Update serial ports')
+            original_title = getattr(self, '_update_btn_original_title', 'Update serial ports')
+            update_btn.setOpts(title=original_title)
+        except:
+            pass  # Button might not exist in some configurations
 
     def _on_port_scan_progress(self, current: int, total: int):
         """Handle port scan progress updates."""
@@ -259,6 +283,9 @@ class MainWindow(QMainWindow):
             if param.hasChildren():
                 result[param.name()] = self.save_parameters_recursive(param.children())
             else:
+                # Skip saving "Available serial ports" - it's dynamic and shouldn't be persisted
+                if param.name() == 'Available serial ports':
+                    continue
                 # Check if the parameter value is an instance of SerialDeviceConnection
                 if isinstance(param.value(), SerialDeviceConnection):
                     # store parameter value as None

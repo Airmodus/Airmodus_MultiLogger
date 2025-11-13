@@ -25,6 +25,8 @@ class PortInfo:
         self.status = status  # 'available', 'in_use', 'connected', 'error'
         self.manufacturer = ""
         self.vid_pid = ""
+        self.model = ""  # Device model/descriptor from IDN
+        self.firmware = ""  # Firmware version from IDN
 
     def to_dict(self) -> dict:
         return {
@@ -34,7 +36,9 @@ class PortInfo:
             'device_type': self.device_type,
             'status': self.status,
             'manufacturer': self.manufacturer,
-            'vid_pid': self.vid_pid
+            'vid_pid': self.vid_pid,
+            'model': self.model,
+            'firmware': self.firmware
         }
 
 
@@ -192,8 +196,8 @@ class PortScannerThread(QThread):
             # Check if port is already in use
             if self._is_port_in_use(port_info.device):
                 port_data.status = 'in_use'
-                # Try to identify from manufacturer/VID:PID even if in use
-                device_type, _ = DeviceIdentifier.identify_device(
+                # Try to identify even if in use
+                device_type = DeviceIdentifier.identify_device(
                     manufacturer=manufacturer,
                     vid_pid=vid_pid,
                     description=port_data.description
@@ -202,22 +206,32 @@ class PortScannerThread(QThread):
                 return port_data
 
             # Attempt to open port and send IDN query
-            serial_number = self._query_device_idn(port_info.device)
-            if serial_number:
-                port_data.serial_number = serial_number
-                # Use comprehensive identification with all available info
-                device_type, confidence = DeviceIdentifier.identify_device(
-                    serial_number=serial_number,
+            idn_info = self._query_device_idn(port_info.device)
+            if idn_info:
+                # Store parsed IDN information
+                port_data.serial_number = idn_info.get('serial_number', '')
+                port_data.model = idn_info.get('model', '')
+                port_data.firmware = idn_info.get('firmware', '')
+
+                # Use IDN manufacturer if available, otherwise use USB manufacturer
+                idn_manufacturer = idn_info.get('manufacturer', '')
+                if idn_manufacturer:
+                    manufacturer = idn_manufacturer
+
+                # Simple identification with available info
+                device_type = DeviceIdentifier.identify_device(
+                    serial_number=idn_info.get('serial_number', ''),
+                    model=idn_info.get('model', ''),
+                    raw_response=idn_info.get('raw_response', ''),
                     manufacturer=manufacturer,
                     vid_pid=vid_pid,
                     description=port_data.description
                 )
-                print(f"[DEBUG IDN] Port scan: Identified {port_info.device} as {device_type} (confidence: {confidence}) from serial: {serial_number}")
                 port_data.device_type = device_type
                 port_data.status = 'available'
             else:
-                # No IDN response, try other identification methods
-                device_type, _ = DeviceIdentifier.identify_device(
+                # No IDN response, just return Unknown
+                device_type = DeviceIdentifier.identify_device(
                     manufacturer=manufacturer,
                     vid_pid=vid_pid,
                     description=port_data.description
@@ -229,7 +243,7 @@ class PortScannerThread(QThread):
             # Port exists but couldn't query it
             port_data.status = 'error' if 'permission' not in str(e).lower() else 'permission_denied'
             # Still try to identify from available info
-            device_type, _ = DeviceIdentifier.identify_device(
+            device_type = DeviceIdentifier.identify_device(
                 manufacturer=manufacturer,
                 vid_pid=vid_pid,
                 description=port_data.description
@@ -238,17 +252,91 @@ class PortScannerThread(QThread):
 
         return port_data
 
-    def _query_device_idn(self, port: str) -> str:
+    def _parse_idn_response(self, response: str) -> dict:
         """
-        Query device using *IDN? command to get serial number.
+        Parse IDN response into structured components.
+
+        Typical format: "*IDN Airmodus A11 nCNC,PSN:A11-0123,FW:2.1.0"
+
+        Args:
+            response: Raw IDN response string
+
+        Returns:
+            Dictionary with parsed components:
+            - raw_response: Full original response
+            - model: Device model/descriptor (e.g., "Airmodus A11 nCNC")
+            - serial_number: Extracted serial from PSN field or full response
+            - firmware: Firmware version from FW field
+            - manufacturer: Extracted manufacturer name
+        """
+        parsed = {
+            'raw_response': response,
+            'model': '',
+            'serial_number': '',
+            'firmware': '',
+            'manufacturer': ''
+        }
+
+        # Validate this is actually an IDN response
+        # Reject pure numbers (sensor data)
+        try:
+            float(response.replace(',', '.'))
+            # This is just a number, not an IDN response
+            return {}
+        except ValueError:
+            pass  # Not a pure number, continue parsing
+
+        # Reject structured data formats
+        if any(c in response for c in ['<', '>', '=', '[', ']', '{', '}']):
+            return {}  # Looks like XML, JSON, or other structured data
+
+        # Remove *IDN prefix if present
+        cleaned_response = response
+        if response.startswith('*IDN '):
+            cleaned_response = response[5:]
+        elif response.startswith('*IDN'):
+            cleaned_response = response[4:].lstrip()
+        elif response.startswith('IDN '):
+            cleaned_response = response[4:]
+        elif response.startswith('IDN'):
+            cleaned_response = response[3:].lstrip()
+
+        # Split by comma to get model and fields
+        parts = cleaned_response.split(',')
+        if parts and cleaned_response:
+            # First part is usually the model/device descriptor or just the serial
+            parsed['model'] = parts[0].strip()
+
+            # If there's no PSN field, treat the model as the serial number
+            parsed['serial_number'] = parts[0].strip()
+
+            # Extract manufacturer from model if possible
+            model_words = parsed['model'].split()
+            if model_words:
+                # First word is often manufacturer
+                parsed['manufacturer'] = model_words[0]
+
+            # Parse PSN and FW fields (override serial if PSN exists)
+            for part in parts[1:]:
+                part = part.strip()
+                if part.startswith('PSN:'):
+                    parsed['serial_number'] = part[4:].strip()
+                elif part.startswith('FW:'):
+                    parsed['firmware'] = part[3:].strip()
+
+        return parsed
+
+    def _query_device_idn(self, port: str) -> dict:
+        """
+        Query device using *IDN? command and parse the response.
 
         Args:
             port: Port name to query
 
         Returns:
-            Serial number string or empty string if no response
+            Dictionary with parsed IDN components or empty dict if no response
         """
-        serial_number = ""
+        idn_info = {}
 
         try:
             # Open serial connection with short timeout
@@ -264,7 +352,6 @@ class PortScannerThread(QThread):
 
             # Send IDN query
             ser.write(b'*IDN?\n')
-            print(f"[DEBUG IDN] Port scan: Sent *IDN? to port {port}")
             ser.flush()
 
             # Wait for response
@@ -273,10 +360,20 @@ class PortScannerThread(QThread):
             # Read response
             if ser.in_waiting:
                 response = ser.readline().decode('utf-8', errors='ignore').strip()
-                print(f"[DEBUG IDN] Port scan: Raw response from {port}: {repr(response)}")
-                if response:
-                    serial_number = response
-                    print(f"[DEBUG IDN] Port scan: Extracted serial: {serial_number}")
+                # Only parse if it looks like an IDN response
+                if response and (response.startswith('*IDN') or response.startswith('IDN')):
+                    idn_info = self._parse_idn_response(response)
+                # Ignore pure numeric responses (likely sensor data)
+                elif response:
+                    try:
+                        # If it's just a number, it's probably sensor data
+                        float(response.replace(',', '.'))
+                        # This is sensor data, not an IDN response - ignore it
+                    except ValueError:
+                        # Not a pure number, might be a valid response without IDN prefix
+                        # Skip if it looks like structured data (XML, JSON, arrays)
+                        if not any(c in response for c in ['<', '>', '=', '[', ']', '{', '}']):
+                            idn_info = self._parse_idn_response(response)
 
             ser.close()
 
@@ -284,7 +381,7 @@ class PortScannerThread(QThread):
             # Failed to query device
             pass
 
-        return serial_number
+        return idn_info
 
     def _is_port_in_use(self, port: str) -> bool:
         """
