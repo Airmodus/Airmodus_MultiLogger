@@ -133,7 +133,21 @@ def parse_idn_response(message):
         dict: Standardized info response with serial number
     """
     print(f"[DEBUG IDN] Parsing: Raw message: {repr(message)}")
-    serial_number = message.split(" ", 1)[1].strip() if " " in message else ""
+
+    # Strip any newlines and carriage returns first
+    clean_message = message.strip('\n').strip('\r').strip()
+
+    # Extract everything after "*IDN " if present
+    if '*IDN ' in clean_message and len(clean_message) > 5:
+        idx = clean_message.index('*IDN ')
+        serial_number = clean_message[idx + 5:].strip('\n').strip('\r').strip()
+    elif clean_message.startswith('*IDN'):
+        # Handle case where there's no space after *IDN
+        serial_number = clean_message[4:].strip()
+    else:
+        # Fallback to old logic
+        serial_number = clean_message.split(" ", 1)[1].strip() if " " in clean_message else ""
+
     print(f"[DEBUG IDN] Parsing: Extracted serial number: {serial_number}")
     return {
         'type': 'info',

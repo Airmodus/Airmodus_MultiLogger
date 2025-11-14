@@ -342,7 +342,7 @@ class PortScannerThread(QThread):
             # Open serial connection with short timeout
             ser = serial.Serial(
                 port=port,
-                baudrate=9600,
+                baudrate=115200,  # Standard baud rate for Airmodus devices
                 timeout=self.connection_timeout,
                 write_timeout=self.connection_timeout
             )
@@ -357,23 +357,47 @@ class PortScannerThread(QThread):
             # Wait for response
             time.sleep(0.4)
 
-            # Read response
-            if ser.in_waiting:
-                response = ser.readline().decode('utf-8', errors='ignore').strip()
-                # Only parse if it looks like an IDN response
-                if response and (response.startswith('*IDN') or response.startswith('IDN')):
-                    idn_info = self._parse_idn_response(response)
-                # Ignore pure numeric responses (likely sensor data)
-                elif response:
-                    try:
-                        # If it's just a number, it's probably sensor data
-                        float(response.replace(',', '.'))
-                        # This is sensor data, not an IDN response - ignore it
-                    except ValueError:
-                        # Not a pure number, might be a valid response without IDN prefix
-                        # Skip if it looks like structured data (XML, JSON, arrays)
-                        if not any(c in response for c in ['<', '>', '=', '[', ']', '{', '}']):
-                            idn_info = self._parse_idn_response(response)
+            # Read all available data
+            raw_data = ser.read_all()
+            if raw_data:
+                # Decode and split messages by \r
+                decoded = raw_data.decode('utf-8', errors='ignore')
+                messages = decoded.split('\r')
+
+                # Process each message
+                for message in messages:
+                    message = message.strip('\n').strip('\r').strip()
+
+                    # Check if message is long enough and contains *IDN
+                    if len(message) > 5 and '*IDN ' in message:
+                        # Extract everything after "*IDN " (position 5)
+                        idx = message.index('*IDN ')
+                        serial_number = message[idx + 5:].strip()
+                        idn_info = {
+                            'serial_number': serial_number,
+                            'raw_response': message,
+                            'model': serial_number,  # Use full serial as model
+                            'firmware': '',
+                            'manufacturer': ''
+                        }
+                        break  # Found IDN response, no need to continue
+
+                    # Handle eDiluter format
+                    elif ' ID ' in message and ', Status' in message:
+                        try:
+                            start_idx = message.index(' ID ') + 4
+                            end_idx = message.index(', Status')
+                            device_id = message[start_idx:end_idx].strip()
+                            idn_info = {
+                                'serial_number': device_id,
+                                'raw_response': message,
+                                'model': device_id,
+                                'firmware': '',
+                                'manufacturer': 'eDiluter'
+                            }
+                            break
+                        except (ValueError, IndexError):
+                            pass
 
             ser.close()
 

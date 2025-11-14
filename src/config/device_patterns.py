@@ -9,14 +9,34 @@ class DeviceIdentifier:
     """Simple device identification - match our devices or show what device says."""
 
     # Only the patterns we actually need for our devices
+    # Based on real device examples from production
     PATTERNS = {
-        'PSM 2.0': [r'^8\d{8}$'],  # 821445616
-        'PSM Retrofit': [r'^9\d{6}$'],  # 9142501
-        'CPC': [r'^2\d{9}$', r'^3\d{9}$'],  # 2812001104, 3792508436
-        'Electrometer': [r'NewEMDAQ'],  # NewEMDAQ
-        'RHTP': [r'^2300001$'],  # Exact match for 2300001
-        'A30 CPC': [r'^301.*Jerry$'],  # 301* Jerry (must end with Jerry)
-        'A20 CPC': [r'^235.*Peggy$'],  # 235* Peggy (must end with Peggy)
+        'PSM 2.0': [r'^8\d{8,10}$'],  # 8211445616 (10 digits starting with 8)
+        'PSM Retrofit': [r'^9\d{6,7}$'],  # 9142501 (7-8 digits starting with 9)
+        'CPC': [
+            r'^2\d{9}$',  # 2812001104 (10 digits starting with 2)
+            r'^3\d{9}$',  # 3792508436 (10 digits starting with 3)
+        ],
+        'A30 CPC': [
+            r'^301\*',  # Starts with "301*" (e.g., "301* Jerry")
+            r'^301\s',  # Or "301 " with space
+        ],
+        'A20 CPC': [
+            r'^235\*',  # Starts with "235*" (e.g., "235* Peggy")
+            r'^235\s',  # Or "235 " with space
+        ],
+        'AFM': [
+            r'(?i)AFM',  # Contains "AFM" (case insensitive)
+        ],
+        'RHTP': [
+            r'^2300001$',  # Exact ID: 2300001
+            r'^23\d{5}$',  # Or any 7 digits starting with 23
+            r'(?i)RHTP',  # Or contains "RHTP"
+        ],
+        'Electrometer': [
+            r'(?i)NewEMDAQ',  # Contains "NewEMDAQ" (case insensitive)
+            r'(?i)Electrometer',  # Or contains "Electrometer"
+        ],
     }
 
     @classmethod
