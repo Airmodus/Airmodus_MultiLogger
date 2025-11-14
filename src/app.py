@@ -76,6 +76,9 @@ class MainWindow(QMainWindow):
         # Start initial port scan to populate dropdowns
         QTimer.singleShot(100, self.device_manager.list_com_ports)
 
+        # Start continuous port monitoring for automatic device detection
+        QTimer.singleShot(500, self.device_manager.start_port_monitoring)
+
         self.plot_manager = PlotManager(self, self.data_holder, self.main_plot)
         self.data_logger = DataLogger(self.data_holder, self.params)
 
@@ -157,8 +160,7 @@ class MainWindow(QMainWindow):
         self.params.child('Data settings').child('File path').sigValueChanged.connect(self.data_logger.filepath_changed)
         # connect file tag parameter to reset_all_filenames function
         self.params.child('Data settings').child('File tag').sigValueChanged.connect(self.data_logger.reset_all_filenames)
-        # connect com port update button
-        self.params.child('Serial ports').child('Update serial ports').sigActivated.connect(self.set_inquiry_flag)
+        # Note: Update serial ports button removed - continuous monitoring is now automatic
 
         # connect parameter tree's sigChildAdded signal to device_added function
         self.params.child("Device settings").sigChildAdded.connect(self.device_added)
@@ -200,29 +202,11 @@ class MainWindow(QMainWindow):
         # Update the 'Available serial ports' text to show scanning
         self.params.child('Serial ports').child('Available serial ports').setValue('Scanning ports...')
 
-        # Update button text to show scanning is in progress
-        try:
-            update_btn = self.params.child('Serial ports').child('Update serial ports')
-            # Store original title to restore later
-            if not hasattr(self, '_update_btn_original_title'):
-                self._update_btn_original_title = 'Update serial ports'
-            update_btn.setOpts(title='Scanning...')
-        except:
-            pass  # Button might not exist in some configurations
-
     def _on_port_scan_complete(self):
         """Handle port scan completion - update UI to show scan complete."""
         # Port list is already updated by DeviceManager, just log completion
         import logging
         logging.info("Port scan completed")
-
-        # Restore button text
-        try:
-            update_btn = self.params.child('Serial ports').child('Update serial ports')
-            original_title = getattr(self, '_update_btn_original_title', 'Update serial ports')
-            update_btn.setOpts(title=original_title)
-        except:
-            pass  # Button might not exist in some configurations
 
     def _on_port_scan_progress(self, current: int, total: int):
         """Handle port scan progress updates."""

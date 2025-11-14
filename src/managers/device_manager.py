@@ -279,17 +279,70 @@ class DeviceManager(QObject):
         )
 
     def _on_port_added(self, port: str, description: str):
-        """Handle hot-plugged port detection."""
+        """Handle hot-plugged port detection - automatically query IDN and update UI."""
         logging.info(f"New port detected: {port} - {description}")
+
         # Add to cache
         if port not in self._com_port_list:
             self._com_port_list.append(port)
             self.data_holder.com_descriptions[port] = description
+
+            # Update the GUI display
             self._update_gui_port_display()
 
+            # Update device dropdowns with the new port
+            port_statuses = {port: 'available'}
+            port_info_dict = {
+                port: {
+                    'device_type': 'Unknown',  # Will be updated after IDN query
+                    'serial_number': description,
+                    'manufacturer': '',
+                    'vid_pid': ''
+                }
+            }
+
+            # Update all device dropdowns to include the new port
+            self.params.child('Device settings').update_com_port_dropdowns(
+                self.data_holder.com_descriptions,
+                port_statuses,
+                port_info_dict
+            )
+
     def _on_port_removed(self, port: str):
-        """Handle port disconnection."""
+        """Handle port disconnection - automatically disconnect devices using this port."""
         logging.info(f"Port removed: {port}")
+
+        # Find and disconnect any devices using this port
+        for dev in self.params.child('Device settings').children():
+            if self.osx_mode:
+                device_port = str(dev.child('COM port').value())
+            else:
+                device_port = "COM" + str(dev.child('COM port').value())
+
+            # If this device is using the removed port, disconnect it
+            if device_port == port and dev.child('Connected').value():
+                try:
+                    # Close the connection
+                    if hasattr(dev.child('Connection').value(), 'connection'):
+                        dev.child('Connection').value().connection.close()
+                    logging.info(f"Auto-disconnected device on removed port: {port}")
+                except Exception as e:
+                    logging.error(f"Error disconnecting device on port {port}: {e}")
+
+                # Update connected status
+                dev.child('Connected').setValue(False)
+
+                # Update UI for device-specific handling
+                dev_id = dev.child('DevID').value()
+                device_widget = self.data_holder.get_device(dev_id)
+                if device_widget:
+                    device_widget.on_disconnection(dev)
+                    # Update UI styling if device has command widget
+                    if device_widget.has_command_widget():
+                        if dev_id in self.device_widgets:
+                            self.device_widgets[dev_id].setObjectName("disconnected")
+                            self.device_widgets[dev_id].setStyleSheet("")
+
         # Remove from cache
         if port in self._com_port_list:
             self._com_port_list.remove(port)

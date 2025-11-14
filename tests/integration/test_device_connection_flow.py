@@ -44,12 +44,25 @@ def mock_device_parameter():
         child = Mock()
         if name == '10 hz':
             child.value.return_value = False
+        elif name == 'Database enabled':
+            child.value.return_value = False
+        elif name == 'DB averaging interval':
+            child.value.return_value = '1 min'
+        elif name == 'Linked RHTP':
+            child.value.return_value = None
         else:
             child.value.return_value = None
         child.setValue = Mock()
         return child
 
     param.child = Mock(side_effect=child_side_effect)
+
+    # Mock parent for CPC database tab
+    parent_mock = Mock()
+    parent_mock.rhtp_dict = {}  # Empty dict for RHTP devices
+    parent_mock.cpc_dict = {}   # Empty dict for CPC devices
+    param.parent.return_value = parent_mock
+
     return param
 
 

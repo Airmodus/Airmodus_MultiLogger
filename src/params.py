@@ -268,7 +268,7 @@ params = [
     ]},
     {'name': 'Serial ports', 'type': 'group', 'children': [
         {'name': 'Available serial ports', 'type': 'text', 'value': '', 'readonly': True},
-        {'name': 'Update serial ports', 'type': 'action'},
+        # Update serial ports button removed - continuous monitoring is now automatic
     ]},
 
     ScalableGroup(name="Device settings", children=[
