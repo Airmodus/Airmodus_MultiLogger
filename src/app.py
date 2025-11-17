@@ -300,6 +300,70 @@ class MainWindow(QMainWindow):
                     if hasattr(widget, 'device_type') and widget.device_type == CPC:
                         if hasattr(widget, 'database_tab'):
                             widget.database_tab.connection_string_input.setText(conn_string)
+
+                # Restore database enabled state for CPCs that had it enabled
+                # This must happen AFTER connection string is set and parameters are loaded
+                device_settings_group = self.params.child('Device settings')
+                if device_settings_group:
+                    for dev_param in device_settings_group.children():
+                        if dev_param.child('Device type').value() == CPC:
+                            db_enabled_param = dev_param.child('Database enabled')
+                            if db_enabled_param and db_enabled_param.value():
+                                # Get the CPC widget
+                                dev_id = dev_param.child('DevID').value()
+                                cpc_widget = self.data_holder.device_widgets.get(dev_id)
+
+                                if cpc_widget and hasattr(cpc_widget, 'database_tab'):
+                                    # Block signals to prevent validation during restoration
+                                    cpc_widget.database_tab.db_enabled_checkbox.blockSignals(True)
+
+                                    # Ensure connection string is set in the input field
+                                    if not cpc_widget.database_tab.connection_string_input.text():
+                                        cpc_widget.database_tab.connection_string_input.setText(conn_string)
+
+                                    # Repopulate RHTP dropdown (it might be empty at this point)
+                                    cpc_widget.database_tab.populate_rhtp_dropdown()
+
+                                    # Restore the linked RHTP selection
+                                    try:
+                                        linked_rhtp_param = dev_param.child('Linked RHTP')
+                                        if linked_rhtp_param:
+                                            rhtp_id = linked_rhtp_param.value()
+                                            if rhtp_id != 'None':
+                                                index = cpc_widget.database_tab.linked_rhtp_dropdown.findData(rhtp_id)
+                                                if index >= 0:
+                                                    cpc_widget.database_tab.linked_rhtp_dropdown.setCurrentIndex(index)
+                                    except KeyError:
+                                        pass
+
+                                    # Set checkbox visually (signals blocked, won't trigger validation)
+                                    cpc_widget.database_tab.db_enabled_checkbox.setChecked(True)
+
+                                    # Unblock signals
+                                    cpc_widget.database_tab.db_enabled_checkbox.blockSignals(False)
+
+                                    # Manually connect to database (bypass validation)
+                                    interval_param = dev_param.child('DB averaging interval')
+                                    interval_str = interval_param.value() if interval_param else '1 minute'
+                                    interval_map = {'1 minute': 1, '5 minutes': 5, '10 minutes': 10, '15 minutes': 15, '1 hour': 60, '3 hours': 180}
+                                    interval_minutes = interval_map.get(interval_str, 1)
+
+                                    # Register device with database manager
+                                    success, message = self.database_manager.register_device(dev_id, conn_string)
+                                    if success:
+                                        # Create averager
+                                        self.database_manager.create_averager(dev_id, interval_minutes)
+
+                                        # Update UI status
+                                        cpc_widget.database_tab.db_status_value.setText("Enabled")
+                                        cpc_widget.database_tab.db_status_value.setStyleSheet("color: green;")
+
+                                        # Update device parameter
+                                        dev_param.child('Database enabled').setValue(True)
+
+                                        # Update global status
+                                        cpc_widget.database_tab.update_global_connection_status()
+                                        cpc_widget.database_tab.sync_global_status_to_all_cpcs()
     
     def load_devices(self, device_settings):
         # remove all devices from the parameter tree

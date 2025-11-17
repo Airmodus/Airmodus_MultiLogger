@@ -948,7 +948,7 @@ class CPCDatabaseTab(QWidget):
         interval_label = QLabel("Averaging interval:")
         layout.addWidget(interval_label, row, 0)
         self.interval_dropdown = QComboBox()
-        self.interval_dropdown.addItems(['1 minute', '5 minutes', '1 hour'])
+        self.interval_dropdown.addItems(['1 minute', '5 minutes', '10 minutes', '15 minutes', '1 hour', '3 hours'])
         self.interval_dropdown.setToolTip("Select the time period for data averaging")
         self.interval_dropdown.currentTextChanged.connect(self.interval_changed)
         layout.addWidget(self.interval_dropdown, row, 1)
@@ -983,22 +983,53 @@ class CPCDatabaseTab(QWidget):
         layout.addWidget(self.records_value, row, 1)
         row += 1
 
+        # Current interval progress
+        progress_label = QLabel("Current interval:")
+        layout.addWidget(progress_label, row, 0)
+        self.progress_value = QLabel("No data")
+        self.progress_value.setStyleSheet("color: gray;")
+        layout.addWidget(self.progress_value, row, 1)
+        row += 1
+
+        # Next write countdown
+        next_write_label = QLabel("Next write in:")
+        layout.addWidget(next_write_label, row, 0)
+        self.next_write_value = QLabel("-")
+        self.next_write_value.setStyleSheet("color: gray;")
+        layout.addWidget(self.next_write_value, row, 1)
+        row += 1
+
         # Latest saved data table
         data_table_label = QLabel("<b>Latest Saved Data</b>")
         layout.addWidget(data_table_label, row, 0, 1, 2)
         row += 1
 
         self.data_table = QTableWidget()
-        self.data_table.setColumnCount(9)
+        self.data_table.setColumnCount(12)
         self.data_table.setHorizontalHeaderLabels([
-            "Time", "Duration", "Conc", "Temp Sat", "Temp Cond",
-            "Temp Inlet", "Pres Inlet", "RH Inlet", "Errors"
+            "Start", "End", "Conc", "Flow In", "T Sat", "T Cond",
+            "T Inlet", "P Inlet", "RH In", "Pulse", "Err", "Status"
         ])
         self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.data_table.setRowCount(10)
         self.data_table.setMaximumHeight(300)
+        # Enable row selection for deletion
+        self.data_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.data_table.setSelectionMode(QTableWidget.MultiSelection)
+        # Connect cell changed signal for editing
+        self.data_table.cellChanged.connect(self.cell_edited)
         layout.addWidget(self.data_table, row, 0, 1, 2)
         row += 1
+
+        # Delete button for selected rows
+        self.delete_button = QPushButton("Delete Selected Rows")
+        self.delete_button.clicked.connect(self.delete_selected_rows)
+        layout.addWidget(self.delete_button, row, 0, 1, 2)
+        row += 1
+
+        # Store original row data for tracking changes
+        self.row_data = {}  # {row_index: {'time': ..., 'instr_id': ..., 'data': {...}}}
+        self.editing_in_progress = False  # Flag to prevent recursive cell updates
 
         # Error/info section
         error_label = QLabel("<b>Messages</b>")
@@ -1066,6 +1097,16 @@ class CPCDatabaseTab(QWidget):
 
     def refresh_status(self):
         """Refresh database status display and dropdowns from device parameters."""
+        # Refresh connection string from database_manager cache
+        if self.main_window and hasattr(self.main_window, 'database_manager'):
+            if hasattr(self.main_window.database_manager, 'connection_string_cached'):
+                cached_conn_string = self.main_window.database_manager.connection_string_cached
+                # Only update if field is empty and cache has a value
+                if cached_conn_string and not self.connection_string_input.text():
+                    self.connection_string_input.blockSignals(True)
+                    self.connection_string_input.setText(cached_conn_string)
+                    self.connection_string_input.blockSignals(False)
+
         # Refresh RHTP dropdown in case devices were added/removed
         self.populate_rhtp_dropdown()
 
@@ -1124,6 +1165,56 @@ class CPCDatabaseTab(QWidget):
         """Update records written counter."""
         self.records_value.setText(str(count))
 
+    def update_progress(self, samples_collected, total_samples, interval_start, interval_seconds):
+        """
+        Update progress indicators for current averaging interval.
+
+        Args:
+            samples_collected: Number of samples collected so far
+            total_samples: Total samples needed for interval
+            interval_start: Start time of current interval
+            interval_seconds: Total seconds in interval
+        """
+        from datetime import datetime, timedelta
+
+        # Update sample count
+        self.progress_value.setText(f"{samples_collected}/{total_samples} samples")
+        self.progress_value.setStyleSheet("color: green;" if samples_collected > 0 else "color: gray;")
+
+        # Calculate time remaining
+        if interval_start:
+            now = datetime.now()
+            interval_end = interval_start + timedelta(seconds=interval_seconds)
+            time_remaining = interval_end - now
+
+            if time_remaining.total_seconds() > 0:
+                # Format as MM:SS or HH:MM:SS
+                total_seconds = int(time_remaining.total_seconds())
+                hours = total_seconds // 3600
+                minutes = (total_seconds % 3600) // 60
+                seconds = total_seconds % 60
+
+                if hours > 0:
+                    time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                else:
+                    time_str = f"{minutes:02d}:{seconds:02d}"
+
+                self.next_write_value.setText(time_str)
+                self.next_write_value.setStyleSheet("color: orange;")
+            else:
+                self.next_write_value.setText("Writing...")
+                self.next_write_value.setStyleSheet("color: green;")
+        else:
+            self.next_write_value.setText("-")
+            self.next_write_value.setStyleSheet("color: gray;")
+
+    def reset_progress(self):
+        """Reset progress indicators."""
+        self.progress_value.setText("No data")
+        self.progress_value.setStyleSheet("color: gray;")
+        self.next_write_value.setText("-")
+        self.next_write_value.setStyleSheet("color: gray;")
+
     def update_data_table(self, rows):
         """
         Update latest data table with database rows.
@@ -1131,50 +1222,256 @@ class CPCDatabaseTab(QWidget):
         Args:
             rows: List of dictionaries with row data from database
         """
+        # Block signals to prevent cellChanged from firing during population
+        self.editing_in_progress = True
+        self.data_table.blockSignals(True)
+
         self.data_table.setRowCount(len(rows))
+        self.row_data.clear()  # Clear old row metadata
 
         for i, row in enumerate(rows):
-            # Time
+            # Store full row data including primary key for updates/deletes
+            self.row_data[i] = {
+                'time': row.get('time'),  # Full timestamp with timezone
+                'instr_id': row.get('instr_id', self.device_param.child('Serial number').value()),
+                'data': row.copy()
+            }
+            # Starttime
+            starttime_val = row.get('starttime', '')
+            if starttime_val:
+                # Format: "YYYY-MM-DD HH:MM:SS+TZ" -> extract HH:MM:SS
+                starttime_str = str(starttime_val)
+                if ' ' in starttime_str:
+                    # Split on space and take time part, then remove timezone
+                    time_part = starttime_str.split(' ')[1].split('+')[0].split('-')[0]
+                    starttime_val = time_part
+                else:
+                    starttime_val = starttime_str[:8]
+            self.data_table.setItem(i, 0, QTableWidgetItem(starttime_val))
+
+            # Endtime (time)
             time_val = row.get('time', '')
             if time_val:
-                time_val = str(time_val)
-            self.data_table.setItem(i, 0, QTableWidgetItem(time_val))
-
-            # Duration
-            duration_val = str(row.get('duration', ''))
-            self.data_table.setItem(i, 1, QTableWidgetItem(duration_val))
+                # Format: "YYYY-MM-DD HH:MM:SS+TZ" -> extract HH:MM:SS
+                time_str = str(time_val)
+                if ' ' in time_str:
+                    # Split on space and take time part, then remove timezone
+                    time_part = time_str.split(' ')[1].split('+')[0].split('-')[0]
+                    time_val = time_part
+                else:
+                    time_val = time_str[:8]
+            self.data_table.setItem(i, 1, QTableWidgetItem(time_val))
 
             # Concentration
             conc_val = row.get('conc')
-            self.data_table.setItem(i, 2, QTableWidgetItem(f"{conc_val:.1f}" if conc_val is not None else ""))
+            self.data_table.setItem(i, 2, QTableWidgetItem(f"{conc_val:.0f}" if conc_val is not None else ""))
 
-            # Temp Sat
+            # Flow Inlet
+            flow_inl = row.get('flow_inl')
+            self.data_table.setItem(i, 3, QTableWidgetItem(f"{flow_inl:.2f}" if flow_inl is not None else ""))
+
+            # Temp Saturator
             temp_sat = row.get('temp_sat')
-            self.data_table.setItem(i, 3, QTableWidgetItem(f"{temp_sat:.1f}" if temp_sat is not None else ""))
+            self.data_table.setItem(i, 4, QTableWidgetItem(f"{temp_sat:.1f}" if temp_sat is not None else ""))
 
-            # Temp Cond
+            # Temp Condenser
             temp_cond = row.get('temp_cond')
-            self.data_table.setItem(i, 4, QTableWidgetItem(f"{temp_cond:.1f}" if temp_cond is not None else ""))
+            self.data_table.setItem(i, 5, QTableWidgetItem(f"{temp_cond:.1f}" if temp_cond is not None else ""))
 
             # Temp Inlet (RHTP)
             temp_inlet = row.get('temp_inlet')
-            self.data_table.setItem(i, 5, QTableWidgetItem(f"{temp_inlet:.1f}" if temp_inlet is not None else ""))
+            self.data_table.setItem(i, 6, QTableWidgetItem(f"{temp_inlet:.1f}" if temp_inlet is not None else ""))
 
             # Pressure Inlet (RHTP)
             pres_inlet = row.get('pressure_inlet')
-            self.data_table.setItem(i, 6, QTableWidgetItem(f"{pres_inlet:.0f}" if pres_inlet is not None else ""))
+            self.data_table.setItem(i, 7, QTableWidgetItem(f"{pres_inlet:.0f}" if pres_inlet is not None else ""))
 
             # RH Inlet (RHTP)
             rh_inlet = row.get('humidity_inlet')
-            self.data_table.setItem(i, 7, QTableWidgetItem(f"{rh_inlet:.1f}" if rh_inlet is not None else ""))
+            self.data_table.setItem(i, 8, QTableWidgetItem(f"{rh_inlet:.1f}" if rh_inlet is not None else ""))
+
+            # Pulse height (pulse duration average)
+            pulse_height = row.get('pulse_height')
+            self.data_table.setItem(i, 9, QTableWidgetItem(f"{pulse_height:.0f}" if pulse_height is not None else ""))
 
             # Errors
             errors = row.get('stat_log')
-            self.data_table.setItem(i, 8, QTableWidgetItem(str(errors) if errors is not None else ""))
+            self.data_table.setItem(i, 10, QTableWidgetItem(str(errors) if errors is not None else ""))
+
+            # Status hex
+            status_hex = row.get('status_hex', '')
+            self.data_table.setItem(i, 11, QTableWidgetItem(status_hex if status_hex else ""))
+
+            # Make timestamp columns read-only (columns 0 and 1)
+            for col in [0, 1]:
+                item = self.data_table.item(i, col)
+                if item:
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+
+        # Re-enable signals after population complete
+        self.data_table.blockSignals(False)
+        self.editing_in_progress = False
 
     def add_message(self, message):
         """Add a message to the error/info text box."""
         self.error_text.append(message)
+
+    def cell_edited(self, row, column):
+        """
+        Handle cell editing - save changes to database immediately.
+
+        Args:
+            row: Row index
+            column: Column index
+        """
+        from datetime import datetime
+
+        # Ignore if we're programmatically updating cells
+        if self.editing_in_progress:
+            return
+
+        # Check if we have metadata for this row
+        if row not in self.row_data:
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - Cannot find row data")
+            return
+
+        # Get the cell item and new value
+        item = self.data_table.item(row, column)
+        if not item:
+            return
+
+        new_value_str = item.text()
+
+        # Map column index to database column name
+        column_map = {
+            2: ('conc', float),
+            3: ('flow_inl', float),
+            4: ('temp_sat', float),
+            5: ('temp_cond', float),
+            6: ('temp_inlet', float),
+            7: ('pressure_inlet', float),
+            8: ('humidity_inlet', float),
+            9: ('pulse_height', float),
+            10: ('stat_log', int),
+            11: ('status_hex', str),
+        }
+
+        if column not in column_map:
+            # Column not editable (like timestamps)
+            return
+
+        db_column, value_type = column_map[column]
+        row_meta = self.row_data[row]
+        time_val = row_meta['time']
+        instr_id = row_meta['instr_id']
+
+        # Validate and convert new value
+        try:
+            if new_value_str.strip() == '':
+                new_value = None
+            elif value_type == str:
+                new_value = new_value_str
+            else:
+                new_value = value_type(new_value_str)
+        except ValueError:
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - Invalid value '{new_value_str}' for {db_column}")
+            # Revert to original value
+            self.editing_in_progress = True
+            original_val = row_meta['data'].get(db_column)
+            if original_val is not None:
+                if value_type == float:
+                    item.setText(f"{original_val:.1f}")
+                elif value_type == int:
+                    item.setText(str(original_val))
+                else:
+                    item.setText(str(original_val))
+            else:
+                item.setText('')
+            self.editing_in_progress = False
+            return
+
+        # Check if value actually changed
+        original_value = row_meta['data'].get(db_column)
+        if original_value == new_value or (original_value is None and new_value is None):
+            return  # No change
+
+        # Update database
+        if not self.main_window or not hasattr(self.main_window, 'database_manager'):
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - Database manager not available")
+            return
+
+        updates = {db_column: new_value}
+        success, message = self.main_window.database_manager.update_record(time_val, instr_id, updates)
+
+        if success:
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Updated {db_column} = {new_value}")
+            # Update our stored data
+            row_meta['data'][db_column] = new_value
+        else:
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - {message}")
+            # Revert to original value
+            self.editing_in_progress = True
+            if original_value is not None:
+                if value_type == float:
+                    item.setText(f"{original_value:.1f}")
+                elif value_type == int:
+                    item.setText(str(original_value))
+                else:
+                    item.setText(str(original_value))
+            else:
+                item.setText('')
+            self.editing_in_progress = False
+
+    def delete_selected_rows(self):
+        """Delete selected rows from the database after confirmation."""
+        from PyQt5.QtWidgets import QMessageBox
+        from datetime import datetime
+
+        # Get selected rows
+        selected_rows = set(index.row() for index in self.data_table.selectedIndexes())
+
+        if not selected_rows:
+            QMessageBox.warning(self, "Delete Rows", "No rows selected.\n\nPlease select rows to delete.")
+            return
+
+        # Confirm deletion
+        reply = QMessageBox.question(
+            self,
+            "Confirm Deletion",
+            f"Are you sure you want to delete {len(selected_rows)} row(s)?\n\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        # Collect records to delete (time, instr_id pairs)
+        records_to_delete = []
+        for row in selected_rows:
+            if row in self.row_data:
+                row_meta = self.row_data[row]
+                records_to_delete.append((row_meta['time'], row_meta['instr_id']))
+
+        if not records_to_delete:
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - No valid rows to delete")
+            return
+
+        # Delete from database
+        if not self.main_window or not hasattr(self.main_window, 'database_manager'):
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - Database manager not available")
+            return
+
+        success, message = self.main_window.database_manager.delete_records(records_to_delete)
+
+        if success:
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: {message}")
+            # Refresh table to show updated data
+            dev_id = self.device_param.child('DevID').value()
+            latest_rows = self.main_window.database_manager.get_latest_rows(10, dev_id)
+            self.update_data_table(latest_rows)
+        else:
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - {message}")
 
     def linked_rhtp_changed(self, index):
         """Handle linked RHTP dropdown selection change."""
@@ -1191,6 +1488,8 @@ class CPCDatabaseTab(QWidget):
 
     def interval_changed(self, text):
         """Handle averaging interval dropdown selection change."""
+        from datetime import datetime
+
         # Update the hidden parameter
         try:
             interval_param = self.device_param.child('DB averaging interval')
@@ -1198,6 +1497,27 @@ class CPCDatabaseTab(QWidget):
                 interval_param.setValue(text)
         except KeyError:
             pass  # Parameter doesn't exist yet
+
+        # If database is enabled, recreate the averager with new interval
+        if self.main_window and hasattr(self.main_window, 'database_manager'):
+            db_enabled_param = self.device_param.child('Database enabled')
+            if db_enabled_param and db_enabled_param.value():
+                dev_id = self.device_param.child('DevID').value()
+
+                # Convert interval string to minutes
+                interval_map = {'1 minute': 1, '5 minutes': 5, '10 minutes': 10, '15 minutes': 15, '1 hour': 60, '3 hours': 180}
+                interval_minutes = interval_map.get(text, 1)
+
+                # Recreate averager with new interval
+                self.main_window.database_manager.create_averager(dev_id, interval_minutes)
+
+                # Reset progress indicators
+                self.progress_value.setText("No data")
+                self.next_write_value.setText("-")
+
+                # Add message to log
+                current_time = datetime.now()
+                self.add_message(f"{current_time.strftime('%H:%M:%S')}: Averaging interval changed to {text}")
 
     def db_enabled_changed(self, state):
         """Handle database enabled checkbox state change with full validation and connection management."""
@@ -1248,7 +1568,7 @@ class CPCDatabaseTab(QWidget):
             if success:
                 # Create averager using dropdown value
                 interval_str = self.interval_dropdown.currentText()
-                interval_map = {'1 minute': 1, '5 minutes': 5, '1 hour': 60}
+                interval_map = {'1 minute': 1, '5 minutes': 5, '10 minutes': 10, '15 minutes': 15, '1 hour': 60, '3 hours': 180}
                 interval_minutes = interval_map.get(interval_str, 1)
                 self.main_window.database_manager.create_averager(dev_id, interval_minutes)
 
@@ -1280,6 +1600,7 @@ class CPCDatabaseTab(QWidget):
             # Update UI
             self.db_status_value.setText("Disabled")
             self.db_status_value.setStyleSheet("color: gray;")
+            self.reset_progress()  # Reset progress indicators
             self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Database disabled - {message}")
 
             # Update global status in all CPC tabs
@@ -1315,6 +1636,13 @@ class CPCDatabaseTab(QWidget):
 
         if success:
             QMessageBox.information(self, "Database Test", f"Success!\n\n{message}")
+
+            # Refresh the preview table to show latest data
+            dev_id = self.device_param.child('DevID').value()
+            latest_rows = self.main_window.database_manager.get_latest_rows(10, dev_id)
+            self.update_data_table(latest_rows)
+            from datetime import datetime
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Preview table refreshed")
         else:
             QMessageBox.warning(self, "Database Test", f"Connection failed:\n\n{message}")
 

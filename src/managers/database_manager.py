@@ -87,19 +87,19 @@ class CPCDataAverager:
         # Average CPC data
         cpc_values = {
             'concentration': [],
-            'saturator_temperature': [],
-            'condenser_temperature': [],
-            'optics_temperature': [],
-            'cabin_temperature': [],
-            'inlet_pressure': [],
-            'critical_orifice_pressure': [],
-            'nozzle_pressure': [],
-            'cabin_pressure': [],
-            'sample_flow': [],
+            'temp_saturator': [],
+            'temp_condenser': [],
+            'temp_optics': [],
+            'temp_cabin': [],
+            'pres_inlet': [],
+            'pres_critical_orifice': [],
+            'pres_nozzle': [],
+            'pres_cabin': [],
+            'laser_current': [],
             'liquid_level': [],
             'pulse_duration': [],  # pulse_height in DB
             'total_errors': [],
-            'status_hex': []
+            'status_hex': []  # Hex status string (not averaged, last value used)
         }
 
         for _, cpc_data in self.cpc_buffer:
@@ -124,24 +124,26 @@ class CPCDataAverager:
         # Compute averages
         averaged = {
             'time': interval_end,
+            'starttime': self.interval_start,
             'duration': f'{self.interval_minutes} minutes',
             # CPC averages
             'conc': self._mean(cpc_values['concentration']),
-            'temp_sat': self._mean(cpc_values['saturator_temperature']),
-            'temp_cond': self._mean(cpc_values['condenser_temperature']),
-            'temp_optics': self._mean(cpc_values['optics_temperature']),
-            'temp_cab': self._mean(cpc_values['cabin_temperature']),
-            'pres_inl': self._mean(cpc_values['inlet_pressure']),
-            'diff_pres_orf': self._mean(cpc_values['critical_orifice_pressure']),
-            'diff_pres_noz': self._mean(cpc_values['nozzle_pressure']),
-            'pres_amb': self._mean(cpc_values['cabin_pressure']),
-            'flow_sam': self._mean(cpc_values['sample_flow']),
+            'temp_sat': self._mean(cpc_values['temp_saturator']),
+            'temp_cond': self._mean(cpc_values['temp_condenser']),
+            'temp_optics': self._mean(cpc_values['temp_optics']),
+            'temp_cab': self._mean(cpc_values['temp_cabin']),
+            'pres_inl': self._mean(cpc_values['pres_inlet']),
+            'diff_pres_orf': self._mean(cpc_values['pres_critical_orifice']),
+            'diff_pres_noz': self._mean(cpc_values['pres_nozzle']),
+            'pres_amb': self._mean(cpc_values['pres_cabin']),
+            'current_laser': self._mean(cpc_values['laser_current']),
             'lvl_liq': self._mean(cpc_values['liquid_level']),
             'pulse_height': self._mean(cpc_values['pulse_duration']),
             # Take last error status (not averaged)
             'stat_log': cpc_values['total_errors'][-1] if cpc_values['total_errors'] else None,
+            'status_hex': cpc_values['status_hex'][-1] if cpc_values['status_hex'] else None,
             # RHTP averages (inlet conditions)
-            'humidity_inlet': self._mean(rhtp_values['humidity']),  # Not in schema, but useful
+            'humidity_inlet': self._mean(rhtp_values['humidity']),
             'temp_inlet': self._mean(rhtp_values['temperature']),
             'pressure_inlet': self._mean(rhtp_values['pressure'])
         }
@@ -260,9 +262,77 @@ class DatabaseManager:
             logger.error(f"Unexpected error during connection: {e}")
             return False, f"Unexpected error: {e}"
 
+    def migrate_table_schema(self, conn) -> Tuple[bool, str]:
+        """
+        Migrate existing table to add missing columns.
+
+        Args:
+            conn: Database connection
+
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        try:
+            cursor = conn.cursor()
+
+            # Check if table exists
+            cursor.execute(f"""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    AND table_name = '{self.table_name}'
+                );
+            """)
+            table_exists = cursor.fetchone()[0]
+
+            if not table_exists:
+                cursor.close()
+                return True, "Table doesn't exist yet, will be created"
+
+            # Check for missing columns and add them
+            migrations = [
+                ("starttime", "timestamp with time zone", "Add interval start time"),
+                ("status_hex", "text COLLATE pg_catalog.\"default\"", "Add status hex column"),
+            ]
+
+            applied_migrations = []
+            for column_name, column_type, description in migrations:
+                # Check if column exists
+                cursor.execute(f"""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                        AND table_name = '{self.table_name}'
+                        AND column_name = '{column_name}'
+                    );
+                """)
+                column_exists = cursor.fetchone()[0]
+
+                if not column_exists:
+                    # Add the column
+                    cursor.execute(f"""
+                        ALTER TABLE public.{self.table_name}
+                        ADD COLUMN {column_name} {column_type};
+                    """)
+                    applied_migrations.append(description)
+
+            conn.commit()
+            cursor.close()
+
+            if applied_migrations:
+                return True, f"Applied migrations: {', '.join(applied_migrations)}"
+            else:
+                return True, "Schema up to date"
+
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"Failed to migrate table schema: {e}")
+            return False, f"Migration failed: {e}"
+
     def create_table_if_not_exists(self, conn=None) -> Tuple[bool, str]:
         """
-        Create measurements table if it doesn't exist.
+        Create measurements table if it doesn't exist, or migrate existing table.
 
         Args:
             conn: Existing connection (optional, will get from pool if None)
@@ -283,11 +353,19 @@ class DatabaseManager:
             cursor.execute("SELECT current_user;")
             owner = cursor.fetchone()[0]
 
+            # First, run migrations on existing table (if it exists)
+            migration_success, migration_msg = self.migrate_table_schema(conn)
+            if not migration_success:
+                return False, migration_msg
+
+            logger.info(f"Migration: {migration_msg}")
+
             # Create table based on provided schema
             create_table_sql = f"""
             CREATE TABLE IF NOT EXISTS public.{self.table_name}
             (
                 "time" timestamp with time zone NOT NULL,
+                starttime timestamp with time zone,
                 duration interval,
                 instr_id text COLLATE pg_catalog."default",
                 stat_dev text COLLATE pg_catalog."default",
@@ -319,6 +397,7 @@ class DatabaseManager:
                 humidity_inlet real,
                 temp_inlet real,
                 pressure_inlet real,
+                status_hex text COLLATE pg_catalog."default",
                 CONSTRAINT {self.table_name}_pkey PRIMARY KEY (time, instr_id)
             )
             TABLESPACE pg_default;
@@ -426,31 +505,32 @@ class DatabaseManager:
             # Prepare insert statement
             insert_sql = f"""
             INSERT INTO public.{self.table_name} (
-                time, duration, instr_id, device_id,
-                flow_inl, flow_sam, temp_sat, temp_cond, temp_optics, temp_cab,
+                time, starttime, duration, instr_id, device_id,
+                flow_inl, temp_sat, temp_cond, temp_optics, temp_cab,
                 pres_inl, diff_pres_orf, diff_pres_noz, pres_amb,
-                lvl_liq, conc, pulse_height, stat_log,
+                lvl_liq, conc, pulse_height, stat_log, status_hex,
                 humidity_inlet, temp_inlet, pressure_inlet
             ) VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
                 %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s,
-                %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
                 %s, %s, %s
             )
             ON CONFLICT (time, instr_id) DO UPDATE SET
                 conc = EXCLUDED.conc,
                 temp_sat = EXCLUDED.temp_sat,
-                temp_cond = EXCLUDED.temp_cond;
+                temp_cond = EXCLUDED.temp_cond,
+                status_hex = EXCLUDED.status_hex;
             """
 
             values = (
                 averaged_data['time'],
+                averaged_data['starttime'],
                 averaged_data['duration'],
                 serial_number,
                 device_id,
                 inlet_flow,
-                averaged_data.get('flow_sam'),
                 averaged_data.get('temp_sat'),
                 averaged_data.get('temp_cond'),
                 averaged_data.get('temp_optics'),
@@ -463,6 +543,7 @@ class DatabaseManager:
                 averaged_data.get('conc'),
                 averaged_data.get('pulse_height'),
                 averaged_data.get('stat_log'),
+                averaged_data.get('status_hex'),
                 averaged_data.get('humidity_inlet'),
                 averaged_data.get('temp_inlet'),
                 averaged_data.get('pressure_inlet')
@@ -506,8 +587,8 @@ class DatabaseManager:
 
             if device_id is not None:
                 query = f"""
-                SELECT time, duration, conc, temp_sat, temp_cond,
-                       temp_inlet, pressure_inlet, humidity_inlet, stat_log
+                SELECT starttime, time, instr_id, conc, flow_inl, temp_sat, temp_cond,
+                       temp_inlet, pressure_inlet, humidity_inlet, pulse_height, stat_log, status_hex
                 FROM public.{self.table_name}
                 WHERE device_id = %s
                 ORDER BY time DESC
@@ -516,8 +597,8 @@ class DatabaseManager:
                 cursor.execute(query, (device_id, limit))
             else:
                 query = f"""
-                SELECT time, duration, instr_id, device_id, conc, temp_sat, temp_cond,
-                       temp_inlet, pressure_inlet, humidity_inlet, stat_log
+                SELECT starttime, time, instr_id, device_id, conc, flow_inl, temp_sat, temp_cond,
+                       temp_inlet, pressure_inlet, humidity_inlet, pulse_height, stat_log, status_hex
                 FROM public.{self.table_name}
                 ORDER BY time DESC
                 LIMIT %s;
@@ -532,6 +613,124 @@ class DatabaseManager:
         except psycopg2.Error as e:
             logger.error(f"Failed to retrieve rows: {e}")
             return []
+        finally:
+            if conn:
+                self.connection_pool.putconn(conn)
+
+    def delete_records(self, records: List[Tuple[Any, str]]) -> Tuple[bool, str]:
+        """
+        Delete specific records from database.
+
+        Args:
+            records: List of (time, instr_id) tuples identifying records to delete
+
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        if not self.connected or not self.connection_pool:
+            return False, "Not connected to database"
+
+        if not records:
+            return False, "No records specified for deletion"
+
+        conn = None
+        try:
+            conn = self.connection_pool.getconn()
+            cursor = conn.cursor()
+
+            # Delete each record by primary key
+            delete_sql = f"""
+            DELETE FROM public.{self.table_name}
+            WHERE time = %s AND instr_id = %s;
+            """
+
+            deleted_count = 0
+            for time_val, instr_id in records:
+                cursor.execute(delete_sql, (time_val, instr_id))
+                deleted_count += cursor.rowcount
+
+            conn.commit()
+            cursor.close()
+
+            logger.info(f"Deleted {deleted_count} record(s) from database")
+            return True, f"Successfully deleted {deleted_count} record(s)"
+
+        except psycopg2.Error as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"Failed to delete records: {e}")
+            return False, f"Delete failed: {e}"
+        finally:
+            if conn:
+                self.connection_pool.putconn(conn)
+
+    def update_record(self, time_val: Any, instr_id: str, updates: Dict[str, Any]) -> Tuple[bool, str]:
+        """
+        Update specific fields in a database record.
+
+        Args:
+            time_val: Time value (part of primary key)
+            instr_id: Instrument ID (part of primary key)
+            updates: Dictionary of {column_name: new_value}
+
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        if not self.connected or not self.connection_pool:
+            return False, "Not connected to database"
+
+        if not updates:
+            return False, "No updates specified"
+
+        # Whitelist of columns that can be updated (prevent SQL injection)
+        allowed_columns = {
+            'conc', 'flow_inl', 'temp_sat', 'temp_cond', 'temp_optics', 'temp_cab',
+            'temp_inlet', 'pressure_inlet', 'humidity_inlet', 'pres_inl',
+            'diff_pres_orf', 'diff_pres_noz', 'pres_amb', 'lvl_liq',
+            'pulse_height', 'stat_log', 'status_hex'
+        }
+
+        # Filter updates to only allowed columns
+        safe_updates = {k: v for k, v in updates.items() if k in allowed_columns}
+
+        if not safe_updates:
+            return False, "No valid columns to update"
+
+        conn = None
+        try:
+            conn = self.connection_pool.getconn()
+            cursor = conn.cursor()
+
+            # Build SET clause dynamically
+            set_clauses = [f"{col} = %s" for col in safe_updates.keys()]
+            set_clause = ", ".join(set_clauses)
+
+            update_sql = f"""
+            UPDATE public.{self.table_name}
+            SET {set_clause}
+            WHERE time = %s AND instr_id = %s;
+            """
+
+            # Values: updates first, then WHERE clause values
+            values = list(safe_updates.values()) + [time_val, instr_id]
+
+            cursor.execute(update_sql, values)
+            rows_updated = cursor.rowcount
+
+            conn.commit()
+            cursor.close()
+
+            if rows_updated == 0:
+                return False, "No matching record found to update"
+
+            logger.info(f"Updated record at {time_val} for {instr_id}")
+            return True, f"Successfully updated {len(safe_updates)} field(s)"
+
+        except psycopg2.Error as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"Failed to update record: {e}")
+            return False, f"Update failed: {e}"
         finally:
             if conn:
                 self.connection_pool.putconn(conn)

@@ -74,7 +74,7 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 # Add database-related parameters for CPC (hidden - controlled via ACTRIS tab)
                 self.children()[-1].addChild({'name': 'Database enabled', 'type': 'bool', 'value': False, 'visible': False})
                 self.children()[-1].addChild({'name': 'Linked RHTP', 'type': 'list', 'values': self.rhtp_dict, 'value': 'None', 'visible': False})
-                self.children()[-1].addChild({'name': 'DB averaging interval', 'type': 'list', 'values': ['1 minute', '5 minutes', '1 hour'], 'value': '1 minute', 'visible': False})
+                self.children()[-1].addChild({'name': 'DB averaging interval', 'type': 'list', 'values': ['1 minute', '5 minutes', '10 minutes', '15 minutes', '1 hour', '3 hours'], 'value': '1 minute', 'visible': False})
 
         # if added device is PSM, add hidden parameters and option for 'Connected CPC'
         if device_value in [PSM, PSM2]:

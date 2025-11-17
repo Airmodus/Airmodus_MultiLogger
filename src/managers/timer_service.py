@@ -116,7 +116,7 @@ class TimerService:
                 interval_param = dev_param.child('DB averaging interval')
                 if interval_param:
                     interval_str = interval_param.value()
-                    interval_map = {'1 minute': 1, '5 minutes': 5, '1 hour': 60}
+                    interval_map = {'1 minute': 1, '5 minutes': 5, '10 minutes': 10, '15 minutes': 15, '1 hour': 60, '3 hours': 180}
                     interval_minutes = interval_map.get(interval_str, 1)
                     averager = self.main_window.database_manager.create_averager(dev_id, interval_minutes)
 
@@ -125,6 +125,17 @@ class TimerService:
 
             # Add current sample to averager
             averager.add_sample(current_time, cpc_widget.current_data, rhtp_widget.current_data)
+
+            # Update progress indicators in UI
+            if hasattr(cpc_widget, 'database_tab'):
+                samples_collected = len(averager.cpc_buffer)
+                total_samples = averager.interval_seconds  # 1 sample per second
+                cpc_widget.database_tab.update_progress(
+                    samples_collected,
+                    total_samples,
+                    averager.interval_start,
+                    averager.interval_seconds
+                )
 
             # Check if we should write averaged data
             if averager.should_write(current_time):
@@ -136,7 +147,11 @@ class TimerService:
                     serial_number = dev_param.child('Serial number').value()
                     inlet_flow = None
                     if hasattr(cpc_widget, 'settings') and cpc_widget.settings:
-                        inlet_flow = cpc_widget.settings.nominal_inlet_flow
+                        # Use measured flow (actual) first, fallback to nominal flow (setpoint)
+                        if hasattr(cpc_widget.settings, 'measured_cpc_flow'):
+                            inlet_flow = cpc_widget.settings.measured_cpc_flow
+                        elif hasattr(cpc_widget.settings, 'nominal_inlet_flow'):
+                            inlet_flow = cpc_widget.settings.nominal_inlet_flow
 
                     # Write to database
                     success, message = self.main_window.database_manager.write_averaged_record(

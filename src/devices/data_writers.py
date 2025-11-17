@@ -168,7 +168,7 @@ class PSMDataWriter(BaseDataWriter):
                         cpc_settings.water_removal,
                         cpc_settings.saturator_temp,
                         cpc_settings.condenser_temp,
-                        cpc_settings.spare1,  # optics temp
+                        cpc_settings.optics_temp,  # optics temp
                         cpc_settings.measured_cpc_flow,
                         cpc_settings.averaging_time
                     ]
