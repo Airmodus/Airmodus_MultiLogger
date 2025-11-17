@@ -1106,6 +1106,20 @@ class CPCDatabaseTab(QWidget):
         for rhtp_name, rhtp_id in device_settings.rhtp_dict.items():
             self.linked_rhtp_dropdown.addItem(rhtp_name, rhtp_id)
 
+        # Check if only "None" option exists (no RHTP devices available)
+        if self.linked_rhtp_dropdown.count() == 1:
+            # Update tooltip to be educational about optional RHTP
+            self.linked_rhtp_dropdown.set_tooltips(
+                enabled_tooltip="No RHTP devices available. Add an RHTP device for full ACTRIS compatibility (optional)",
+                disabled_tooltip="Disable database first to change linked RHTP device"
+            )
+        else:
+            # Restore normal tooltip when RHTP devices exist
+            self.linked_rhtp_dropdown.set_tooltips(
+                enabled_tooltip="Select the RHTP sensor to link with this CPC for database recording",
+                disabled_tooltip="Disable database first to change linked RHTP device"
+            )
+
         # Restore previous selection if it still exists
         if current_rhtp_id is not None:
             index = self.linked_rhtp_dropdown.findData(current_rhtp_id)

@@ -79,6 +79,7 @@ class GuidedComboBox(QComboBox):
         self._disabled_tooltip = ""
         self._is_disabled = False
         self._tooltip_widget = None  # Custom tooltip widget
+        self._tooltip_hide_timer = None  # Timer for 3-second tooltip delay
 
         # Install event filter on self to catch events even when disabled
         self.installEventFilter(self)
@@ -129,8 +130,16 @@ class GuidedComboBox(QComboBox):
         # Check if this is a mouse press event on our widget while disabled
         if obj == self and event.type() == QEvent.MouseButtonPress and self._is_disabled:
             if self._guide_target:
-                # Highlight the target widget to guide user (single slow pulse)
-                highlight_widget(self._guide_target)
+                # Cancel any existing hide timer (user pressed again)
+                if self._tooltip_hide_timer:
+                    self._tooltip_hide_timer.stop()
+                    self._tooltip_hide_timer = None
+
+                # Highlight the target widget in yellow (action needed)
+                highlight_widget(self._guide_target, color="#FFFACD")
+
+                # Highlight the clicked widget itself in red (disabled/blocked)
+                highlight_widget(self, color="#FFB6B6")  # Light red
 
                 # Create a persistent custom tooltip widget
                 if not self._tooltip_widget:
@@ -147,22 +156,34 @@ class GuidedComboBox(QComboBox):
                     self._tooltip_widget.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint)
                     self._tooltip_widget.setAttribute(Qt.WA_TransparentForMouseEvents)
 
-                # Position it below the dropdown
-                global_pos = self.mapToGlobal(QPoint(0, self.height()))
-                self._tooltip_widget.move(global_pos)
-                self._tooltip_widget.adjustSize()
+                # Position it above the target widget
+                self._tooltip_widget.adjustSize()  # Must call adjustSize first to know the tooltip height
+                target_global_pos = self._guide_target.mapToGlobal(QPoint(0, -self._tooltip_widget.height() - 5))
+                self._tooltip_widget.move(target_global_pos)
                 self._tooltip_widget.show()
                 self._tooltip_widget.raise_()
             return True  # Event handled, don't propagate
 
-        # Hide tooltip when mouse is released
+        # Hide tooltip after 3-second delay when mouse is released
         if obj == self and event.type() == QEvent.MouseButtonRelease and self._is_disabled:
-            if self._tooltip_widget:
-                self._tooltip_widget.hide()
+            if self._tooltip_widget and self._tooltip_widget.isVisible():
+                # Start 3-second countdown before hiding
+                if not self._tooltip_hide_timer:
+                    self._tooltip_hide_timer = QTimer()
+                    self._tooltip_hide_timer.setSingleShot(True)
+                    self._tooltip_hide_timer.timeout.connect(self._hide_tooltip)
+
+                self._tooltip_hide_timer.start(3000)  # 3 seconds
             return True
 
         # Pass through all other events
         return super().eventFilter(obj, event)
+
+    def _hide_tooltip(self):
+        """Hide the tooltip after timer expires."""
+        if self._tooltip_widget:
+            self._tooltip_widget.hide()
+        self._tooltip_hide_timer = None
 
 
 class GuidedLineEdit(QLineEdit):
@@ -180,6 +201,7 @@ class GuidedLineEdit(QLineEdit):
         self._disabled_tooltip = ""
         self._is_disabled = False
         self._tooltip_widget = None  # Custom tooltip widget
+        self._tooltip_hide_timer = None  # Timer for 3-second tooltip delay
 
         # Install event filter on self to catch events even when disabled
         self.installEventFilter(self)
@@ -217,8 +239,16 @@ class GuidedLineEdit(QLineEdit):
         # Check if this is a mouse press event on our widget while disabled
         if obj == self and event.type() == QEvent.MouseButtonPress and self._is_disabled:
             if self._guide_target:
-                # Highlight the target widget to guide user (single slow pulse)
-                highlight_widget(self._guide_target)
+                # Cancel any existing hide timer (user pressed again)
+                if self._tooltip_hide_timer:
+                    self._tooltip_hide_timer.stop()
+                    self._tooltip_hide_timer = None
+
+                # Highlight the target widget in yellow (action needed)
+                highlight_widget(self._guide_target, color="#FFFACD")
+
+                # Highlight the clicked widget itself in red (disabled/blocked)
+                highlight_widget(self, color="#FFB6B6")  # Light red
 
                 # Create a persistent custom tooltip widget
                 if not self._tooltip_widget:
@@ -235,22 +265,34 @@ class GuidedLineEdit(QLineEdit):
                     self._tooltip_widget.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint)
                     self._tooltip_widget.setAttribute(Qt.WA_TransparentForMouseEvents)
 
-                # Position it below the line edit
-                global_pos = self.mapToGlobal(QPoint(0, self.height()))
-                self._tooltip_widget.move(global_pos)
-                self._tooltip_widget.adjustSize()
+                # Position it above the target widget
+                self._tooltip_widget.adjustSize()  # Must call adjustSize first to know the tooltip height
+                target_global_pos = self._guide_target.mapToGlobal(QPoint(0, -self._tooltip_widget.height() - 5))
+                self._tooltip_widget.move(target_global_pos)
                 self._tooltip_widget.show()
                 self._tooltip_widget.raise_()
             return True  # Event handled, don't propagate
 
-        # Hide tooltip when mouse is released
+        # Hide tooltip after 3-second delay when mouse is released
         if obj == self and event.type() == QEvent.MouseButtonRelease and self._is_disabled:
-            if self._tooltip_widget:
-                self._tooltip_widget.hide()
+            if self._tooltip_widget and self._tooltip_widget.isVisible():
+                # Start 3-second countdown before hiding
+                if not self._tooltip_hide_timer:
+                    self._tooltip_hide_timer = QTimer()
+                    self._tooltip_hide_timer.setSingleShot(True)
+                    self._tooltip_hide_timer.timeout.connect(self._hide_tooltip)
+
+                self._tooltip_hide_timer.start(3000)  # 3 seconds
             return True
 
         # Pass through all other events
         return super().eventFilter(obj, event)
+
+    def _hide_tooltip(self):
+        """Hide the tooltip after timer expires."""
+        if self._tooltip_widget:
+            self._tooltip_widget.hide()
+        self._tooltip_hide_timer = None
 
 
 def create_guided_widget(widget_class, parent=None, guide_target=None, guide_message=None,

@@ -84,6 +84,7 @@ class CommandWidget(QWidget):
         label = QLabel("Send serial command message to " + device_type, objectName="label")
         self.command_input = QLineEdit(objectName="line_edit")
         self.command_input.setPlaceholderText("Enter command")
+        self.command_input.setToolTip("Enter a serial command and press Enter to send")
         self.text_box = QTextEdit(readOnly=True, objectName="text_edit")
         # add widgets to layout
         layout.addWidget(label)
@@ -94,14 +95,18 @@ class CommandWidget(QWidget):
     def update_text_box(self, text):
         time_stamp = dt.now().strftime("%d.%m.%Y %H:%M:%S - ") # get time stamp
         self.text_box.append(time_stamp + text) # append text box with time stamp and text
-    
+
     def disable_command_input(self):
         self.command_input.setReadOnly(True)
         self.command_input.setPlaceholderText("Command input disabled")
-    
+        self.command_input.setToolTip("Device not connected. Select a COM port in the device settings (left panel) to connect and enable command input")
+        self.command_input.setStyleSheet("QLineEdit { background-color: #FFE6E6; }")  # Light red background
+
     def enable_command_input(self):
         self.command_input.setReadOnly(False)
         self.command_input.setPlaceholderText("Enter command")
+        self.command_input.setToolTip("Enter a serial command and press Enter to send")
+        self.command_input.setStyleSheet("")  # Clear style
 
 
 # status indicator widget
