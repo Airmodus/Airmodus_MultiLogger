@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (QTabWidget, QGridLayout, QLabel, QWidget,
     QPushButton, QComboBox, QGraphicsRectItem, QTableWidget, QTableWidgetItem,
     QTextEdit, QCheckBox, QHeaderView, QLineEdit)
 from config import CPC, CPC_ERRORS
+from ui_helpers import GuidedComboBox
 
 from widgets import (
     CommandWidget,
@@ -935,21 +936,29 @@ class CPCDatabaseTab(QWidget):
         layout.addWidget(self.db_enabled_checkbox, row, 0, 1, 2)
         row += 1
 
-        # Linked RHTP dropdown
+        # Linked RHTP dropdown (with guidance when disabled)
         linked_rhtp_label = QLabel("Linked RHTP device:")
         layout.addWidget(linked_rhtp_label, row, 0)
-        self.linked_rhtp_dropdown = QComboBox()
-        self.linked_rhtp_dropdown.setToolTip("Select the RHTP sensor to link with this CPC for database recording")
+        self.linked_rhtp_dropdown = GuidedComboBox()
+        self.linked_rhtp_dropdown.set_tooltips(
+            enabled_tooltip="Select the RHTP sensor to link with this CPC for database recording",
+            disabled_tooltip="Disable database first to change linked RHTP device"
+        )
+        # Guide target will be set after checkbox is created
         self.linked_rhtp_dropdown.currentIndexChanged.connect(self.linked_rhtp_changed)
         layout.addWidget(self.linked_rhtp_dropdown, row, 1)
         row += 1
 
-        # Averaging interval dropdown
+        # Averaging interval dropdown (with guidance when disabled)
         interval_label = QLabel("Averaging interval:")
         layout.addWidget(interval_label, row, 0)
-        self.interval_dropdown = QComboBox()
+        self.interval_dropdown = GuidedComboBox()
         self.interval_dropdown.addItems(['1 minute', '5 minutes', '10 minutes', '15 minutes', '1 hour', '3 hours'])
-        self.interval_dropdown.setToolTip("Select the time period for data averaging")
+        self.interval_dropdown.set_tooltips(
+            enabled_tooltip="Select the time period for data averaging",
+            disabled_tooltip="Disable database first to change averaging interval"
+        )
+        # Guide target will be set after checkbox is created
         self.interval_dropdown.currentTextChanged.connect(self.interval_changed)
         layout.addWidget(self.interval_dropdown, row, 1)
         row += 1
@@ -1053,6 +1062,16 @@ class CPCDatabaseTab(QWidget):
         # Get reference to main window for accessing database_manager
         # Will be set when tab is added to device
         self.main_window = None
+
+        # Set up guidance targets for dropdowns (point to checkbox when clicked while disabled)
+        self.linked_rhtp_dropdown.set_guide_target(
+            self.db_enabled_checkbox,
+            "Uncheck 'Enable database' to change linked RHTP device"
+        )
+        self.interval_dropdown.set_guide_target(
+            self.db_enabled_checkbox,
+            "Uncheck 'Enable database' to change averaging interval"
+        )
 
         # Timer for periodic refresh (every 5 seconds)
         self.refresh_timer = QTimer()
@@ -1580,6 +1599,10 @@ class CPCDatabaseTab(QWidget):
                 self.db_status_value.setStyleSheet("color: green;")
                 self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Database enabled - {message}")
 
+                # Disable dropdowns to prevent changes during recording
+                self.linked_rhtp_dropdown.setEnabled(False)
+                self.interval_dropdown.setEnabled(False)
+
                 # Update global status in all CPC tabs
                 self.update_global_connection_status()
                 self.sync_global_status_to_all_cpcs()
@@ -1602,6 +1625,10 @@ class CPCDatabaseTab(QWidget):
             self.db_status_value.setStyleSheet("color: gray;")
             self.reset_progress()  # Reset progress indicators
             self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Database disabled - {message}")
+
+            # Re-enable dropdowns now that database is disabled
+            self.linked_rhtp_dropdown.setEnabled(True)
+            self.interval_dropdown.setEnabled(True)
 
             # Update global status in all CPC tabs
             self.update_global_connection_status()
