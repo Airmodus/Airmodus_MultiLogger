@@ -161,72 +161,34 @@ YYYY.MM.DD hh:mm:ss,Concentration,Dead Time,Inlet Temp,...
 
 The application supports logging CPC data to PostgreSQL with time-averaged measurements for ACTRIS-compliant data archiving.
 
-#### Features
-- **Combined CPC+RHTP data**: Links CPC measurements with RHTP environmental data
-- **Time averaging**: Configurable intervals (1 minute, 5 minutes, 1 hour)
-- **Shared connection**: Multiple CPCs can use the same database connection
-- **Automatic table creation**: `cpc_measurements` table created on first connection
-
-#### Database Requirements
-
-**Connection String Format:**
-```
-postgresql://username:password@host:port/database_name
-```
-
-**Examples:**
-```bash
-# Local database with password
-postgresql://postgres:mypassword@localhost:5432/actris_data
-
-# Remote database
-postgresql://user:pass@db.example.com:5432/cpc_data
-
-# Local trusted connection (no password)
-postgresql://username@localhost:5432/actris_data
-```
-
-**Required Permissions:**
-The database user must have CREATE privileges on the schema. For PostgreSQL 15+:
-```sql
-GRANT ALL ON SCHEMA public TO your_username;
-```
-
-The application automatically creates the `cpc_measurements` table if it doesn't exist.
-
-#### Using the ACTRIS Tab
+#### Quick Start
 
 1. **Connect a CPC device** to the application
 2. **Navigate to the ACTRIS tab** in the CPC device window
-3. **Enter connection string** and click "Test Connection"
-4. **Link an RHTP device** from the dropdown (required)
-5. **Select averaging interval** (1 minute, 5 minutes, or 1 hour)
-6. **Enable database** by checking "Enable database for this device"
+3. **Enter connection string**: `postgresql://user:password@host:port/database`
+4. **Click "Test Connection + Refresh Preview"** to verify connectivity
+5. **Link an RHTP device** from the dropdown (provides inlet environmental data)
+6. **Select averaging interval** (1 minute, 5 minutes, 10 minutes, 15 minutes, 1 hour, or 3 hours)
+7. **Enable database** by checking "Enable database for this device"
 
-#### Database Schema
+#### Features
+- **Combined CPC+RHTP data**: Links CPC measurements with RHTP environmental data
+- **Flexible averaging**: Configurable intervals from 1 minute to 3 hours
+- **Shared connection**: Multiple CPCs can use the same database connection
+- **Automatic schema**: `cpc_measurements` table created automatically
+- **Live preview**: View and edit the 10 most recent records
+- **Record management**: Delete or modify records directly from UI
 
-**Table:** `cpc_measurements`
+#### Documentation
 
-Time-averaged records include:
-- **CPC measurements**: Concentration, saturation temp, condenser temp, growth tube temp, optics temp, cabinet temp, inlet flow, critical flow, nozzle flow
-- **RHTP data**: Temperature, pressure, relative humidity
-- **Metadata**: Timestamp, averaging duration, serial numbers, status flags
+For comprehensive documentation including:
+- Complete database schema with all 40+ fields
+- Sample data and SQL query examples
+- Data export procedures
+- Troubleshooting guide
+- Python/R analysis examples
 
-All numeric values are averaged over the selected interval. The application writes one record per interval.
-
-#### Troubleshooting
-
-**"permission denied for schema public":**
-- Grant CREATE privileges: `GRANT ALL ON SCHEMA public TO your_username;`
-- Required for PostgreSQL 15+ by default
-
-**"No RHTP device linked":**
-- RHTP must be connected and selected in the ACTRIS tab before enabling database
-
-**Connection string errors:**
-- Verify format matches examples above
-- Check database credentials and host accessibility
-- Use "Test Connection" button to diagnose issues
+**See: [ACTRIS_DATABASE.md](ACTRIS_DATABASE.md)**
 
 ### 6. Saving and Loading Configuration
 

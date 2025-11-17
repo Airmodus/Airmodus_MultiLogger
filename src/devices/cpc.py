@@ -902,7 +902,7 @@ class CPCDatabaseTab(QWidget):
         row += 1
 
         # Test connection button
-        self.test_connection_btn = QPushButton("Test Connection")
+        self.test_connection_btn = QPushButton("Test Connection + Refresh Preview")
         self.test_connection_btn.clicked.connect(self.test_connection_clicked)
         layout.addWidget(self.test_connection_btn, row, 0, 1, 2)
         row += 1
@@ -1503,6 +1503,8 @@ class CPCDatabaseTab(QWidget):
             dev_id = self.device_param.child('DevID').value()
             latest_rows = self.main_window.database_manager.get_latest_rows(10, dev_id)
             self.update_data_table(latest_rows)
+            # Clear row selection after deletion
+            self.data_table.clearSelection()
         else:
             self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - {message}")
 
