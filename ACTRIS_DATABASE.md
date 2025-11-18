@@ -4,6 +4,10 @@
 
 The Airmodus MultiLogger supports logging CPC (Condensation Particle Counter) data combined with RHTP (Relative Humidity, Temperature, Pressure) measurements to a PostgreSQL database for ACTRIS-compliant data archiving.
 
+
+https://github.com/user-attachments/assets/34637499-3f31-4a9d-b38c-2165ec2257ad
+
+
 ## Features
 
 - **Time-averaged data**: Configurable averaging intervals (1 minute, 5 minutes, 10 minutes, 15 minutes, 1 hour, 3 hours)
