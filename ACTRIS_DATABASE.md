@@ -594,6 +594,107 @@ ggplot(data, aes(x=time, y=conc)) +
     labs(title="CPC Concentration - Last 30 Days")
 ```
 
+## Internal Name Mappings
+
+This section documents the mapping between internal device names and data fields to ACTRIS database column names.
+
+### Device Type Mappings
+
+| Internal ID | Internal Name | Display Name | Data Class | Database Usage |
+|-------------|---------------|--------------|------------|----------------|
+| `1` | `CPC` | "CPC" | `CPCData` | Primary measurement device |
+| `5` | `RHTP` | "RHTP" | `RHTPData` | Inlet environmental conditions |
+
+### CPC Data Field Mappings
+
+This table shows how internal CPC data fields map to ACTRIS database columns:
+
+| CPCData Field | Data Type | ACTRIS DB Column | DB Type | Notes |
+|---------------|-----------|------------------|---------|-------|
+| `concentration` | float | `conc` | real | Particle concentration (#/cm³) |
+| `temp_saturator` | float | `temp_sat` | real | Saturator temperature (°C) |
+| `temp_condenser` | float | `temp_cond` | real | Condenser temperature (°C) |
+| `temp_optics` | float | `temp_optics` | real | Optics temperature (°C) |
+| `temp_cabin` | float | `temp_cab` | real | Cabinet temperature (°C) |
+| `pres_inlet` | float | `pres_inl` | real | Inlet pressure (kPa) |
+| `pres_critical_orifice` | float | `diff_pres_orf` | real | Critical orifice pressure drop (kPa) |
+| `pres_nozzle` | float | `diff_pres_noz` | real | Nozzle pressure drop (kPa) |
+| `pres_cabin` | float | `pres_amb` | real | Ambient/cabin pressure (kPa) |
+| `liquid_level` | int | `lvl_liq` | real | Liquid level indicator |
+| `total_errors` | int | `stat_log` | integer | Total error count |
+| `status_hex` | str | `status_hex` | text | Status flags in hexadecimal |
+| `laser_current` | float | `current_laser` | real | Laser current (mA) |
+| `pulse_duration` | float | `pulse_height` | real | Average pulse duration (ns) |
+| `dead_time` | float | — | — | Not written to database |
+| `number_of_pulses` | int | — | — | Not written to database |
+| `pulse_ratio` | float | — | — | Not written to database |
+
+### RHTP Data Field Mappings
+
+This table shows how internal RHTP data fields map to ACTRIS database columns (inlet conditions):
+
+| RHTPData Field | Data Type | ACTRIS DB Column | DB Type | Notes |
+|----------------|-----------|------------------|---------|-------|
+| `humidity` | float | `humidity_inlet` | real | Inlet relative humidity (%) |
+| `temperature` | float | `temp_inlet` | real | Inlet temperature (°C) |
+| `pressure` | float | `pressure_inlet` | real | Inlet pressure (Pa in data, hPa in DB) |
+
+**Note**: RHTP pressure is stored internally in Pascals but written to the database in hectopascals (hPa).
+
+### UI Column Mappings (ACTRIS Tab)
+
+The ACTRIS tab data table displays the following columns with their corresponding database fields:
+
+| Column Index | Table Header | ACTRIS DB Column | Editable | Data Type |
+|--------------|--------------|------------------|----------|-----------|
+| 0 | "Start" | `starttime` | No | timestamp |
+| 1 | "End" | `time` | No | timestamp |
+| 2 | "Conc" | `conc` | Yes | float |
+| 3 | "Flow In" | `flow_inl` | Yes | float |
+| 4 | "T Sat" | `temp_sat` | Yes | float |
+| 5 | "T Cond" | `temp_cond` | Yes | float |
+| 6 | "T Inlet" | `temp_inlet` | Yes | float |
+| 7 | "P Inlet" | `pressure_inlet` | Yes | float |
+| 8 | "RH In" | `humidity_inlet` | Yes | float |
+| 9 | "Pulse" | `pulse_height` | Yes | float |
+| 10 | "Err" | `stat_log` | Yes | int |
+| 11 | "Status" | `status_hex` | Yes | str |
+
+**Edit functionality**: Double-click any cell in columns 2-11 to edit the value. Changes are immediately written to the database.
+
+### Data Flow Summary
+
+```
+┌─────────────┐         ┌──────────────┐         ┌──────────────┐
+│  CPC Device │ ──1Hz──>│ CPCData      │ ──avg──>│ ACTRIS DB    │
+│  (Serial)   │         │ concentration│         │ conc         │
+│             │         │ temp_sat     │         │ temp_sat     │
+│             │         │ temp_cond    │         │ temp_cond    │
+│             │         │ ...          │         │ ...          │
+└─────────────┘         └──────────────┘         └──────────────┘
+
+┌─────────────┐         ┌──────────────┐         ┌──────────────┐
+│ RHTP Device │ ──1Hz──>│ RHTPData     │ ──avg──>│ ACTRIS DB    │
+│  (Serial)   │         │ humidity     │         │ humidity_inl │
+│             │         │ temperature  │         │ temp_inlet   │
+│             │         │ pressure     │         │ pressure_inl │
+└─────────────┘         └──────────────┘         └──────────────┘
+```
+
+**Averaging Process**:
+1. Raw 1 Hz data collected in `CPCData` and `RHTPData` objects
+2. Data accumulated in `CPCDataAverager` buffer
+3. At interval boundary, arithmetic mean calculated for most fields
+4. Status fields (`stat_log`, `status_hex`) use last value in interval
+5. Single averaged record written to `cpc_measurements` table
+
+**Code References**:
+- Device constants: `src/config.py:15-25`
+- Data classes: `src/devices/device_data.py:10-120`
+- Database schema: `src/managers/database_manager.py:50-150`
+- Write operations: `src/managers/database_manager.py:200-350`
+- UI table: `src/devices/cpc.py:1200-1400`
+
 ## Related Documentation
 
 - **[README.md](README.md)**: General application documentation and quick start

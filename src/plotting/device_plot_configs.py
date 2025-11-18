@@ -329,11 +329,15 @@ class CPCPlotConfig(BasePlotConfig):
                     # pulse duration = dead time * 1000 (micro to nano) / number of pulses
                     pulse_duration = round(cpc_data.dead_time * 1000 / cpc_data.number_of_pulses, 2)
 
+                # Update the data object so database can use the calculated value
+                cpc_data.pulse_duration = pulse_duration
+
                 # Store values
                 plot_data[str(dev_id)+':pd'][-1] = pulse_duration
                 plot_data[str(dev_id)+':pr'][-1] = cpc_data.pulse_ratio
             else:
                 # Out of range - store NaN
+                cpc_data.pulse_duration = nan
                 plot_data[str(dev_id)+':pd'][-1] = nan
                 plot_data[str(dev_id)+':pr'][-1] = nan
         except Exception as e:
