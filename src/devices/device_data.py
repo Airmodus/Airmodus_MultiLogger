@@ -390,6 +390,7 @@ class PSMSettings:
     co_flow: float = nan  # CO flow (Retrofit PSM only)
     dilution_parameters: list = None  # Variable length, stored as list
     cpc_settings: list = None  # CPC settings (added in write_data)
+    calibration_file_path: str = ""  # Path to calibration file for contour plot
 
     def __post_init__(self):
         """Initialize list fields if None."""

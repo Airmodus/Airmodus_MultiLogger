@@ -523,6 +523,16 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
                 print(f"[DEBUG IDN] Device {self.dev_id}: Received IDN response, serial: {serial_number}, type: {self.dev_type}")
                 if device_param.child('Serial number').value() != serial_number:
                     device_param.child('Serial number').setValue(serial_number)
+
+                # Auto-populate device nickname for Airmodus devices
+                from device_patterns import DeviceIdentifier
+                current_nickname = device_param.child('Device nickname').value()
+                if not current_nickname:  # Only set if empty (preserve user overrides)
+                    display_name = DeviceIdentifier.extract_display_name(serial_number, self.dev_type)
+                    if display_name:
+                        print(f"[DEBUG IDN] Auto-setting nickname to: {display_name}")
+                        device_param.child('Device nickname').setValue(display_name)
+
                 if self.dev_id in data_holder.idn_inquiry_devices:
                     data_holder.idn_inquiry_devices.remove(self.dev_id)
 

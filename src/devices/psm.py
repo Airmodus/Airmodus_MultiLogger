@@ -18,6 +18,7 @@ from widgets import (
 from plots.device_plots import SinglePlot
 from devices.base_device import ComplexDevice
 from devices.device_data import PSMData, PSMSettings
+from devices.psm_contour_tab import PSMContourTab
 from utils import compile_psm_settings
 from plotting.device_plot_configs import PSMPlotConfig
 from devices.data_writers import PSMDataWriter
@@ -40,6 +41,9 @@ class PSMWidget(ComplexDevice):
         # create plot widget for PSM
         self.plot_tab = SinglePlot(device_type=PSM)
         self.addTab(self.plot_tab, "PSM plot")
+        # create contour plot tab for PSM
+        self.contour_tab = PSMContourTab(self.device_parameter)
+        self.addTab(self.contour_tab, "Contour Plot")
 
         # create list of PSM status widgets, used in update_errors
         self.psm_status_widgets = [

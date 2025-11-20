@@ -91,6 +91,8 @@ class ScalableGroup(parameterTypes.GroupParameter):
             self.children()[-1].child('Connected CPC').sigValueChanged.connect(self.update_cpc_changed)
             # add firmware version parameter to index 3
             self.children()[-1].insertChild(3, {'name': 'Firmware version', 'type': 'str', 'value': "", 'readonly': True})
+            # add calibration file path parameter for contour plot
+            self.children()[-1].addChild({'name': 'Calibration file path', 'type': 'str', 'value': '', 'visible': False})
         
         # if added device is RHTP, add options for plotted value
         if device_value == RHTP:

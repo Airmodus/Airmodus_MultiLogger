@@ -176,6 +176,14 @@ class PlotManager:
                             self.data_holder
                         )
 
+                        # Update PSM contour plot if device is PSM/PSM2
+                        if dev_type in [PSM, PSM2] and hasattr(device_widget, 'contour_tab'):
+                            try:
+                                device_widget.contour_tab.update_contour(device_widget.current_data)
+                            except Exception as e:
+                                logging.error(f"Error updating PSM contour plot: {e}")
+                                traceback.print_exc()
+
                         # scale x-axis range if Follow is on
                         if self.params.child('Plot settings').child('Follow').value():
                             device_widget.plot_config.update_follow_mode(

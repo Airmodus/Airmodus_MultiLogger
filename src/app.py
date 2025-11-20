@@ -368,17 +368,24 @@ class MainWindow(QMainWindow):
     def load_devices(self, device_settings):
         # remove all devices from the parameter tree
         self.params.child('Device settings').clearChildren()
+        # Handle None or empty device settings
+        if not device_settings:
+            return
         try:
             # go through each device in the device settings
             for dev_name, dev_values in device_settings.items():
                 # get 'DevID' and 'Device type' values
                 dev_id = dev_values.get('DevID', None)
                 dev_type = dev_values.get('Device type', None)
+                # Skip if device type is invalid
+                if dev_type is None or dev_type == '' or dev_type not in self.data_holder.device_names:
+                    continue
                 # set n_devices to current dev_id
                 self.params.child('Device settings').n_devices = dev_id
                 # add device to the parameter tree
                 self.params.child('Device settings').addNew(self.data_holder.device_names[dev_type], device_name=dev_name)
-        except AttributeError:
+        except (AttributeError, KeyError) as e:
+            print(f"Error loading devices: {e}")
             pass
             
     def load_parameters_recursive(self, parameters, values):
