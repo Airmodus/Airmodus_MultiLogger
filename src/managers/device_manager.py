@@ -33,7 +33,8 @@ class DeviceManager(QObject):
         # Initialize port scanner manager
         self.port_scanner = PortScannerManager()
         self._scanning = False
-        self._com_port_list = []  # Cache current port list  
+        self._com_port_list = []  # Cache current port list
+        self._port_info_cache = {}  # Cache port info for dialogs  
 
     def connection_test(self):
         """Check and manage device connections, update states."""
@@ -115,6 +116,9 @@ class DeviceManager(QObject):
             dev.child('Connected').setValue(connected)
             if not self.data_holder.first_connection:
                 self.data_holder.first_connection = connected
+
+        # Refresh port status after connections to update dropdown cache
+        self.list_com_ports()
 
     def list_com_ports(self):
         """
@@ -231,6 +235,14 @@ class DeviceManager(QObject):
                 'vid_pid': port_data.get('vid_pid', '')
             }
 
+        # Cache combined port info with status for dialogs
+        self._port_info_cache = {}
+        for port in port_info_dict:
+            self._port_info_cache[port] = {
+                **port_info_dict[port],
+                'status': port_statuses.get(port, 'unknown')
+            }
+
         # Clean up descriptions for disconnected ports
         disconnected_ports = [
             p for p in self.data_holder.com_descriptions
@@ -255,6 +267,16 @@ class DeviceManager(QObject):
 
         self.port_scan_complete.emit()
 
+    def get_cached_port_info(self):
+        """
+        Get cached port information from the last scan.
+
+        Returns:
+            dict: Dictionary mapping port names to their info dicts.
+                  Each info dict contains: device_type, serial_number, manufacturer, vid_pid, status
+        """
+        return self._port_info_cache.copy()
+
     def _update_gui_port_display(self):
         """Update the GUI display of available COM ports."""
         # Format text for connected ports only, sorted by port name
@@ -265,11 +287,8 @@ class DeviceManager(QObject):
         sorted_ports = sorted(connected_descriptions.items())
         com_ports_text = '\n'.join(f"{port} - {desc}" for port, desc in sorted_ports)
 
-        # Update GUI 'Available serial ports' text box if changed
-        current_value = self.params.child('Serial ports').child('Available serial ports').value()
-        if com_ports_text != current_value:
-            self.params.child('Serial ports').child('Available serial ports').setValue(com_ports_text)
-            logging.debug(f"Updated GUI with new COM ports text:\n{com_ports_text}")
+        # Log available ports (Serial ports text display removed)
+        logging.debug(f"Available COM ports:\n{com_ports_text}")
 
     def start_port_monitoring(self):
         """Start continuous port monitoring for hot-plug detection."""
@@ -476,7 +495,3 @@ class DeviceManager(QObject):
                 print(traceback.format_exc())
                 logging.exception(e)
 
-    def set_status_lights(self):
-        """Set error and saving lights on status lights widget."""
-        self.data_holder.status_lights.set_error_light(self.data_holder.error_status)
-        self.data_holder.status_lights.set_saving_light(self.data_holder.saving_status)

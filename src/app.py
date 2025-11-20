@@ -73,6 +73,12 @@ class MainWindow(QMainWindow):
         # Update device_manager with device_tabs reference after GUI setup
         self.device_manager.device_tabs = self.device_tabs
 
+        # Set device_manager and data_holder in ScalableGroup for port selection dialog
+        device_settings = self.params.child('Device settings')
+        if device_settings:
+            device_settings.device_manager = self.device_manager
+            device_settings.data_holder = self.data_holder
+
         # Start initial port scan to populate dropdowns
         QTimer.singleShot(100, self.device_manager.list_com_ports)
 
@@ -133,12 +139,11 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap(resource_path + "/images/airmodus-envea-logo.png")
         self.logo.setPixmap(pixmap.scaled(400, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         # create left side vertical splitter
-        # contains parameter tree and status widget
+        # contains parameter tree
         left_splitter = QSplitter(Qt.Vertical) # split vertically
         left_splitter.addWidget(self.logo) # add logo
         left_splitter.addWidget(self.t) # add parameter tree widget
-        left_splitter.addWidget(self.data_holder.status_lights) # add status lights widget
-        left_splitter.setSizes([100, 800, 100]) # set relative sizes of widgets
+        left_splitter.setSizes([100, 900]) # set relative sizes of widgets
         # create right side tab widget containing device widgets as tabs
         # new devices are added to this as tabs in device_added function
         self.device_tabs = QTabWidget()
@@ -148,6 +153,13 @@ class MainWindow(QMainWindow):
         self.main_splitter.addWidget(left_splitter) # contains parameter tree and status lights
         self.main_splitter.addWidget(self.device_tabs) # contains devices as tabs
         self.main_splitter.setSizes([2000, 8000]) # set relative sizes of widgets
+
+        # Create and add status bar for always-visible field monitoring
+        from status_bar import MultiLoggerStatusBar
+        self.status_bar = MultiLoggerStatusBar(self.data_holder, self.params, self)
+        self.status_bar.main_window = self  # Set reference for tab switching
+        self.setStatusBar(self.status_bar)
+
         # resize window (int x, int y)
         self.resize(1400, 800)
 
@@ -179,9 +191,6 @@ class MainWindow(QMainWindow):
 
         # connect parameter tree's sigTreeStateChanged signal to save_ini function
         self.params.sigTreeStateChanged.connect(self.save_ini)
-        # connect 'Save settings' and 'Load settings' buttons
-        self.params.child('Data settings').child('Save settings').sigActivated.connect(self.manual_save_configuration)
-        self.params.child('Data settings').child('Load settings').sigActivated.connect(self.manual_load_configuration)
 
     # set COM port inquiry flag
     def set_inquiry_flag(self):
@@ -198,23 +207,19 @@ class MainWindow(QMainWindow):
         self.device_manager.list_com_ports()
 
     def _on_port_scan_started(self):
-        """Handle port scan start - update UI to show scanning in progress."""
-        # Update the 'Available serial ports' text to show scanning
-        self.params.child('Serial ports').child('Available serial ports').setValue('Scanning ports...')
+        """Handle port scan start."""
+        import logging
+        logging.info("Port scan started")
 
     def _on_port_scan_complete(self):
-        """Handle port scan completion - update UI to show scan complete."""
-        # Port list is already updated by DeviceManager, just log completion
+        """Handle port scan completion."""
         import logging
         logging.info("Port scan completed")
 
     def _on_port_scan_progress(self, current: int, total: int):
         """Handle port scan progress updates."""
-        # Update the 'Available serial ports' text to show progress
-        progress_text = f'Scanning ports... ({current}/{total})'
-        current_text = self.params.child('Serial ports').child('Available serial ports').value()
-        if current_text.startswith('Scanning'):
-            self.params.child('Serial ports').child('Available serial ports').setValue(progress_text)
+        import logging
+        logging.debug(f"Port scan progress: {current}/{total}")
     
 
     def save_ini(self):
@@ -267,9 +272,6 @@ class MainWindow(QMainWindow):
             if param.hasChildren():
                 result[param.name()] = self.save_parameters_recursive(param.children())
             else:
-                # Skip saving "Available serial ports" - it's dynamic and shouldn't be persisted
-                if param.name() == 'Available serial ports':
-                    continue
                 # Check if the parameter value is an instance of SerialDeviceConnection
                 if isinstance(param.value(), SerialDeviceConnection):
                     # store parameter value as None
@@ -421,18 +423,6 @@ class MainWindow(QMainWindow):
                     # Set the parameter value as usual
                     param.setValue(values.get(param.name(), param.value()))
     
-    def manual_save_configuration(self):
-        # Ask the user for the file path to save the configuration
-        file_dialog = QFileDialog(self)
-        json_path, _ = file_dialog.getSaveFileName(self, 'Save Configuration', '', 'JSON Files (*.json)')
-        self.save_configuration(json_path)
-    
-    def manual_load_configuration(self):
-        # Ask the user for the file path to load the configuration
-        file_dialog = QFileDialog(self)
-        json_path, _ = file_dialog.getOpenFileName(self, 'Load Configuration', '', 'JSON Files (*.json)')
-        self.load_configuration(json_path)
-
     def x_range_changed(self, viewbox):
         # if autoscale y is on
         if self.params.child("Plot settings").child('Autoscale Y').value():
@@ -566,6 +556,11 @@ class MainWindow(QMainWindow):
         self.device_tabs.addTab(widget, widget.name)
         self.data_holder.device_errors[device_id] = False
 
+        # Add device to status bar
+        if hasattr(self, 'status_bar'):
+            device_name = child.child('Device nickname').value() or child.name()
+            self.status_bar.add_device_status(device_id, device_name)
+
         # Set main_window reference for CPC database tab
         from config import CPC
         if device_type == CPC and hasattr(widget, 'database_tab'):
@@ -582,6 +577,10 @@ class MainWindow(QMainWindow):
         if param == self.params.child("Device settings"):
             device_id = child.child("DevID").value()
             device_type = child.child("Device type").value()
+
+            # Remove from status bar
+            if hasattr(self, 'status_bar'):
+                self.status_bar.remove_device_status(device_id)
 
             # If it's a CPC with database enabled, unregister from database manager
             from config import CPC

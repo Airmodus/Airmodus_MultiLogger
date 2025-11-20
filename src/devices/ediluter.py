@@ -70,6 +70,14 @@ class eDiluterWidget(ComplexDevice):
         """eDiluter auto-pushes data, no read command needed."""
         return None
 
+    def get_status_bar_text(self):
+        """Get formatted text for status bar display."""
+        if self.current_data and hasattr(self.current_data, 'dilution_factor'):
+            dilution = self.current_data.dilution_factor
+            if dilution is not None:
+                return f"DF: {dilution:.0f}"
+        return super().get_status_bar_text()
+
     def process_parsed_messages(self, parsed_messages, device_param, data_holder):
         """
         Process eDiluter messages with buffering and GUI updates.

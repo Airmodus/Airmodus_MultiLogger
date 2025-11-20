@@ -178,6 +178,14 @@ class CPCWidget(ComplexDevice):
         # This method is for documentation/future use
         return ":MEAS:ALL"
 
+    def get_status_bar_text(self):
+        """Get formatted text for status bar display."""
+        if self.current_data and hasattr(self.current_data, 'concentration'):
+            conc = self.current_data.concentration
+            if conc is not None:
+                return f"{conc:.1f} #/cc"
+        return super().get_status_bar_text()
+
     def process_parsed_messages(self, parsed_messages, device_param, data_holder):
         """
         Process CPC messages with buffering, settings compilation, and GUI updates.

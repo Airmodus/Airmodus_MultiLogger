@@ -24,6 +24,14 @@ class CO2Widget(SimpleDevice):
         """CO2 sensor requires a read command."""
         return ":MEAS:CO2"
 
+    def get_status_bar_text(self):
+        """Get formatted text for status bar display."""
+        if self.current_data and hasattr(self.current_data, 'co2'):
+            co2 = self.current_data.co2
+            if co2 is not None:
+                return f"{co2:.0f} ppm"
+        return super().get_status_bar_text()
+
     def parse_message(self, message, data_holder=None):
         """Parse CO2 sensor data: value1;value2;..."""
         # Base class handles IDN responses

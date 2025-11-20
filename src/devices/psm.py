@@ -151,6 +151,19 @@ class PSMWidget(ComplexDevice):
         # Note: Settings queries (:SYST:PRNT, :SYST:VCMP) are sent separately
         return None
 
+    def get_status_bar_text(self):
+        """Get formatted text for status bar display."""
+        # Show measurement mode and state
+        if hasattr(self, 'measure_tab'):
+            measure_tab = self.measure_tab
+            if hasattr(measure_tab, 'scan_button') and measure_tab.scan_button.measuring:
+                return "Scanning"
+            elif hasattr(measure_tab, 'step_button') and measure_tab.step_button.measuring:
+                return "Step scan"
+            elif hasattr(measure_tab, 'fixed_button') and measure_tab.fixed_button.measuring:
+                return "Fixed mode"
+        return "Idle"
+
     def process_parsed_messages(self, parsed_messages, device_param, data_holder):
         """
         Process PSM messages with buffering, settings compilation, and error handling.

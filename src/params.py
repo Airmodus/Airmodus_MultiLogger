@@ -5,12 +5,13 @@ from com_port_widget import ComPortParameter
 
 # ScalableGroup for creating a menu where to set up new COM devices
 class ScalableGroup(parameterTypes.GroupParameter):
-    def __init__(self, **opts):
+    def __init__(self, device_manager=None, data_holder=None, **opts):
         #opts['type'] = 'action'
         opts['addText'] = "Add new device"
-        # opts for choosing device type when adding new device
-        opts["addList"] = ["CPC", "PSM Retrofit", "PSM 2.0", "Electrometer", "CO2 sensor", "RHTP", "AFM", "eDiluter", "TSI CPC", "Example device"]
+        # Remove addList - now using dialog for device selection
         parameterTypes.GroupParameter.__init__(self, **opts)
+        self.device_manager = device_manager
+        self.data_holder = data_holder
         self.n_devices = 0
         self.cpc_dict = {'None': 'None'}
         self.rhtp_dict = {'None': 'None'}
@@ -20,10 +21,45 @@ class ScalableGroup(parameterTypes.GroupParameter):
         # update cpc_dict and rhtp_dict when device is removed
         self.sigChildRemoved.connect(self.update_cpc_dict)
         self.sigChildRemoved.connect(self.update_rhtp_dict)
+        self.sigChildRemoved.connect(self.on_device_removed)
 
-    def addNew(self, device_type, device_name=None): # device_type is the name of the added device type
+    def addNew(self, device_type=None, device_name=None): # device_type is the name of the added device type
+        # If no device_type provided, show port selection dialog
+        selected_port = None
+        if device_type is None:
+            if self.device_manager is None or self.data_holder is None:
+                print("Error: device_manager or data_holder not set")
+                return
+
+            from dialogs import PortSelectionDialog
+            dialog = PortSelectionDialog(self.device_manager, self.data_holder)
+            if dialog.exec_() != dialog.Accepted:
+                return  # User cancelled
+
+            selected_port = dialog.get_selected_port()
+            device_type = dialog.get_selected_type()
+
+            if not selected_port or not device_type:
+                return  # Invalid selection
+
         # device_value is used to set the default value for the Device type parameter below
-        device_value = {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": ELECTROMETER, "CO2 sensor": CO2_SENSOR, "RHTP": RHTP, "AFM": AFM, "eDiluter": EDILUTER, "TSI CPC": TSI_CPC, "Example device": -1}[device_type]
+        # Convert device type name to device ID
+        device_value = None
+        if self.data_holder and hasattr(self.data_holder, 'device_names'):
+            # Invert the device_names dict to map name -> ID
+            name_to_id = {name: dev_id for dev_id, name in self.data_holder.device_names.items()}
+            device_value = name_to_id.get(device_type)
+
+        if device_value is None:
+            # Device type not recognized - skip creating device
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                None,
+                "Unknown Device Type",
+                f"Cannot create device of type '{device_type}'.\n\n"
+                f"This device type is not supported. Please select a supported device type."
+            )
+            return
         # if OSX mode is on, set COM port type as string to allow complex port addresses
         port_type = 'str' if osx_mode else 'int'
         # if device_name argument is not given, set device name according to device type
@@ -63,6 +99,13 @@ class ScalableGroup(parameterTypes.GroupParameter):
             # Connect signal to update status when port is selected
             if com_port_param:
                 com_port_param.sigValueChanged.connect(self.on_com_port_selected)
+
+        # Pre-select port if it was chosen from the dialog
+        if selected_port:
+            new_device = self.children()[-1]
+            com_port_param = new_device.child('COM port')
+            if com_port_param:
+                com_port_param.setValue(selected_port)
 
         # if added device is CPC, update cpc_dict
         if device_value in [CPC, TSI_CPC]:
@@ -210,6 +253,48 @@ class ScalableGroup(parameterTypes.GroupParameter):
                     else:
                         device.child('Linked RHTP').setValue('None')
 
+    def on_device_removed(self, parent, child):
+        """
+        Called when a device is removed from the parameter tree.
+        Updates port statuses to mark the removed device's port as available.
+        """
+        try:
+            # Get the COM port that was used by the removed device
+            com_port_param = child.child('COM port')
+            if com_port_param:
+                removed_port = com_port_param.value()
+
+                if removed_port and removed_port != 'Select port...':
+                    # Mark this port as available again
+                    if removed_port in self.cached_port_statuses:
+                        # Check if any OTHER device is still using this port
+                        port_still_in_use = False
+                        for device in self.children():
+                            device_port_param = device.child('COM port')
+                            if device_port_param and device_port_param.value() == removed_port:
+                                port_still_in_use = True
+                                break
+
+                        # Only mark as available if no other device is using it
+                        if not port_still_in_use:
+                            self.cached_port_statuses[removed_port] = 'available'
+
+                    # Update all dropdowns to reflect the new status
+                    for device in self.children():
+                        device_com_port_param = device.child('COM port')
+                        if device_com_port_param and hasattr(device_com_port_param, 'set_available_ports'):
+                            current_value = device_com_port_param.value()
+                            device_com_port_param.set_available_ports(
+                                self.cached_ports,
+                                self.cached_port_statuses,
+                                self.cached_port_info
+                            )
+                            # Restore the selection
+                            if current_value:
+                                device_com_port_param.setValue(current_value)
+        except Exception as e:
+            print(f"Error updating port status on device removal: {e}")
+
     def update_com_port_dropdowns(self, available_ports_dict, port_statuses=None, port_info=None):
         """
         Update COM port selector dropdown values for all devices with status indicators.
@@ -260,17 +345,11 @@ params = [
         {'name': 'Save data', 'type': 'bool', 'value': False},
         {'name': 'Generate daily files', 'type': 'bool', 'value': True, 'tip': "If on, new files are started at midnight."},
         {'name': 'Resume on startup', 'type': 'bool', 'value': False, 'tip': "Option to resume the last settings on startup."},
-        {'name': 'Save settings', 'type': 'action'},
-        {'name': 'Load settings', 'type': 'action'},
     ]},
     {'name': 'Plot settings', 'type': 'group', 'children': [
         {'name': 'Follow', 'type': 'bool', 'value': True},
         {'name': 'Time window (s)', 'type': 'int', 'value': 60},
         {'name': 'Autoscale Y', 'type': 'bool', 'value': True}
-    ]},
-    {'name': 'Serial ports', 'type': 'group', 'children': [
-        {'name': 'Available serial ports', 'type': 'text', 'value': '', 'readonly': True},
-        # Update serial ports button removed - continuous monitoring is now automatic
     ]},
 
     ScalableGroup(name="Device settings", children=[

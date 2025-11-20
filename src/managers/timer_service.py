@@ -50,7 +50,10 @@ class TimerService:
         self.data_logger.write_data()
         self.check_and_write_database()  # Database writes (if enabled)
         self.device_manager.update_error_icons()
-        self.device_manager.set_status_lights() 
+        # Update status bar with latest device data and global status
+        if hasattr(self.main_window, 'status_bar'):
+            self.main_window.status_bar.update_all_devices()
+            self.main_window.status_bar.update_global_status() 
         if self.data_holder.time_counter < MAX_TIME_SEC - 1:
             self.data_holder.time_counter += 1
         else:

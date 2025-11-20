@@ -26,6 +26,14 @@ class AFMWidget(SimpleDevice):
         """AFM auto-pushes data, no read command needed."""
         return None
 
+    def get_status_bar_text(self):
+        """Get formatted text for status bar display."""
+        if self.current_data and hasattr(self.current_data, 'flow'):
+            flow = self.current_data.flow
+            if flow is not None:
+                return f"{flow:.2f} L/min"
+        return super().get_status_bar_text()
+
     def parse_message(self, message, data_holder=None):
         """Parse AFM data: volumetric flow, standard flow, RH, T, P (comma-separated)."""
         try:

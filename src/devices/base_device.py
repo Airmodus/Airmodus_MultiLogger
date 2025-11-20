@@ -207,6 +207,25 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         """
         return None
 
+    def get_status_bar_text(self):
+        """
+        Get formatted text to display in the status bar.
+
+        This method provides a concise status summary for field monitoring.
+        Override in device subclasses to show device-specific information.
+
+        Returns:
+            str: Formatted status text for status bar display
+                 Examples: "1234.5 #/cc", "Scanning", "23.5°C", "Connected"
+                 Return empty string if no data available
+
+        Default Implementation:
+            Returns "Connected" if device has data, empty string otherwise.
+        """
+        if self.current_data:
+            return "Connected"
+        return ""
+
     def has_device_specific_errors(self):
         """
         Whether device has additional device-specific error states beyond standard errors.

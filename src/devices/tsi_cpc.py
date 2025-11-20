@@ -26,6 +26,14 @@ class TSIWidget(SimpleDevice):
         """TSI CPC auto-pushes data, no read command needed."""
         return None
 
+    def get_status_bar_text(self):
+        """Get formatted text for status bar display."""
+        if self.current_data and hasattr(self.current_data, 'concentration'):
+            conc = self.current_data.concentration
+            if conc is not None:
+                return f"{conc:.1f} #/cc"
+        return super().get_status_bar_text()
+
     def get_read_command_sequence(self, ten_hz=False):
         """
         TSI CPC requires multiple sequential commands with timing delays.

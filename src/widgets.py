@@ -6,45 +6,6 @@ from PyQt5.QtWidgets import (QLabel, QWidget, QVBoxLayout, QLineEdit, QPushButto
 from datetime import datetime as dt
 
 
-# widget showing measurement and saving status
-# displayed under parameter tree
-class StatusLights(QSplitter):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-        font = self.font() # get current global font
-        font.setPointSize(20) # set font size
-        # create OK light widget
-        self.error_light = QLabel(objectName="label")
-        self.error_light.setFont(font) # apply font to label
-        self.error_light.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter) # align text in center
-        self.error_light.setAutoFillBackground(True) # automatically fill the background with color
-        self.addWidget(self.error_light) # add widget to splitter
-        # create saving light widget
-        self.saving_light = QLabel(objectName="label")
-        self.saving_light.setFont(font) # apply font to label
-        self.saving_light.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
-        self.saving_light.setAutoFillBackground(True)
-        self.addWidget(self.saving_light)
-        # set relative sizes of widgets in splitter
-        self.setSizes([100, 100])
-
-    # set the color and text of ok light according to error flag, 1 = errors, 0 = no errors
-    def set_error_light(self, flag):
-        if flag == 1:
-            self.error_light.setStyleSheet("QLabel { background-color : red }")
-            self.error_light.setText("Error")
-        else:
-            self.error_light.setStyleSheet("QLabel { background-color : green }")
-            self.error_light.setText("OK")
-    # set the color and text of saving light, 1 = saving, 0 = saving off
-    def set_saving_light(self, flag):
-        if flag == 1:
-            self.saving_light.setStyleSheet("QLabel { background-color : green }")
-            self.saving_light.setText("Saving")
-        else:
-            self.saving_light.setStyleSheet("QLabel { background-color : red }")
-            self.saving_light.setText("Saving off")
-
 # used in PSMMeasureTab
 class StepsWidget(QWidget):
     def __init__(self, *args, **kwargs):

@@ -26,6 +26,14 @@ class RHTPWidget(SimpleDevice):
         """RHTP auto-pushes data, no read command needed."""
         return None
 
+    def get_status_bar_text(self):
+        """Get formatted text for status bar display."""
+        if self.current_data and hasattr(self.current_data, 'temperature'):
+            temp = self.current_data.temperature
+            if temp is not None:
+                return f"T: {temp:.1f}°C"
+        return super().get_status_bar_text()
+
     def parse_message(self, message, data_holder=None):
         """Parse RHTP data: RH, T, P (comma-separated)."""
         try:

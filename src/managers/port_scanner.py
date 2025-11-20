@@ -202,7 +202,9 @@ class PortScannerThread(QThread):
                     vid_pid=vid_pid,
                     description=port_data.description
                 )
-                port_data.device_type = device_type
+                # Only use device_type if it's a known type, otherwise mark as Unknown
+                known_types = DeviceIdentifier.get_all_device_types()
+                port_data.device_type = device_type if device_type in known_types else 'Unknown'
                 return port_data
 
             # Attempt to open port and send IDN query
@@ -227,7 +229,9 @@ class PortScannerThread(QThread):
                     vid_pid=vid_pid,
                     description=port_data.description
                 )
-                port_data.device_type = device_type
+                # Only use device_type if it's a known type, otherwise mark as Unknown
+                known_types = DeviceIdentifier.get_all_device_types()
+                port_data.device_type = device_type if device_type in known_types else 'Unknown'
                 port_data.status = 'available'
             else:
                 # No IDN response, just return Unknown
@@ -236,7 +240,9 @@ class PortScannerThread(QThread):
                     vid_pid=vid_pid,
                     description=port_data.description
                 )
-                port_data.device_type = device_type
+                # Only use device_type if it's a known type, otherwise mark as Unknown
+                known_types = DeviceIdentifier.get_all_device_types()
+                port_data.device_type = device_type if device_type in known_types else 'Unknown'
                 port_data.status = 'available'
 
         except Exception as e:
@@ -248,7 +254,9 @@ class PortScannerThread(QThread):
                 vid_pid=vid_pid,
                 description=port_data.description
             )
-            port_data.device_type = device_type
+            # Only use device_type if it's a known type, otherwise mark as Unknown
+            known_types = DeviceIdentifier.get_all_device_types()
+            port_data.device_type = device_type if device_type in known_types else 'Unknown'
 
         return port_data
 
@@ -525,3 +533,19 @@ class PortScannerManager:
             self.scanner_thread.stop()
         if self.monitoring_thread:
             self.monitoring_thread.stop()
+
+    def get_port_info(self) -> dict:
+        """
+        Get current port information from the monitoring thread's cache.
+
+        Returns:
+            Dictionary mapping port names to their info dicts.
+            Example: {'COM3': {'device_type': 'CPC', 'serial_number': 'A12-1234', ...}}
+        """
+        if self.monitoring_thread and hasattr(self.monitoring_thread, '_port_info_cache'):
+            # Convert PortInfo objects to dicts
+            return {
+                port: info.to_dict()
+                for port, info in self.monitoring_thread._port_info_cache.items()
+            }
+        return {}

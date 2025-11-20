@@ -27,6 +27,14 @@ class ElectrometerWidget(SimpleDevice):
         """Electrometer requires a read command."""
         return ":MEAS:V"
 
+    def get_status_bar_text(self):
+        """Get formatted text for status bar display."""
+        if self.current_data and hasattr(self.current_data, 'current'):
+            current = self.current_data.current
+            if current is not None:
+                return f"{current:.2e} A"
+        return super().get_status_bar_text()
+
     def parse_message(self, message, data_holder=None):
         """Parse Electrometer data: value1;value2;... (semicolon-separated)."""
         try:
