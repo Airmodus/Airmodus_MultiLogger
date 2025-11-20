@@ -7,7 +7,7 @@ from com_port_widget import ComPortParameter
 class ScalableGroup(parameterTypes.GroupParameter):
     def __init__(self, device_manager=None, data_holder=None, **opts):
         #opts['type'] = 'action'
-        opts['addText'] = "Add new device"
+        # Add new device button removed - now using plus icon in top bar
         # Remove addList - now using dialog for device selection
         parameterTypes.GroupParameter.__init__(self, **opts)
         self.device_manager = device_manager

@@ -7,7 +7,8 @@ import json
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QLabel,
-    QFileDialog)
+    QFileDialog, QPushButton, QWidget, QHBoxLayout)
+from PyQt5.QtGui import QCursor
 from pyqtgraph.parametertree import ParameterTree
 
 from config import *
@@ -116,12 +117,24 @@ class MainWindow(QMainWindow):
                     except KeyError:
                         pass
 
+        # Set initial window size
+        self.resize(1400, 800)
+
     def _setup_parameter_tree(self):
         """Create and configure the ParameterTree."""
         # create parameter tree
         self.t = ParameterTree()
         self.t.setParameters(self.params, showTop=False)
         self.t.setHeaderHidden(True)
+
+        # Hide Data and Plot settings from left panel (accessed via gear icon)
+        data_settings = self.params.child('Data settings')
+        if data_settings:
+            data_settings.hide()
+
+        plot_settings = self.params.child('Plot settings')
+        if plot_settings:
+            plot_settings.hide()
 
         # load CSS style and apply it to the main window
         with open(script_path + "/style.css", "r") as f:
@@ -131,28 +144,102 @@ class MainWindow(QMainWindow):
 
     def _setup_gui(self):
         """Build main layout, splitters, tabs, etc."""
-        # create and set central widget (requirement of QMainWindow)
+        # create main container widget to hold splitter and floating settings button
+        from PyQt5.QtWidgets import QVBoxLayout
+        main_container = QWidget()
+        container_layout = QVBoxLayout(main_container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+
+        # create splitter
         self.main_splitter = QSplitter()
-        self.setCentralWidget(self.main_splitter)
+
         # create logo pixmap label
         self.logo = QLabel(alignment=Qt.AlignCenter, objectName="logo")
         pixmap = QPixmap(resource_path + "/images/airmodus-envea-logo.png")
         self.logo.setPixmap(pixmap.scaled(400, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
         # create left side vertical splitter
         # contains parameter tree
         left_splitter = QSplitter(Qt.Vertical) # split vertically
         left_splitter.addWidget(self.logo) # add logo
         left_splitter.addWidget(self.t) # add parameter tree widget
         left_splitter.setSizes([100, 900]) # set relative sizes of widgets
+
         # create right side tab widget containing device widgets as tabs
         # new devices are added to this as tabs in device_added function
         self.device_tabs = QTabWidget()
+        # Adjust tab bar styling for cleaner look with gear icon
+        self.device_tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 0px;
+            }
+            QTabBar::tab {
+                height: 32px;
+                padding: 6px 14px;
+            }
+        """)
         self.main_plot = MainPlot() # create main plot widget instance
         self.device_tabs.addTab(self.main_plot, "Main plot") # add main plot widget to tab widget
-        # add widgets to main_splitter (MainWindow's central widget)
-        self.main_splitter.addWidget(left_splitter) # contains parameter tree and status lights
+
+        # add widgets to main_splitter
+        self.main_splitter.addWidget(left_splitter) # contains parameter tree and logo
         self.main_splitter.addWidget(self.device_tabs) # contains devices as tabs
         self.main_splitter.setSizes([2000, 8000]) # set relative sizes of widgets
+
+        # Add splitter to container
+        container_layout.addWidget(self.main_splitter)
+
+        # create add device button (floating in top-right)
+        self.add_device_button = QPushButton("+", main_container)
+        self.add_device_button.setToolTip("Add New Device")
+        self.add_device_button.setCursor(QCursor(Qt.PointingHandCursor))
+        self.add_device_button.setFixedSize(48, 48)
+        self.add_device_button.setStyleSheet("""
+            QPushButton {
+                border: none;
+                background: transparent;
+                font-size: 48px;
+                color: #555555;
+                padding: 0px;
+                margin: 0px;
+            }
+            QPushButton:hover {
+                color: #4CAF50;
+            }
+            QPushButton:pressed {
+                color: #388E3C;
+            }
+        """)
+        self.add_device_button.clicked.connect(self._add_new_device)
+        self.add_device_button.raise_()
+
+        # create settings gear button (floating in top-right)
+        self.settings_button = QPushButton("⚙", main_container)
+        self.settings_button.setToolTip("Settings")
+        self.settings_button.setCursor(QCursor(Qt.PointingHandCursor))
+        self.settings_button.setFixedSize(48, 48)  # Clean, compact size
+        self.settings_button.setStyleSheet("""
+            QPushButton {
+                border: none;
+                background: transparent;
+                font-size: 48px;
+                color: #555555;
+                padding: 0px;
+                margin: 0px;
+            }
+            QPushButton:hover {
+                color: #2196F3;
+            }
+            QPushButton:pressed {
+                color: #1976D2;
+            }
+        """)
+        self.settings_button.clicked.connect(self._open_settings_dialog)
+        self.settings_button.raise_()  # Bring to front
+
+        # Set central widget
+        self.setCentralWidget(main_container)
 
         # Create and add status bar for always-visible field monitoring
         from status_bar import MultiLoggerStatusBar
@@ -160,8 +247,17 @@ class MainWindow(QMainWindow):
         self.status_bar.main_window = self  # Set reference for tab switching
         self.setStatusBar(self.status_bar)
 
-        # resize window (int x, int y)
-        self.resize(1400, 800)
+    def _open_settings_dialog(self):
+        """Open the data settings dialog."""
+        from dialogs.data_settings_dialog import DataSettingsDialog
+        dialog = DataSettingsDialog(self.params, self)
+        dialog.exec_()
+
+    def _add_new_device(self):
+        """Open dialog to add a new device."""
+        device_settings = self.params.child('Device settings')
+        if device_settings:
+            device_settings.addNew()
 
     def _connect_signals(self):
         """Wire up all signals/slots."""
@@ -612,6 +708,24 @@ class MainWindow(QMainWindow):
                 pass
 
             self.data_holder.clear_for_device(device_id)
+
+    def resizeEvent(self, event):
+        """Handle window resize - reposition floating buttons."""
+        super().resizeEvent(event)
+        if hasattr(self, 'settings_button') and hasattr(self, 'add_device_button'):
+            # Position gear button in top-right corner, aligned with tab bar
+            # 8px from right, 0px from top (flush with top)
+            gear_x = self.width() - self.settings_button.width() - 8
+            gear_y = 0
+            self.settings_button.move(gear_x, gear_y)
+
+            # Position plus button on the far left side of device tabs widget area
+            # Get the device_tabs widget position relative to main_container
+            tabs_global_pos = self.device_tabs.mapToGlobal(self.device_tabs.rect().topLeft())
+            container_global_pos = self.centralWidget().mapToGlobal(self.centralWidget().rect().topLeft())
+            plus_x = tabs_global_pos.x() - container_global_pos.x() + 8  # 8px from left edge of tabs widget
+            plus_y = 0
+            self.add_device_button.move(plus_x, plus_y)
 
     def closeEvent(self, event):
         """Handle application close event - cleanup database connections."""

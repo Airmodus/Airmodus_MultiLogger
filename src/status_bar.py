@@ -207,6 +207,7 @@ class MultiLoggerStatusBar(QStatusBar):
 
         # Create container widget for device status widgets
         self.device_container = QWidget()
+        self.device_container.setStyleSheet("background-color: #FFFFFF;")  # White background
         self.device_layout = QHBoxLayout(self.device_container)
         self.device_layout.setContentsMargins(0, 0, 0, 0)
         self.device_layout.setSpacing(5)
