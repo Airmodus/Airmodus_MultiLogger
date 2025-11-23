@@ -40,6 +40,8 @@ class DataHolder:
 
         self.file_path = ""  # Current save directory
         self.start_day = None  # For daily rollover
+        self.last_write_timestamp = None  # Last successful write time
+        self.most_recent_filename = ""  # Most recently created filename
 
         self.error_icon = None
         self.disconnected_icon = None

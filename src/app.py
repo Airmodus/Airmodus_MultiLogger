@@ -144,54 +144,28 @@ class MainWindow(QMainWindow):
 
     def _setup_gui(self):
         """Build main layout, splitters, tabs, etc."""
-        # create main container widget to hold splitter and floating settings button
+        # create main container widget to hold all UI elements
         from PyQt5.QtWidgets import QVBoxLayout
         main_container = QWidget()
         container_layout = QVBoxLayout(main_container)
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(0)
 
-        # create splitter
-        self.main_splitter = QSplitter()
+        # create horizontal top bar: [Logo] [Plus] [Device Tabs] [Gear]
+        top_bar_widget = QWidget()
+        top_bar_layout = QHBoxLayout(top_bar_widget)
+        top_bar_layout.setContentsMargins(8, 0, 8, 0)
+        top_bar_layout.setSpacing(8)
 
-        # create logo pixmap label
+        # create logo pixmap label (smaller for horizontal layout)
         self.logo = QLabel(alignment=Qt.AlignCenter, objectName="logo")
         pixmap = QPixmap(resource_path + "/images/airmodus-envea-logo.png")
-        self.logo.setPixmap(pixmap.scaled(400, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self.logo.setPixmap(pixmap.scaled(200, 50, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self.logo.setFixedHeight(50)
+        top_bar_layout.addWidget(self.logo)
 
-        # create left side vertical splitter
-        # contains parameter tree
-        left_splitter = QSplitter(Qt.Vertical) # split vertically
-        left_splitter.addWidget(self.logo) # add logo
-        left_splitter.addWidget(self.t) # add parameter tree widget
-        left_splitter.setSizes([100, 900]) # set relative sizes of widgets
-
-        # create right side tab widget containing device widgets as tabs
-        # new devices are added to this as tabs in device_added function
-        self.device_tabs = QTabWidget()
-        # Adjust tab bar styling for cleaner look with gear icon
-        self.device_tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 0px;
-            }
-            QTabBar::tab {
-                height: 32px;
-                padding: 6px 14px;
-            }
-        """)
-        self.main_plot = MainPlot() # create main plot widget instance
-        self.device_tabs.addTab(self.main_plot, "Main plot") # add main plot widget to tab widget
-
-        # add widgets to main_splitter
-        self.main_splitter.addWidget(left_splitter) # contains parameter tree and logo
-        self.main_splitter.addWidget(self.device_tabs) # contains devices as tabs
-        self.main_splitter.setSizes([2000, 8000]) # set relative sizes of widgets
-
-        # Add splitter to container
-        container_layout.addWidget(self.main_splitter)
-
-        # create add device button (floating in top-right)
-        self.add_device_button = QPushButton("+", main_container)
+        # create add device button (in top bar after logo)
+        self.add_device_button = QPushButton("+")
         self.add_device_button.setToolTip("Add New Device")
         self.add_device_button.setCursor(QCursor(Qt.PointingHandCursor))
         self.add_device_button.setFixedSize(48, 48)
@@ -212,10 +186,29 @@ class MainWindow(QMainWindow):
             }
         """)
         self.add_device_button.clicked.connect(self._add_new_device)
-        self.add_device_button.raise_()
+        top_bar_layout.addWidget(self.add_device_button)
 
-        # create settings gear button (floating in top-right)
-        self.settings_button = QPushButton("⚙", main_container)
+        # create right side tab widget containing device widgets as tabs
+        # new devices are added to this as tabs in device_added function
+        self.device_tabs = QTabWidget()
+        # Adjust tab bar styling for cleaner look with gear icon
+        self.device_tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 0px;
+            }
+            QTabBar::tab {
+                height: 32px;
+                padding: 6px 14px;
+            }
+        """)
+        self.main_plot = MainPlot() # create main plot widget instance
+        self.device_tabs.addTab(self.main_plot, "Main plot") # add main plot widget to tab widget
+
+        # Add device tabs to horizontal layout - it will stretch to fill space
+        top_bar_layout.addWidget(self.device_tabs, stretch=1)
+
+        # create settings gear button (in top bar at end)
+        self.settings_button = QPushButton("⚙")
         self.settings_button.setToolTip("Settings")
         self.settings_button.setCursor(QCursor(Qt.PointingHandCursor))
         self.settings_button.setFixedSize(48, 48)  # Clean, compact size
@@ -236,7 +229,13 @@ class MainWindow(QMainWindow):
             }
         """)
         self.settings_button.clicked.connect(self._open_settings_dialog)
-        self.settings_button.raise_()  # Bring to front
+        top_bar_layout.addWidget(self.settings_button)
+
+        # Add top bar to main container
+        container_layout.addWidget(top_bar_widget)
+
+        # Keep parameter tree but hide it (used internally for state management)
+        self.t.setVisible(False)
 
         # Set central widget
         self.setCentralWidget(main_container)
@@ -250,7 +249,7 @@ class MainWindow(QMainWindow):
     def _open_settings_dialog(self):
         """Open the data settings dialog."""
         from dialogs.data_settings_dialog import DataSettingsDialog
-        dialog = DataSettingsDialog(self.params, self)
+        dialog = DataSettingsDialog(self.params, self.data_holder, self)
         dialog.exec_()
 
     def _add_new_device(self):
@@ -498,6 +497,21 @@ class MainWindow(QMainWindow):
                 elif param.name() == 'Connected':
                     # skip 'Connected' parameter, this is checked in connection_test()
                     pass
+                elif param.name() == 'Plot to main':
+                    # Load the value for 'Plot to main' parameter
+                    # This parameter is correctly typed when the device is created
+                    # For RHTP/AFM devices it's a list type with string values
+                    # For other devices it's boolean
+                    # We need to load the saved value carefully
+                    saved_value = values.get(param.name(), param.value())
+                    # Only set the value if it's compatible with the parameter type
+                    if param.opts.get('type') == 'list':
+                        # For list parameters, only set if saved value is in the list
+                        if saved_value in param.opts.get('values', []):
+                            param.setValue(saved_value)
+                    else:
+                        # For boolean parameters, set the value as usual
+                        param.setValue(saved_value)
                 # Check if parameter name is CO flow
                 elif param.name() == 'CO flow':
                     # Set the parameter value as usual
@@ -558,6 +572,9 @@ class MainWindow(QMainWindow):
     def rename_device(self, device):
         # combine device type name and serial number into device name
         device_type = device.child('Device type').value() # device type number
+        # Check if device type is valid (may be empty during initial load)
+        if not device_type or device_type not in self.data_holder.device_names:
+            return
         device_type_name = self.data_holder.device_names[device_type] # device type name
         serial_number = device.child('Serial number').value() # serial number
         device_name = device_type_name + " " + serial_number
@@ -570,6 +587,9 @@ class MainWindow(QMainWindow):
     def rename_tab(self, device):
         # get tab index of device widget
         device_id = device.child('DevID').value()
+        # Check if device widget exists (may not during initial load)
+        if device_id not in self.data_holder.device_widgets:
+            return
         device_widget = self.data_holder.device_widgets[device_id]
         tab_index = self.device_tabs.indexOf(device_widget)
         # check if device has a nickname
@@ -579,6 +599,9 @@ class MainWindow(QMainWindow):
             device_name = device.name()
         # update tab name
         self.device_tabs.setTabText(tab_index, device_name)
+        # update checkbox name in main plot
+        if hasattr(self.main_plot, 'update_device_checkbox_name'):
+            self.main_plot.update_device_checkbox_name(device_id, device_name)
 
     # triggered when a new device is added to the parameter tree
     # sigChildAdded(self, param, child, index) - Emitted when a child (device) is added
@@ -657,6 +680,16 @@ class MainWindow(QMainWindow):
             device_name = child.child('Device nickname').value() or child.name()
             self.status_bar.add_device_status(device_id, device_name)
 
+        # Add device checkbox to main plot
+        # NOTE: We don't add it here because for RHTP/AFM devices, the 'Plot to main'
+        # parameter gets replaced with a list type AFTER sigChildAdded is emitted.
+        # Instead, we'll add it after a short delay to ensure parameter is configured.
+        if hasattr(self.main_plot, 'add_device_checkbox'):
+            device_name = child.child('Device nickname').value() or child.name()
+            # Use QTimer to defer the call until after all device configuration is complete
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self.main_plot.add_device_checkbox(device_id, device_name, device_param, widget))
+
         # Set main_window reference for CPC database tab
         from config import CPC
         if device_type == CPC and hasattr(widget, 'database_tab'):
@@ -677,6 +710,10 @@ class MainWindow(QMainWindow):
             # Remove from status bar
             if hasattr(self, 'status_bar'):
                 self.status_bar.remove_device_status(device_id)
+
+            # Remove device checkbox from main plot
+            if hasattr(self.main_plot, 'remove_device_checkbox'):
+                self.main_plot.remove_device_checkbox(device_id)
 
             # If it's a CPC with database enabled, unregister from database manager
             from config import CPC
@@ -708,24 +745,6 @@ class MainWindow(QMainWindow):
                 pass
 
             self.data_holder.clear_for_device(device_id)
-
-    def resizeEvent(self, event):
-        """Handle window resize - reposition floating buttons."""
-        super().resizeEvent(event)
-        if hasattr(self, 'settings_button') and hasattr(self, 'add_device_button'):
-            # Position gear button in top-right corner, aligned with tab bar
-            # 8px from right, 0px from top (flush with top)
-            gear_x = self.width() - self.settings_button.width() - 8
-            gear_y = 0
-            self.settings_button.move(gear_x, gear_y)
-
-            # Position plus button on the far left side of device tabs widget area
-            # Get the device_tabs widget position relative to main_container
-            tabs_global_pos = self.device_tabs.mapToGlobal(self.device_tabs.rect().topLeft())
-            container_global_pos = self.centralWidget().mapToGlobal(self.centralWidget().rect().topLeft())
-            plus_x = tabs_global_pos.x() - container_global_pos.x() + 8  # 8px from left edge of tabs widget
-            plus_y = 0
-            self.add_device_button.move(plus_x, plus_y)
 
     def closeEvent(self, event):
         """Handle application close event - cleanup database connections."""

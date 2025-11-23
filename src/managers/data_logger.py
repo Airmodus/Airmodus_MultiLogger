@@ -33,6 +33,9 @@ class DataLogger:
             self.reset_all_filenames()
             # disable read only file path
             self.params.child('Data settings').child('File path').setReadonly(False)
+            # reset timestamp and filename tracking
+            self.data_holder.last_write_timestamp = None
+            self.data_holder.most_recent_filename = ""
 
     def filepath_changed(self, new_path):
         """Set file path and reset filename dictionaries."""
@@ -108,6 +111,9 @@ class DataLogger:
         with open(self.data_holder.file_path + filename, "w", encoding='UTF-8'):
             pass
 
+        # Track most recent filename (store just the filename without path separator for display)
+        self.data_holder.most_recent_filename = filename.lstrip('/\\')
+
         return filename
 
     def _create_10hz_file(self, dev, dev_id, timestamp):
@@ -148,6 +154,9 @@ class DataLogger:
         # create file and write header
         with open(self.data_holder.file_path + filename, "w", encoding='UTF-8') as file:
             file.write('YYYY.MM.DD hh:mm:ss,Concentration 1 (#/cc),Concentration 2 (#/cc),Concentration 3 (#/cc),Concentration 4 (#/cc),Concentration 5 (#/cc),Concentration 6 (#/cc),Concentration 7 (#/cc),Concentration 8 (#/cc),Concentration 9 (#/cc),Concentration 10 (#/cc)')
+
+        # Track most recent filename (store just the filename without path separator for display)
+        self.data_holder.most_recent_filename = filename.lstrip('/\\')
 
         return filename
 
@@ -218,6 +227,9 @@ class DataLogger:
                             # Get data from data_writer
                             write_data = data_writer.get_dat_data(dev, self.data_holder, timeStampStr)
                             file.write(write_data)
+
+                        # Update last write timestamp after successful write
+                        self.data_holder.last_write_timestamp = self.data_holder.current_time
                        
                         # Write .par file if device has one and should be updated
                         if 'par' in data_writer.get_file_types() and data_writer.should_write_par(dev, self.data_holder):

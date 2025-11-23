@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                               QPushButton, QLabel, QLineEdit, QCheckBox,
                               QFileDialog, QWidget, QSpinBox, QTabWidget)
 from PyQt5.QtCore import Qt
+from datetime import datetime as dt
 
 
 class DataSettingsDialog(QDialog):
@@ -23,9 +24,10 @@ class DataSettingsDialog(QDialog):
     - Resume on startup checkbox
     """
 
-    def __init__(self, params, parent=None):
+    def __init__(self, params, data_holder, parent=None):
         super().__init__(parent)
         self.params = params
+        self.data_holder = data_holder
         self.data_settings = params.child('Data settings')
         self.plot_settings = params.child('Plot settings')
 
@@ -78,6 +80,12 @@ class DataSettingsDialog(QDialog):
         # Checkboxes
         self.save_data_checkbox = QCheckBox()
         data_form.addRow("Save data:", self.save_data_checkbox)
+
+        # Add status label below save data checkbox
+        self.save_status_label = QLabel()
+        self.save_status_label.setWordWrap(True)
+        self.save_status_label.setStyleSheet("color: #666666; font-size: 11px; padding-left: 0px;")
+        data_form.addRow("", self.save_status_label)
 
         self.generate_daily_checkbox = QCheckBox()
         self.generate_daily_checkbox.setToolTip("If on, new files are started at midnight.")
@@ -174,6 +182,9 @@ class DataSettingsDialog(QDialog):
             self.follow_checkbox.setChecked(follow)
             self.time_window_spinbox.setValue(time_window)
             self.autoscale_y_checkbox.setChecked(autoscale_y)
+
+            # Update save status label
+            self._update_save_status_label()
         except Exception as e:
             print(f"Error loading settings values: {e}")
 
@@ -197,3 +208,35 @@ class DataSettingsDialog(QDialog):
         except Exception as e:
             print(f"Error saving settings: {e}")
             super().reject()
+
+    def _update_save_status_label(self):
+        """Update the save status label with current save info."""
+        try:
+            save_data = self.data_settings.child('Save data').value()
+
+            if not save_data:
+                self.save_status_label.setText("Not currently saving")
+            else:
+                # Build status text with timestamp, path, and filename
+                status_parts = []
+
+                # Add last write timestamp
+                if hasattr(self.data_holder, 'last_write_timestamp') and self.data_holder.last_write_timestamp is not None:
+                    last_write_dt = dt.fromtimestamp(self.data_holder.last_write_timestamp)
+                    last_write_str = last_write_dt.strftime("%H:%M:%S")
+                    status_parts.append(f"Last write: {last_write_str}")
+                else:
+                    status_parts.append("Last write: Not yet written")
+
+                # Add file path
+                if hasattr(self.data_holder, 'file_path') and self.data_holder.file_path:
+                    status_parts.append(f"Path: {self.data_holder.file_path}")
+
+                # Add most recent filename
+                if hasattr(self.data_holder, 'most_recent_filename') and self.data_holder.most_recent_filename:
+                    status_parts.append(f"File: {self.data_holder.most_recent_filename}")
+
+                self.save_status_label.setText(" | ".join(status_parts) if status_parts else "Saving enabled")
+        except Exception as e:
+            print(f"Error updating save status label: {e}")
+            self.save_status_label.setText("")

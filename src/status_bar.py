@@ -401,9 +401,26 @@ class MultiLoggerStatusBar(QStatusBar):
             self.saving_label.setStyleSheet("padding: 2px 8px; color: #424242; background-color: transparent;")
             self.saving_label.setToolTip("Data saving is disabled")
         elif saving_status == 1:
+            # Build tooltip with timestamp and file info
+            tooltip_parts = ["<b>Data is being saved successfully</b>"]
+
+            # Add last write timestamp
+            if self.data_holder.last_write_timestamp is not None:
+                last_write_dt = dt.fromtimestamp(self.data_holder.last_write_timestamp)
+                last_write_str = last_write_dt.strftime("%H:%M:%S")
+                tooltip_parts.append(f"<br><br><b>Last write:</b> {last_write_str}")
+
+            # Add file path
+            if self.data_holder.file_path:
+                tooltip_parts.append(f"<br><b>Path:</b> {self.data_holder.file_path}")
+
+            # Add most recent filename
+            if self.data_holder.most_recent_filename:
+                tooltip_parts.append(f"<br><b>File:</b> {self.data_holder.most_recent_filename}")
+
             self.saving_label.setText("✓ Saving")
             self.saving_label.setStyleSheet("padding: 2px 8px; color: #2E7D32; background-color: transparent;")  # Dark green
-            self.saving_label.setToolTip("Data is being saved successfully")
+            self.saving_label.setToolTip("".join(tooltip_parts))
         else:
             self.saving_label.setText("! Save Error")
             self.saving_label.setStyleSheet("padding: 2px 8px; color: #FFFFFF; background-color: #D32F2F; border-radius: 3px;")  # White text on dark red for consistency

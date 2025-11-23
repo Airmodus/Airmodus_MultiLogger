@@ -7,7 +7,8 @@ for device widgets, data management, and serial communication parsing.
 """
 
 from abc import ABCMeta, abstractmethod
-from PyQt5.QtWidgets import QTabWidget
+from PyQt5.QtWidgets import QTabWidget, QWidget, QVBoxLayout, QFormLayout, QLineEdit, QLabel, QGroupBox, QPushButton
+from PyQt5.QtCore import Qt
 from numpy import full, nan
 from devices.device_data import create_device_data, create_device_settings
 import logging
@@ -68,6 +69,173 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
 
         # Multi-message buffering timeout counter
         self._extra_data_counter = 0  # Used by PSM to clear stale buffers after 60s
+
+        # Create device settings tab as first tab
+        self._create_device_settings_tab()
+
+    def _create_device_settings_tab(self):
+        """Create a device settings tab with COM port and nickname."""
+        settings_tab = QWidget()
+        layout = QVBoxLayout(settings_tab)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        # Create form group
+        form_group = QGroupBox("Device Settings")
+        form_layout = QFormLayout()
+        form_layout.setSpacing(10)
+        form_layout.setLabelAlignment(Qt.AlignRight)
+
+        # COM Port display (clickable)
+        self.com_port_label = QPushButton("Not set")
+        self.com_port_label.setStyleSheet("""
+            QPushButton {
+                color: white;
+                background-color: #2a2a2a;
+                padding: 5px;
+                border-radius: 3px;
+                text-align: left;
+                border: 1px solid #2a2a2a;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+                border: 1px solid #4a4a4a;
+            }
+            QPushButton:pressed {
+                background-color: #1a1a1a;
+            }
+        """)
+        self.com_port_label.setCursor(Qt.PointingHandCursor)
+        self.com_port_label.clicked.connect(self._on_com_port_clicked)
+        form_layout.addRow("COM Port:", self.com_port_label)
+
+        # Device nickname editor
+        self.nickname_edit = QLineEdit()
+        self.nickname_edit.setPlaceholderText("Enter device nickname...")
+        self.nickname_edit.setStyleSheet("padding: 5px;")
+
+        # Connect to parameter tree
+        def update_nickname():
+            new_nickname = self.nickname_edit.text()
+            self.device_parameter.child('Device nickname').setValue(new_nickname)
+
+        self.nickname_edit.textChanged.connect(update_nickname)
+        form_layout.addRow("Device Nickname:", self.nickname_edit)
+
+        # Serial number display (read-only)
+        self.serial_number_label = QLabel("Not detected")
+        self.serial_number_label.setStyleSheet("color: white; background-color: #2a2a2a; padding: 5px; border-radius: 3px;")
+        form_layout.addRow("Serial Number:", self.serial_number_label)
+
+        # Device type display (read-only)
+        self.device_type_label = QLabel(self.device_parameter.name())
+        self.device_type_label.setStyleSheet("color: white; background-color: #2a2a2a; padding: 5px; border-radius: 3px;")
+        form_layout.addRow("Device Type:", self.device_type_label)
+
+        form_group.setLayout(form_layout)
+        layout.addWidget(form_group)
+        layout.addStretch()
+
+        # Add as first tab (index 0)
+        self.insertTab(0, settings_tab, "Device")
+
+        # Update values from parameter tree
+        self._update_device_settings_display()
+
+        # Connect parameter signals to update display
+        self.device_parameter.child('COM port').sigValueChanged.connect(self._update_device_settings_display)
+        self.device_parameter.child('Serial number').sigValueChanged.connect(self._update_device_settings_display)
+        self.device_parameter.child('Device nickname').sigValueChanged.connect(self._update_nickname_display)
+
+    def _update_device_settings_display(self):
+        """Update the device settings display from parameter tree."""
+        # Update COM port
+        com_port = self.device_parameter.child('COM port').value()
+        if com_port and com_port != 'Select port...':
+            self.com_port_label.setText(str(com_port))
+        else:
+            self.com_port_label.setText("Not set")
+
+        # Update serial number
+        serial_number = self.device_parameter.child('Serial number').value()
+        if serial_number:
+            self.serial_number_label.setText(serial_number)
+        else:
+            self.serial_number_label.setText("Not detected")
+
+    def _update_nickname_display(self):
+        """Update nickname display without triggering textChanged signal."""
+        nickname = self.device_parameter.child('Device nickname').value()
+        # Block signals to prevent feedback loop
+        self.nickname_edit.blockSignals(True)
+        self.nickname_edit.setText(nickname)
+        self.nickname_edit.blockSignals(False)
+
+    def _on_com_port_clicked(self):
+        """Handle COM port label click to open port selection dialog."""
+        from dialogs.port_selection_dialog import PortSelectionDialog
+
+        # Get device_manager by traversing up the widget hierarchy to find MainWindow
+        device_manager = None
+        parent = self.parent()
+        while parent is not None:
+            if hasattr(parent, 'device_manager'):
+                device_manager = parent.device_manager
+                break
+            parent = parent.parent()
+
+        if not device_manager:
+            logging.error("Could not find device_manager in parent hierarchy")
+            return
+
+        # Get current device type for filtering
+        current_device_type = self.device_parameter.name()
+
+        # Open port selection dialog with filtering
+        dialog = PortSelectionDialog(
+            parent=self,
+            device_manager=device_manager,
+            filter_device_type=current_device_type
+        )
+
+        if dialog.exec_():
+            # User selected a port
+            new_port = dialog.selected_port
+            new_type = dialog.selected_type
+
+            if new_port:
+                self._change_device_port(new_port, new_type)
+
+    def _change_device_port(self, new_port, new_type):
+        """Change device to a different COM port and reconnect."""
+        # Get current port
+        old_port = self.device_parameter.child('COM port').value()
+
+        logging.info(f"[PORT CHANGE] Device {self.dev_id} changing from {old_port} to {new_port}")
+
+        # Close existing connection if connected
+        try:
+            if self.device_parameter.child('Connected').value():
+                connection = self.device_parameter.child('Connection').value()
+                if hasattr(connection, 'connection') and connection.connection.is_open:
+                    connection.close()
+                    logging.info(f"[PORT CHANGE] Closed connection on {old_port}")
+        except Exception as e:
+            logging.error(f"[PORT CHANGE] Error closing old connection: {e}")
+
+        # Update COM port parameter
+        self.device_parameter.child('COM port').setValue(new_port)
+
+        # Update the connection object's port
+        try:
+            connection = self.device_parameter.child('Connection').value()
+            if hasattr(connection, 'set_port'):
+                connection.set_port(new_port)
+                logging.info(f"[PORT CHANGE] Updated connection port to {new_port}")
+        except Exception as e:
+            logging.error(f"[PORT CHANGE] Error updating connection port: {e}")
+
+        # The connection will be automatically re-established by the connection_test timer
 
     @abstractmethod
     def get_read_command(self):

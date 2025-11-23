@@ -82,9 +82,9 @@ class ScalableGroup(parameterTypes.GroupParameter):
                 #dict(name="Baud rate", type='int', value=115200, visible=False),
                 dict(name = "Connection", value = SerialDeviceConnection(), visible=False),
                 {'name': 'Device type', 'type': 'list', 'values': {"CPC": CPC, "PSM Retrofit": PSM, "PSM 2.0": PSM2, "Electrometer": ELECTROMETER, "CO2 sensor": CO2_SENSOR, "RHTP": RHTP, "AFM": AFM, "eDiluter": EDILUTER, "TSI CPC": TSI_CPC, "Example device": -1}, 'value': device_value, 'readonly': True, 'visible': False},
-                dict(name = "Connected", type='bool', value=False, readonly = True),
+                dict(name = "Connected", type='bool', value=False, readonly = True, visible=False),
                 dict(name = "DevID", type='int', value=self.n_devices,readonly = True, visible = False),
-                dict(name = "Plot to main", type='bool', value=True),
+                dict(name = "Plot to main", type='bool', value=True, visible=False),
                 ]})
 
         self.n_devices += 1 # increase device counter
@@ -142,15 +142,15 @@ class ScalableGroup(parameterTypes.GroupParameter):
             self.update_rhtp_dict()
             # remove default Plot to main parameter
             self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
-            # create new Plot to main parameter with options for plotted value
-            self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'RH', 'T', 'P'], 'value': 'RH'})
-        
+            # create new Plot to main parameter with options for plotted value (hidden, controlled by checkbox)
+            self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'RH', 'T', 'P'], 'value': 'RH', 'visible': False})
+
         # if added device is AFM, add options for plotted value
         if device_value == AFM:
             # remove default Plot to main parameter
             self.children()[-1].removeChild(self.children()[-1].child('Plot to main'))
-            # create new Plot to main parameter with options for plotted value
-            self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'Flow', 'Standard flow', 'RH', 'T', 'P'], 'value': 'Flow'})
+            # create new Plot to main parameter with options for plotted value (hidden, controlled by checkbox)
+            self.children()[-1].addChild({'name': 'Plot to main', 'type': 'list', 'values': [None, 'Flow', 'Standard flow', 'RH', 'T', 'P'], 'value': 'Flow', 'visible': False})
         
         # if added device is Example device, hide irrelevant parameters
         if device_value == EXAMPLE_DEVICE:

@@ -21,14 +21,19 @@ class PortSelectionDialog(QDialog):
     User clicks a port to create device automatically or choose type manually.
     """
 
-    def __init__(self, device_manager, data_holder, parent=None):
+    def __init__(self, device_manager, data_holder=None, parent=None, filter_device_type=None):
         super().__init__(parent)
         self.device_manager = device_manager
         self.data_holder = data_holder
         self.selected_port = None
         self.selected_type = None
+        self.filter_device_type = filter_device_type
 
-        self.setWindowTitle("Select COM Port for New Device")
+        # Set window title based on mode
+        if filter_device_type:
+            self.setWindowTitle(f"Change COM Port for {filter_device_type}")
+        else:
+            self.setWindowTitle("Select COM Port for New Device")
         self.resize(700, 400)
 
         # Query fresh port data from device_manager
@@ -47,7 +52,13 @@ class PortSelectionDialog(QDialog):
         try:
             # Use device_manager's cached port info (updated on every scan)
             if hasattr(self.device_manager, 'get_cached_port_info'):
-                return self.device_manager.get_cached_port_info()
+                all_ports = self.device_manager.get_cached_port_info()
+
+                # Apply filtering if filter_device_type is set
+                if self.filter_device_type:
+                    return self._filter_ports(all_ports)
+
+                return all_ports
 
             return {}
         except Exception as e:
@@ -56,12 +67,51 @@ class PortSelectionDialog(QDialog):
             traceback.print_exc()
             return {}
 
+    def _filter_ports(self, all_ports):
+        """
+        Filter ports based on device type.
+
+        Rules:
+        - If device is Airmodus type: show only ports identified as that type + unidentified ports
+        - If device is Unknown: show all unidentified ports
+        - Exclude ports identified as different device types
+        - Allow selection of in-use ports (for swapping)
+        """
+        if not self.filter_device_type:
+            return all_ports
+
+        filtered = {}
+
+        for port, info in all_ports.items():
+            detected_type = info.get('device_type', 'Unknown')
+
+            # Always include ports with matching device type
+            if detected_type == self.filter_device_type:
+                filtered[port] = info
+                continue
+
+            # Include unidentified ports
+            if detected_type == 'Unknown' or not detected_type:
+                filtered[port] = info
+                continue
+
+            # If current device is Unknown type, include all unidentified ports
+            if self.filter_device_type == 'Unknown':
+                if detected_type == 'Unknown' or not detected_type:
+                    filtered[port] = info
+                continue
+
+        return filtered
+
     def _setup_ui(self):
         """Create and layout UI components."""
         layout = QVBoxLayout()
 
         # Header label
-        header = QLabel("Select a COM port to add a device:")
+        if self.filter_device_type:
+            header = QLabel(f"Select a COM port for {self.filter_device_type}:")
+        else:
+            header = QLabel("Select a COM port to add a device:")
         header.setStyleSheet("font-size: 14px; font-weight: bold;")
         layout.addWidget(header)
 
@@ -143,14 +193,20 @@ class PortSelectionDialog(QDialog):
                 status_item.setForeground(QColor('green'))
                 port_item.setToolTip("Click to add device on this port")
             elif status in ['in_use', 'connected']:
-                status_item.setForeground(QColor('red'))
-                # Gray out entire row
-                for col in range(4):
-                    item = self.port_table.item(row, col)
-                    if item:
-                        item.setForeground(QColor('#999'))
-                        item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
-                port_item.setToolTip("Port already in use by another device")
+                # In filter mode, allow selection of in-use ports (show in yellow/orange)
+                if self.filter_device_type:
+                    status_item.setForeground(QColor('orange'))
+                    port_item.setToolTip("Click to switch this device to this port (will disconnect other device)")
+                else:
+                    # In add new device mode, disable in-use ports
+                    status_item.setForeground(QColor('red'))
+                    # Gray out entire row
+                    for col in range(4):
+                        item = self.port_table.item(row, col)
+                        if item:
+                            item.setForeground(QColor('#999'))
+                            item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+                    port_item.setToolTip("Port already in use by another device")
             elif status == 'error':
                 status_item.setForeground(QColor('orange'))
                 port_item.setToolTip("Error communicating with port")
@@ -177,7 +233,8 @@ class PortSelectionDialog(QDialog):
         status = port_data.get('status')
 
         # Check if port is available
-        if status in ['in_use', 'connected']:
+        # In filter mode (changing device port), allow selection of in-use ports
+        if not self.filter_device_type and status in ['in_use', 'connected']:
             QMessageBox.warning(
                 self,
                 "Port In Use",
@@ -185,6 +242,19 @@ class PortSelectionDialog(QDialog):
                 f"Please select a different port or disconnect the existing device first."
             )
             return
+
+        # In filter mode, warn but allow swapping
+        if self.filter_device_type and status in ['in_use', 'connected']:
+            reply = QMessageBox.question(
+                self,
+                "Port In Use",
+                f"Port {port} is already connected to another device.\n\n"
+                f"Selecting this port will disconnect the other device and reconnect "
+                f"this device to it.\n\nDo you want to continue?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
 
         if status == 'error':
             reply = QMessageBox.question(
@@ -200,8 +270,15 @@ class PortSelectionDialog(QDialog):
         # Get detected device type
         detected_type = port_data.get('device_type', 'Unknown')
 
+        # If in filter mode (changing port), accept any port selection
+        if self.filter_device_type:
+            self.selected_port = port
+            self.selected_type = detected_type or self.filter_device_type
+            self.accept()
+            return
+
         # Check if detected type is one of our known device types
-        known_device_types = set(self.data_holder.device_names.values())
+        known_device_types = set(self.data_holder.device_names.values()) if self.data_holder else set()
         is_known_type = detected_type in known_device_types
 
         if detected_type and detected_type != 'Unknown' and is_known_type:
