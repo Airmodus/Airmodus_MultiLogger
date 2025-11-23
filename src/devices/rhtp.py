@@ -18,6 +18,9 @@ class RHTPWidget(SimpleDevice):
         # Data writer configuration (composition over inheritance)
         self.data_writer = RHTPDataWriter(self)
 
+        # Add Device tab at the end
+        self._add_device_tab_at_end()
+
     def get_plot_keys(self):
         """RHTP has relative humidity, temperature, and pressure."""
         return [':rh', ':t', ':p']

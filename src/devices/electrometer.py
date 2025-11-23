@@ -19,6 +19,9 @@ class ElectrometerWidget(SimpleDevice):
         # Data writer configuration (composition over inheritance)
         self.data_writer = ElectrometerDataWriter(self)
 
+        # Add Device tab at the end
+        self._add_device_tab_at_end()
+
     def get_plot_keys(self):
         """Electrometer has three voltage channels."""
         return [':1', ':2', ':3']

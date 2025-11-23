@@ -18,6 +18,9 @@ class TSIWidget(SimpleDevice):
         # Data writer configuration (composition over inheritance)
         self.data_writer = TSICPCDataWriter(self)
 
+        # Add Device tab at the end
+        self._add_device_tab_at_end()
+
     def get_plot_keys(self):
         """TSI CPC has concentration and raw concentration plots like Airmodus CPC."""
         return ['', ':raw']

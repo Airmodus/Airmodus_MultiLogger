@@ -27,7 +27,8 @@ class DeviceManager(QObject):
         self.params = params
         self.data_holder = data_holder
         self.device_widgets = device_widgets
-        self.device_tabs = device_tabs  # Reference to MainWindow.device_tabs for error icon updates
+        self.device_tabs = device_tabs  # Reference to MainWindow.device_tabs (QStackedWidget) for widget lookup
+        self.device_tab_bar = None  # Reference to MainWindow.device_tab_bar (QTabBar) for tab icons
         self.osx_mode = osx_mode
 
         # Initialize port scanner manager
@@ -467,24 +468,28 @@ class DeviceManager(QObject):
 
                 # Disconnected devices
                 if not connected:
-                    self.device_tabs.setTabIcon(tab_index, self.data_holder.disconnected_icon)
+                    if self.device_tab_bar and tab_index >= 0:
+                        self.device_tab_bar.setTabIcon(tab_index, self.data_holder.disconnected_icon)
                     self.data_holder.error_status = 1
                 # Devices with errors
                 elif error:
-                    self.device_tabs.setTabIcon(tab_index, self.data_holder.error_icon)
+                    if self.device_tab_bar and tab_index >= 0:
+                        self.device_tab_bar.setTabIcon(tab_index, self.data_holder.error_icon)
                     if device_widget.has_status_tab():
                         status_tab_index = device_widget.indexOf(device_widget.get_status_tab())
                         device_widget.setTabIcon(status_tab_index, self.data_holder.error_icon)
                 # Connected devices without errors
                 else:
-                    self.device_tabs.setTabIcon(tab_index, QIcon())
+                    if self.device_tab_bar and tab_index >= 0:
+                        self.device_tab_bar.setTabIcon(tab_index, QIcon())
                     if device_widget.has_status_tab():
                         status_tab_index = device_widget.indexOf(device_widget.get_status_tab())
                         device_widget.setTabIcon(status_tab_index, QIcon())
 
                 # Device-specific error checks (e.g., PSM CO flow error)
                 if device_widget.has_device_specific_errors():
-                    self.device_tabs.setTabIcon(tab_index, self.data_holder.error_icon)
+                    if self.device_tab_bar and tab_index >= 0:
+                        self.device_tab_bar.setTabIcon(tab_index, self.data_holder.error_icon)
                     set_tab_index = device_widget.indexOf(device_widget.set_tab)
                     device_widget.setTabIcon(set_tab_index, self.data_holder.error_icon)
                 elif hasattr(device_widget, 'set_tab'):

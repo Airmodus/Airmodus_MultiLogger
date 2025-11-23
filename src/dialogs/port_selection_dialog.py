@@ -47,6 +47,11 @@ class PortSelectionDialog(QDialog):
             self.device_manager.port_discovered.connect(self._on_port_update)
             self.device_manager.port_scan_complete.connect(self._on_scan_complete)
 
+        # Trigger fresh port scan for accurate status (non-blocking)
+        # This ensures the dialog shows current port availability after recent changes
+        if self.device_manager:
+            self.device_manager.list_com_ports()
+
     def _get_port_info(self):
         """Get current port information from device_manager."""
         try:

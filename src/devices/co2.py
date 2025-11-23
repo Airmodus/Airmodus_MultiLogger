@@ -20,6 +20,9 @@ class CO2Widget(SimpleDevice):
         # Data writer configuration (composition over inheritance)
         self.data_writer = CO2DataWriter(self)
 
+        # Add Device tab at the end
+        self._add_device_tab_at_end()
+
     def get_read_command(self):
         """CO2 sensor requires a read command."""
         return ":MEAS:CO2"

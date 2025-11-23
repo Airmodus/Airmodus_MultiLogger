@@ -60,6 +60,9 @@ class CPCWidget(ComplexDevice):
         # Data writer configuration (composition over inheritance)
         self.data_writer = CPCDataWriter(self)
 
+        # Add Device tab at the end
+        self._add_device_tab_at_end()
+
     def get_plot_keys(self):
         """CPC has concentration and raw concentration plots."""
         return ['', ':raw']

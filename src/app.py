@@ -7,7 +7,7 @@ import json
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QLabel,
-    QFileDialog, QPushButton, QWidget, QHBoxLayout)
+    QFileDialog, QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QTabBar, QStackedWidget)
 from PyQt5.QtGui import QCursor
 from pyqtgraph.parametertree import ParameterTree
 
@@ -71,8 +71,9 @@ class MainWindow(QMainWindow):
 
         self.device_manager = DeviceManager(self.params, self.data_holder, self.data_holder.device_widgets)
 
-        # Update device_manager with device_tabs reference after GUI setup
+        # Update device_manager with device_tabs and device_tab_bar references after GUI setup
         self.device_manager.device_tabs = self.device_tabs
+        self.device_manager.device_tab_bar = self.device_tab_bar
 
         # Set device_manager and data_holder in ScalableGroup for port selection dialog
         device_settings = self.params.child('Device settings')
@@ -145,16 +146,16 @@ class MainWindow(QMainWindow):
     def _setup_gui(self):
         """Build main layout, splitters, tabs, etc."""
         # create main container widget to hold all UI elements
-        from PyQt5.QtWidgets import QVBoxLayout
         main_container = QWidget()
         container_layout = QVBoxLayout(main_container)
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(0)
 
-        # create horizontal top bar: [Logo] [Plus] [Device Tabs] [Gear]
+        # create horizontal top bar: [Logo] [Plus] [Tab Bar] [Gear]
         top_bar_widget = QWidget()
+        top_bar_widget.setFixedHeight(60)  # Fix height to prevent stretching
         top_bar_layout = QHBoxLayout(top_bar_widget)
-        top_bar_layout.setContentsMargins(8, 0, 8, 0)
+        top_bar_layout.setContentsMargins(8, 5, 8, 5)
         top_bar_layout.setSpacing(8)
 
         # create logo pixmap label (smaller for horizontal layout)
@@ -188,24 +189,28 @@ class MainWindow(QMainWindow):
         self.add_device_button.clicked.connect(self._add_new_device)
         top_bar_layout.addWidget(self.add_device_button)
 
-        # create right side tab widget containing device widgets as tabs
-        # new devices are added to this as tabs in device_added function
-        self.device_tabs = QTabWidget()
-        # Adjust tab bar styling for cleaner look with gear icon
-        self.device_tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 0px;
-            }
+        # create tab bar (ONLY the tabs, not the content)
+        self.device_tab_bar = QTabBar()
+        self.device_tab_bar.setExpanding(True)  # Tabs expand to fill space
+        self.device_tab_bar.setStyleSheet("""
             QTabBar::tab {
-                height: 32px;
+                height: 40px;
                 padding: 6px 14px;
+                background-color: #3a3a3a;
+                color: #cccccc;
+                border: none;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background-color: #2a2a2a;
+                color: #ffffff;
+            }
+            QTabBar::tab:hover {
+                background-color: #4a4a4a;
             }
         """)
-        self.main_plot = MainPlot() # create main plot widget instance
-        self.device_tabs.addTab(self.main_plot, "Main plot") # add main plot widget to tab widget
-
-        # Add device tabs to horizontal layout - it will stretch to fill space
-        top_bar_layout.addWidget(self.device_tabs, stretch=1)
+        self.device_tab_bar.currentChanged.connect(self._on_tab_changed)
+        top_bar_layout.addWidget(self.device_tab_bar, stretch=1)
 
         # create settings gear button (in top bar at end)
         self.settings_button = QPushButton("⚙")
@@ -234,6 +239,15 @@ class MainWindow(QMainWindow):
         # Add top bar to main container
         container_layout.addWidget(top_bar_widget)
 
+        # create stacked widget for content area (below top bar)
+        self.device_tabs = QStackedWidget()
+        container_layout.addWidget(self.device_tabs, stretch=1)  # Takes remaining vertical space
+
+        # Add main plot as first tab/page
+        self.main_plot = MainPlot()
+        self.device_tabs.addWidget(self.main_plot)
+        self.device_tab_bar.addTab("Main plot")
+
         # Keep parameter tree but hide it (used internally for state management)
         self.t.setVisible(False)
 
@@ -245,6 +259,10 @@ class MainWindow(QMainWindow):
         self.status_bar = MultiLoggerStatusBar(self.data_holder, self.params, self)
         self.status_bar.main_window = self  # Set reference for tab switching
         self.setStatusBar(self.status_bar)
+
+    def _on_tab_changed(self, index):
+        """Handle tab bar selection changes - switch the stacked widget page."""
+        self.device_tabs.setCurrentIndex(index)
 
     def _open_settings_dialog(self):
         """Open the data settings dialog."""
@@ -597,8 +615,9 @@ class MainWindow(QMainWindow):
             device_name = device.child('Device nickname').value()
         else: # if no nickname, use device parameter name (device type and serial number)
             device_name = device.name()
-        # update tab name
-        self.device_tabs.setTabText(tab_index, device_name)
+        # update tab name in tab bar
+        if tab_index >= 0:
+            self.device_tab_bar.setTabText(tab_index, device_name)
         # update checkbox name in main plot
         if hasattr(self.main_plot, 'update_device_checkbox_name'):
             self.main_plot.update_device_checkbox_name(device_id, device_name)
@@ -672,7 +691,10 @@ class MainWindow(QMainWindow):
         self.data_holder.init_plot_data_for_device(device_id, widget)
 
         # Add widget to GUI and initialize error tracking
-        self.device_tabs.addTab(widget, widget.name)
+        # Add to stacked widget (content area)
+        self.device_tabs.addWidget(widget)
+        # Add to tab bar (top bar)
+        self.device_tab_bar.addTab(widget.name)
         self.data_holder.device_errors[device_id] = False
 
         # Add device to status bar
@@ -731,8 +753,12 @@ class MainWindow(QMainWindow):
                                 widget.database_tab.update_global_connection_status()
                                 widget.database_tab.sync_global_status_to_all_cpcs()
 
-            # remove device widget from main tab widget
-            self.device_tabs.removeTab(self.device_tabs.indexOf(self.data_holder.device_widgets[device_id]))
+            # remove device widget from stacked widget and tab bar
+            widget = self.data_holder.device_widgets[device_id]
+            widget_index = self.device_tabs.indexOf(widget)
+            if widget_index >= 0:
+                self.device_tabs.removeWidget(widget)
+                self.device_tab_bar.removeTab(widget_index)
             # close serial connection if open
             try:
                 child.child('Connection').value().close()

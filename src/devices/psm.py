@@ -66,6 +66,9 @@ class PSMWidget(ComplexDevice):
         # Data writer configuration (composition over inheritance)
         self.data_writer = PSMDataWriter(self)
 
+        # Add Device tab at the end
+        self._add_device_tab_at_end()
+
     def get_plot_keys(self):
         """PSM has a single concentration plot."""
         return ['']

@@ -18,6 +18,9 @@ class AFMWidget(SimpleDevice):
         # Data writer configuration (composition over inheritance)
         self.data_writer = AFMDataWriter(self)
 
+        # Add Device tab at the end
+        self._add_device_tab_at_end()
+
     def get_plot_keys(self):
         """AFM has flow, standard flow, RH, temperature, and pressure."""
         return [':f', ':sf', ':rh', ':t', ':p']

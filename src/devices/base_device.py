@@ -70,7 +70,8 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         # Multi-message buffering timeout counter
         self._extra_data_counter = 0  # Used by PSM to clear stale buffers after 60s
 
-        # Create device settings tab as first tab
+        # Create device settings tab (but don't insert it yet - will be added at end)
+        self._device_settings_tab = None
         self._create_device_settings_tab()
 
     def _create_device_settings_tab(self):
@@ -136,8 +137,8 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         layout.addWidget(form_group)
         layout.addStretch()
 
-        # Add as first tab (index 0)
-        self.insertTab(0, settings_tab, "Device")
+        # Store the device tab (will be inserted at the end by _add_device_tab_at_end)
+        self._device_settings_tab = settings_tab
 
         # Update values from parameter tree
         self._update_device_settings_display()
@@ -146,6 +147,12 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         self.device_parameter.child('COM port').sigValueChanged.connect(self._update_device_settings_display)
         self.device_parameter.child('Serial number').sigValueChanged.connect(self._update_device_settings_display)
         self.device_parameter.child('Device nickname').sigValueChanged.connect(self._update_nickname_display)
+
+    def _add_device_tab_at_end(self):
+        """Insert the Device settings tab at the end of all tabs."""
+        if self._device_settings_tab:
+            # Add as the last tab
+            self.addTab(self._device_settings_tab, "Device")
 
     def _update_device_settings_display(self):
         """Update the device settings display from parameter tree."""
