@@ -982,7 +982,30 @@ class CPCDatabaseTab(QWidget):
         layout.addWidget(status_label, row, 0, 1, 2)
         row += 1
 
+<<<<<<< Updated upstream
         # Database status indicator
+=======
+        # Next Write Countdown - PROMINENT (simplified)
+        next_write_label = QLabel("Next write:")
+        next_write_label.setStyleSheet("font-size: 11pt;")
+        layout.addWidget(next_write_label, row, 0)
+
+        self.next_write_value = QLabel("--:--")
+        self.next_write_value.setStyleSheet("font-size: 20pt; font-weight: bold; color: #ffa726;")
+        layout.addWidget(self.next_write_value, row, 1)
+        row += 1
+
+        # Current interval progress
+        progress_label = QLabel("Current interval:")
+        progress_label.setStyleSheet("font-size: 11pt;")
+        layout.addWidget(progress_label, row, 0)
+        self.progress_value = QLabel("No data")
+        self.progress_value.setStyleSheet("font-size: 11pt; color: #66bb6a;")
+        layout.addWidget(self.progress_value, row, 1)
+        row += 1
+
+        # Device status indicator
+>>>>>>> Stashed changes
         db_status_label = QLabel("Status:")
         layout.addWidget(db_status_label, row, 0)
         self.db_status_value = QLabel("Disabled")

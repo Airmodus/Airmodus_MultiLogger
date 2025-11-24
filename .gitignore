@@ -170,3 +170,4 @@ cython_debug/
 
 # data files
 *.dat
+*.par
