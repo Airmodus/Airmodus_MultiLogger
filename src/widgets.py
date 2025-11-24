@@ -1,7 +1,7 @@
 from PyQt5.QtGui import QPalette, QIntValidator, QDoubleValidator
 from PyQt5.QtCore import Qt, pyqtSignal, QLocale, QTimer
 from PyQt5.QtWidgets import (QLabel, QWidget, QVBoxLayout, QLineEdit, QPushButton,
-                             QSpinBox, QDoubleSpinBox, QTextEdit,
+                             QSpinBox, QDoubleSpinBox, QTextEdit, QHBoxLayout,
                              QSizePolicy, QSplitter)
 from datetime import datetime as dt
 
@@ -256,7 +256,104 @@ class SetWidget(QWidget):
             self.value_spinbox.setStyleSheet(self.stylesheet)
             self.error = False
 
+class TabConfirmationPopup(QWidget):
+    """
+    Inline confirmation popup that appears below a tab.
+
+    Auto-closes when clicking outside (Qt.Popup behavior).
+    Emits confirmed signal if user clicks Confirm button.
+    """
+    confirmed = pyqtSignal()
+
+    def __init__(self, tab_name, parent=None):
+        super().__init__(parent)
+
+        # Set window flags for popup behavior
+        self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, False)
+
+        # Create layout
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
+
+        # Confirm button
+        self.confirm_btn = QPushButton("✓ Confirm")
+        self.confirm_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #d9534f;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                padding: 6px 12px;
+                font-weight: bold;
+                text-align: center;
+            }
+            QPushButton:hover {
+                background-color: #c9302c;
+            }
+        """)
+        self.confirm_btn.clicked.connect(self._on_confirm)
+        layout.addWidget(self.confirm_btn)
+
+        # Cancel button
+        self.cancel_btn = QPushButton("✗ Cancel")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #5bc0de;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                padding: 6px 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #46b8da;
+            }
+        """)
+        self.cancel_btn.clicked.connect(self.close)
+        layout.addWidget(self.cancel_btn)
+
+        # Set overall widget style
+        self.setStyleSheet("""
+            QWidget {
+                background-color: white;
+                border: 2px solid #ccc;
+                border-radius: 4px;
+            }
+        """)
+
+        # Set fixed size (smaller now without label)
+        self.setFixedSize(200, 40)
+
+    def _on_confirm(self):
+        """Handle confirm button click - emit signal and close."""
+        self.confirmed.emit()
+        self.close()
+
+    def show_below_tab(self, tab_bar, tab_index):
+        """
+        Show the popup positioned directly below the X button on the right side of the tab.
+
+        Args:
+            tab_bar: QTabBar instance
+            tab_index: Index of the tab to position below
+        """
+        # Get tab rectangle and convert to global coordinates
+        tab_rect = tab_bar.tabRect(tab_index)
+        global_pos = tab_bar.mapToGlobal(tab_rect.bottomLeft())
+
+        # Position popup on the right side of the tab (aligned with X button)
+        # Place it so the right edge of popup aligns with right edge of tab
+        popup_x = global_pos.x() + tab_rect.width() - self.width()
+        popup_y = global_pos.y() + 2  # Small gap below tab
+
+        self.move(popup_x, popup_y)
+        self.show()
+        self.activateWindow()  # Ensure popup gets focus
+
+
 __all__ = [
     'SetWidget', 'SpinBox', 'DoubleSpinBox', 'ToggleButton', 'StartButton', 'IndicatorWidget',
-    'CommandWidget', 'FloatTextEdit', 'StepsWidget', 'PulseQuality'
+    'CommandWidget', 'FloatTextEdit', 'StepsWidget', 'TabConfirmationPopup'
 ]

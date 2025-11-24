@@ -128,6 +128,9 @@ class ComPortWidget(QtWidgets.QWidget):
         self.port_statuses = port_statuses or {}
         self.port_info = port_info or {}
 
+        # Save current selection to preserve it
+        current_value = self.value()
+
         # Clear existing menu
         self.menu.clear()
 
@@ -136,7 +139,8 @@ class ComPortWidget(QtWidgets.QWidget):
             action = self.menu.addAction("No ports available")
             action.setEnabled(False)
         else:
-            for display_text, port_value in ports_dict.items():
+            # Sort items alphabetically to maintain stable order
+            for display_text, port_value in sorted(ports_dict.items()):
                 if port_value is None:  # Skip the "Select port..." entry
                     continue
 
@@ -177,6 +181,10 @@ class ComPortWidget(QtWidgets.QWidget):
                 action.triggered.connect(
                     lambda checked=False, pv=port_value: self._on_port_selected(pv)
                 )
+
+        # Restore the previous selection if it's still valid
+        if current_value:
+            self.setValue(current_value)
 
     def value(self):
         """Get the current value from the line edit."""

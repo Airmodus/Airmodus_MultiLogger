@@ -96,9 +96,8 @@ class ScalableGroup(parameterTypes.GroupParameter):
             if com_port_param and hasattr(com_port_param, 'set_available_ports'):
                 com_port_param.set_available_ports(self.cached_ports, self.cached_port_statuses, self.cached_port_info)
 
-            # Connect signal to update status when port is selected
-            if com_port_param:
-                com_port_param.sigValueChanged.connect(self.on_com_port_selected)
+            # Note: We no longer need to connect signals for port selection
+            # Port statuses are updated during COM port scanning
 
         # Pre-select port if it was chosen from the dialog
         if selected_port:
@@ -189,42 +188,6 @@ class ScalableGroup(parameterTypes.GroupParameter):
     def update_cpc_changed(self, value):
         device = value.parent() # get device parameter
         device.cpc_changed = True # set cpc_changed flag to True
-
-    def on_com_port_selected(self, param):
-        """
-        Called when a COM port is selected from the dropdown.
-        Updates the port status and refreshes all dropdowns.
-        """
-        # Reset all port statuses to available first (except those actually in use by the system)
-        for port in self.cached_port_statuses:
-            if self.cached_port_statuses[port] not in ['in_use', 'error', 'permission_denied']:
-                self.cached_port_statuses[port] = 'available'
-
-        # Check all devices to update port statuses based on their selections
-        for device in self.children():
-            com_port_param = device.child('COM port')
-            if com_port_param and com_port_param.value():
-                port_value = com_port_param.value()
-                # Skip if it's the placeholder value
-                if port_value and port_value != 'Select port...':
-                    # Mark this port as connected (reserved for this device)
-                    if port_value in self.cached_port_statuses:
-                        self.cached_port_statuses[port_value] = 'connected'
-
-        # Update all dropdowns with new status
-        for device in self.children():
-            com_port_param = device.child('COM port')
-            if com_port_param and hasattr(com_port_param, 'set_available_ports'):
-                # Preserve the current selection
-                current_value = com_port_param.value()
-                com_port_param.set_available_ports(
-                    self.cached_ports,
-                    self.cached_port_statuses,
-                    self.cached_port_info
-                )
-                # Restore the selection if it was valid
-                if current_value:
-                    com_port_param.setValue(current_value)
 
     def update_rhtp_dict(self):
         """Update rhtp_dict with current RHTP devices."""
@@ -329,13 +292,6 @@ class ScalableGroup(parameterTypes.GroupParameter):
 
                 # Update the available ports in the combined widget with status info
                 com_port_param.set_available_ports(port_values, port_statuses, port_info)
-
-                # Connect signal if not already connected
-                try:
-                    com_port_param.sigValueChanged.disconnect(self.on_com_port_selected)
-                except:
-                    pass  # Not connected
-                com_port_param.sigValueChanged.connect(self.on_com_port_selected)
 
 # Create a dictionary, in which the names, types and default values are set
 params = [

@@ -7,8 +7,9 @@ import json
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QLabel,
-    QFileDialog, QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QTabBar, QStackedWidget)
+    QFileDialog, QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QTabBar, QStackedWidget, QStyle)
 from PyQt5.QtGui import QCursor
+from widgets import TabConfirmationPopup
 from pyqtgraph.parametertree import ParameterTree
 
 from config import *
@@ -165,7 +166,33 @@ class MainWindow(QMainWindow):
         self.logo.setFixedHeight(50)
         top_bar_layout.addWidget(self.logo)
 
-        # create add device button (in top bar after logo)
+        # create tab bar (ONLY the tabs, not the content)
+        self.device_tab_bar = QTabBar()
+        self.device_tab_bar.setExpanding(True)  # Tabs expand to fill space
+        self.device_tab_bar.setStyleSheet("""
+            QTabBar::tab {
+                height: 40px;
+                padding: 6px 14px;
+                background-color: #3a3a3a;
+                color: #cccccc;
+                border: none;
+                margin-right: 2px;
+                font-size: 14px;
+                font-weight: 500;
+            }
+            QTabBar::tab:selected {
+                background-color: #2a2a2a;
+                color: #ffffff;
+            }
+            QTabBar::tab:hover {
+                background-color: #4a4a4a;
+            }
+        """)
+        self.device_tab_bar.currentChanged.connect(self._on_tab_changed)
+
+        top_bar_layout.addWidget(self.device_tab_bar, stretch=1)
+
+        # create add device button (in top bar after tabs, before gear)
         self.add_device_button = QPushButton("+")
         self.add_device_button.setToolTip("Add New Device")
         self.add_device_button.setCursor(QCursor(Qt.PointingHandCursor))
@@ -188,29 +215,6 @@ class MainWindow(QMainWindow):
         """)
         self.add_device_button.clicked.connect(self._add_new_device)
         top_bar_layout.addWidget(self.add_device_button)
-
-        # create tab bar (ONLY the tabs, not the content)
-        self.device_tab_bar = QTabBar()
-        self.device_tab_bar.setExpanding(True)  # Tabs expand to fill space
-        self.device_tab_bar.setStyleSheet("""
-            QTabBar::tab {
-                height: 40px;
-                padding: 6px 14px;
-                background-color: #3a3a3a;
-                color: #cccccc;
-                border: none;
-                margin-right: 2px;
-            }
-            QTabBar::tab:selected {
-                background-color: #2a2a2a;
-                color: #ffffff;
-            }
-            QTabBar::tab:hover {
-                background-color: #4a4a4a;
-            }
-        """)
-        self.device_tab_bar.currentChanged.connect(self._on_tab_changed)
-        top_bar_layout.addWidget(self.device_tab_bar, stretch=1)
 
         # create settings gear button (in top bar at end)
         self.settings_button = QPushButton("⚙")
@@ -247,6 +251,7 @@ class MainWindow(QMainWindow):
         self.main_plot = MainPlot()
         self.device_tabs.addWidget(self.main_plot)
         self.device_tab_bar.addTab("Main plot")
+        # Note: Main plot tab has no close button (we only add close buttons to device tabs)
 
         # Keep parameter tree but hide it (used internally for state management)
         self.t.setVisible(False)
@@ -263,6 +268,123 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index):
         """Handle tab bar selection changes - switch the stacked widget page."""
         self.device_tabs.setCurrentIndex(index)
+        self._update_close_button_visibility()
+
+    def _add_close_button_to_tab(self, tab_index):
+        """
+        Add a custom close button to the specified tab on the right side.
+
+        Args:
+            tab_index: Index of the tab to add close button to
+        """
+        close_button = QPushButton("×")
+        close_button.setFixedSize(28, 28)
+        close_button.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: none;
+                color: #999;
+                font-size: 20px;
+                font-weight: bold;
+                padding: 0px;
+                padding-top: 2px;
+                margin: 0px;
+                margin-top: 4px;
+                margin-right: 4px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                color: #fff;
+                background-color: rgba(255, 255, 255, 0.1);
+                border-radius: 4px;
+            }
+        """)
+        close_button.setToolTip("Remove device")
+        close_button.setCursor(QCursor(Qt.PointingHandCursor))
+
+        # Connect to show confirmation popup (not emit tabCloseRequested directly)
+        close_button.clicked.connect(lambda checked=False, idx=tab_index: self._show_close_confirmation(idx))
+
+        # Add button to right side of tab
+        self.device_tab_bar.setTabButton(tab_index, QTabBar.RightSide, close_button)
+
+    def _show_close_confirmation(self, index):
+        """
+        Show inline confirmation popup below the tab.
+
+        Args:
+            index: Tab index to close
+        """
+        # Don't allow closing the Main plot tab
+        if index == 0:
+            return
+
+        # Get device name for confirmation message
+        device_name = self.device_tab_bar.tabText(index)
+
+        # Create and show confirmation popup
+        popup = TabConfirmationPopup(device_name, self)
+        popup.confirmed.connect(lambda: self._remove_device_at_index(index))
+        popup.show_below_tab(self.device_tab_bar, index)
+
+    def _remove_device_at_index(self, index):
+        """
+        Remove the device at the specified tab index.
+
+        This is called after the user confirms removal in the popup.
+
+        Args:
+            index: Tab index to remove
+        """
+        # Don't allow closing the Main plot tab
+        if index == 0:
+            return
+
+        # Find the device widget at this tab index
+        widget = self.device_tabs.widget(index)
+        if not widget:
+            return
+
+        # Find the device ID from the widget
+        dev_id = None
+        for device_id, dev_widget in self.data_holder.device_widgets.items():
+            if dev_widget == widget:
+                dev_id = device_id
+                break
+
+        if dev_id is None:
+            return
+
+        # Find and remove the device parameter (triggers device_removed signal)
+        device_settings = self.params.child('Device settings')
+
+        for device_param in device_settings.children():
+            param_dev_id = device_param.child('DevID').value()
+            if param_dev_id == dev_id:
+                device_settings.removeChild(device_param)
+                return
+
+    def _update_close_button_visibility(self):
+        """Show close button only on selected tab (except Main plot)."""
+        current_index = self.device_tab_bar.currentIndex()
+
+        for i in range(self.device_tab_bar.count()):
+            # Get close button from right side (our custom buttons)
+            close_button = self.device_tab_bar.tabButton(i, QTabBar.RightSide)
+
+            if close_button is None:
+                # No close button exists for this tab (Main plot)
+                continue
+
+            if i == 0:
+                # Main plot tab - always hide close button
+                close_button.hide()
+            elif i == current_index:
+                # Currently selected tab - show close button
+                close_button.show()
+            else:
+                # Non-selected tabs - hide close button
+                close_button.hide()
 
     def _open_settings_dialog(self):
         """Open the data settings dialog."""
@@ -694,7 +816,11 @@ class MainWindow(QMainWindow):
         # Add to stacked widget (content area)
         self.device_tabs.addWidget(widget)
         # Add to tab bar (top bar)
-        self.device_tab_bar.addTab(widget.name)
+        tab_index = self.device_tab_bar.addTab(widget.name)
+        # Create custom close button on right side
+        self._add_close_button_to_tab(tab_index)
+        # Update close button visibility (hide on new tabs, show only on selected)
+        self._update_close_button_visibility()
         self.data_holder.device_errors[device_id] = False
 
         # Add device to status bar

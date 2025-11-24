@@ -198,6 +198,20 @@ class DeviceManager(QObject):
             }
         }
 
+        # Check if this port is actually connected to a device in the application
+        for dev in self.params.child('Device settings').children():
+            if dev.child('Connected').value():
+                # Get port for this device
+                if self.osx_mode:
+                    port = str(dev.child('COM port').value())
+                else:
+                    port = "COM" + str(dev.child('COM port').value())
+
+                # Mark this port as connected if it matches the discovered port
+                if port and port != 'Select port...' and port == port_info['port']:
+                    port_statuses[port_info['port']] = 'connected'
+                    break
+
         # Update dropdowns progressively with new port info
         self.params.child('Device settings').update_com_port_dropdowns(
             self.data_holder.com_descriptions,
@@ -235,6 +249,19 @@ class DeviceManager(QObject):
                 'manufacturer': port_data.get('manufacturer', ''),
                 'vid_pid': port_data.get('vid_pid', '')
             }
+
+        # Check which ports are actually connected to devices in the application
+        for dev in self.params.child('Device settings').children():
+            if dev.child('Connected').value():
+                # Get port for this device
+                if self.osx_mode:
+                    port = str(dev.child('COM port').value())
+                else:
+                    port = "COM" + str(dev.child('COM port').value())
+
+                # Mark this port as connected in status dictionary
+                if port and port != 'Select port...' and port in port_statuses:
+                    port_statuses[port] = 'connected'
 
         # Cache combined port info with status for dialogs
         self._port_info_cache = {}
