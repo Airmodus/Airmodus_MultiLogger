@@ -355,6 +355,10 @@ class MultiLoggerStatusBar(QStatusBar):
             error_msg=""
         )
 
+        # Also update the tab error indicator
+        if self.main_window and hasattr(self.main_window, 'update_tab_error_indicator'):
+            self.main_window.update_tab_error_indicator(dev_id, has_error, connected)
+
     def _get_device_value(self, dev_id):
         """
         Get current measurement value for a device.
@@ -457,9 +461,12 @@ class MultiLoggerStatusBar(QStatusBar):
 
         # Find the tab index for this device
         device_tabs = self.main_window.device_tabs
+        device_tab_bar = self.main_window.device_tab_bar
 
         for i in range(device_tabs.count()):
             tab_widget = device_tabs.widget(i)
             if hasattr(tab_widget, 'dev_id') and tab_widget.dev_id == dev_id:
+                # Update both the tab bar selection and the content
+                device_tab_bar.setCurrentIndex(i)
                 device_tabs.setCurrentIndex(i)
                 return

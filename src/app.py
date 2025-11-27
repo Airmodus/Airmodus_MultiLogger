@@ -5,10 +5,10 @@ import traceback
 import json
 import logging
 
-from PyQt5.QtGui import QPixmap, QIcon
-from PyQt5.QtCore import QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import QPixmap, QIcon, QPainter, QColor
+from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QSize
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QLabel,
-    QFileDialog, QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QTabBar, QStackedWidget, QStyle)
+    QFileDialog, QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QTabBar, QStackedWidget, QStyle, QLayout, QSizePolicy)
 from PyQt5.QtGui import QCursor
 from widgets import TabConfirmationPopup, BrowserStyleTabBar
 
@@ -113,7 +113,12 @@ class MainWindow(QMainWindow):
         self._update_psm_cpc_connections()
 
         # Set initial window size
-        self.resize(1400, 800)
+        self.resize(1500, 650)
+
+        # Set window size policy to prevent automatic expansion when tabs are added
+        # Allow height to be flexible but constrain width
+        self.setMinimumWidth(1000)
+        self.setMaximumWidth(1800)
 
     def _setup_gui(self):
         """Build main layout, splitters, tabs, etc."""
@@ -125,22 +130,28 @@ class MainWindow(QMainWindow):
         # create main container widget to hold all UI elements
         main_container = QWidget()
         container_layout = QVBoxLayout(main_container)
+        # Prevent layout from resizing window when widgets change size
+        container_layout.setSizeConstraint(QLayout.SetNoConstraint)
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(0)
 
         # create horizontal top bar: [Logo] [Plus] [Tab Bar] [Gear]
         top_bar_widget = QWidget()
-        top_bar_widget.setFixedHeight(80)  # Fix height to prevent stretching
+        top_bar_widget.setFixedHeight(70)  # Fix height to prevent stretching
+        # Set size policy to prevent horizontal expansion from tab bar
+        top_bar_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         top_bar_layout = QHBoxLayout(top_bar_widget)
-        top_bar_layout.setContentsMargins(8, 5, 8, 5)
-        top_bar_layout.setSpacing(8)
+        # Prevent layout from adjusting window size when content changes
+        top_bar_layout.setSizeConstraint(QLayout.SetNoConstraint)
+        top_bar_layout.setContentsMargins(0, 5, 5, 5)  # Left=0, minimal margins elsewhere
+        top_bar_layout.setSpacing(4)  # Reduce spacing between elements
 
         # create logo pixmap label (smaller for horizontal layout)
         self.logo = QLabel(alignment=Qt.AlignCenter, objectName="logo")
         pixmap = QPixmap(resource_path + "/images/airmodus-envea-logo.png")
-        self.logo.setPixmap(pixmap.scaled(267, 67, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        self.logo.setFixedHeight(67)
-        top_bar_layout.addWidget(self.logo)
+        self.logo.setPixmap(pixmap.scaled(220, 55, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self.logo.setFixedSize(220, 55)
+        top_bar_layout.addWidget(self.logo, stretch=0)
 
         # create tab bar (ONLY the tabs, not the content)
         self.device_tab_bar = BrowserStyleTabBar()
@@ -165,26 +176,13 @@ class MainWindow(QMainWindow):
                 background-color: #4a4a4a;
             }
 
-            /* Scroll button area */
+            /* Hide native scroll buttons (we use custom overlays) */
             QTabBar::scroller {
-                width: 40px;
+                width: 0px;
             }
-
-            /* Scroll button styling */
             QTabBar QToolButton {
-                background-color: #3a3a3a;
-                border: none;
-                padding: 5px;
-                color: #999999;
-            }
-
-            QTabBar QToolButton:hover {
-                background-color: #4a4a4a;
-                color: #ffffff;
-            }
-
-            QTabBar QToolButton:pressed {
-                background-color: #2a2a2a;
+                width: 0px;
+                height: 0px;
             }
         """)
         self.device_tab_bar.currentChanged.connect(self._on_tab_changed)
@@ -213,7 +211,7 @@ class MainWindow(QMainWindow):
             }
         """)
         self.add_device_button.clicked.connect(self._add_new_device)
-        top_bar_layout.addWidget(self.add_device_button)
+        top_bar_layout.addWidget(self.add_device_button, stretch=0)
 
         # create settings gear button (in top bar at end)
         self.settings_button = QPushButton("⚙")
@@ -237,7 +235,7 @@ class MainWindow(QMainWindow):
             }
         """)
         self.settings_button.clicked.connect(self._open_settings_dialog)
-        top_bar_layout.addWidget(self.settings_button)
+        top_bar_layout.addWidget(self.settings_button, stretch=0)
 
         # Add top bar to main container
         container_layout.addWidget(top_bar_widget)
@@ -265,6 +263,59 @@ class MainWindow(QMainWindow):
         """Handle tab bar selection changes - switch the stacked widget page."""
         self.device_tabs.setCurrentIndex(index)
         self._update_close_button_visibility()
+
+    def _create_error_indicator_icon(self, color="#F57C00"):
+        """Create a small colored dot icon for tab error indicators.
+
+        Args:
+            color: Hex color for the dot (default orange for errors)
+
+        Returns:
+            QIcon with a colored dot
+        """
+        # Create a 16x16 pixmap with transparency
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.transparent)
+
+        # Draw a filled circle
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setBrush(QColor(color))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(2, 2, 12, 12)  # 12x12 dot with 2px margin
+        painter.end()
+
+        return QIcon(pixmap)
+
+    def update_tab_error_indicator(self, dev_id, has_error, is_connected=True):
+        """Update the error indicator icon on a device's tab.
+
+        Args:
+            dev_id: Device ID to update
+            has_error: True if device has an error, False otherwise
+            is_connected: True if device is connected, False if disconnected
+        """
+        # Find the tab index for this device
+        for i in range(self.device_tabs.count()):
+            widget = self.device_tabs.widget(i)
+            if hasattr(widget, 'dev_id') and widget.dev_id == dev_id:
+                # Skip Main plot tab (index 0)
+                if i == 0:
+                    return
+
+                # Set or clear error indicator icon
+                if not is_connected:
+                    # Red dot for disconnected
+                    error_icon = self._create_error_indicator_icon("#D32F2F")
+                    self.device_tab_bar.setTabIcon(i, error_icon)
+                elif has_error:
+                    # Orange dot for errors
+                    error_icon = self._create_error_indicator_icon("#F57C00")
+                    self.device_tab_bar.setTabIcon(i, error_icon)
+                else:
+                    # Clear icon - device is OK
+                    self.device_tab_bar.setTabIcon(i, QIcon())
+                return
 
     def _add_close_button_to_tab(self, tab_index):
         """

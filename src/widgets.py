@@ -2,7 +2,8 @@ from PyQt5.QtGui import QPalette, QIntValidator, QDoubleValidator
 from PyQt5.QtCore import Qt, pyqtSignal, QLocale, QTimer, QSize
 from PyQt5.QtWidgets import (QLabel, QWidget, QVBoxLayout, QLineEdit, QPushButton,
                              QSpinBox, QDoubleSpinBox, QTextEdit, QHBoxLayout,
-                             QSizePolicy, QSplitter, QTabBar, QStyleFactory, QApplication)
+                             QSizePolicy, QSplitter, QTabBar, QStyleFactory, QApplication,
+                             QToolButton)
 from datetime import datetime as dt
 import sys
 
@@ -398,10 +399,87 @@ class BrowserStyleTabBar(QTabBar):
         self.setMovable(False)  # Disable drag-and-drop reordering
         self.setElideMode(Qt.ElideRight)  # Truncate long text with "..."
 
+        # Prevent tab bar from requesting more space when tabs are added
+        # Use Minimum policy so it only uses the space it needs (scrollable)
+        size_policy = QSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        size_policy.setHorizontalStretch(0)  # Don't compete for space
+        self.setSizePolicy(size_policy)
+
         # Fix for macOS - force Fusion style to show scroll buttons
         # macOS native style doesn't show scroll buttons by default
         if sys.platform == 'darwin':
             self.setStyle(QStyleFactory.create('Fusion'))
+
+        # Set maximum width to prevent window expansion
+        # The tab bar will scroll horizontally instead of expanding
+        self.setMaximumWidth(800)
+
+        # Create custom scroll buttons overlaid on native ones
+        self._left_scroll_btn = QToolButton(self)
+        self._right_scroll_btn = QToolButton(self)
+
+        # Set arrow icons
+        self._left_scroll_btn.setArrowType(Qt.LeftArrow)
+        self._right_scroll_btn.setArrowType(Qt.RightArrow)
+
+        # Connect to scroll actions
+        self._left_scroll_btn.clicked.connect(self._scroll_left)
+        self._right_scroll_btn.clicked.connect(self._scroll_right)
+
+        # Style the custom buttons
+        button_style = """
+            QToolButton {
+                background-color: #3a3a3a;
+                border: none;
+                padding: 5px;
+                color: #999999;
+            }
+            QToolButton:hover {
+                background-color: #4a4a4a;
+                color: #ffffff;
+            }
+            QToolButton:pressed {
+                background-color: #2a2a2a;
+            }
+            QToolButton:disabled {
+                color: #555555;
+                background-color: #2a2a2a;
+            }
+        """
+        self._left_scroll_btn.setStyleSheet(button_style)
+        self._right_scroll_btn.setStyleSheet(button_style)
+
+        # Set fixed size for buttons
+        self._left_scroll_btn.setFixedSize(40, 53)
+        self._right_scroll_btn.setFixedSize(40, 53)
+
+        # Initially hide buttons until we know scroll state
+        self._left_scroll_btn.setVisible(False)
+        self._right_scroll_btn.setVisible(False)
+
+        # Timer to update button states
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self._update_scroll_buttons)
+        self._update_timer.start(100)  # Check every 100ms
+
+    def sizeHint(self):
+        """Return a fixed size hint to prevent window expansion when adding tabs.
+
+        Since tabs scroll horizontally, we don't need to request space for all tabs.
+        Just return a reasonable fixed width that allows the tab bar to wrap nicely.
+        """
+        # Return a fixed reasonable width instead of calculating from all tabs
+        # This prevents the window from expanding when more tabs are added
+        return QSize(400, super().sizeHint().height())
+
+    def minimumSizeHint(self):
+        """Return a truly fixed minimum size hint.
+
+        This prevents Qt from calculating a larger minimum based on tab content.
+        The tab bar is scrollable, so it doesn't need space for all tabs.
+        """
+        # Use a fixed height of 53 (matches the custom scroll button height)
+        return QSize(200, 53)
 
     def tabSizeHint(self, index):
         """Return flexible width for tabs (150-200px based on text length)."""
@@ -414,20 +492,82 @@ class BrowserStyleTabBar(QTabBar):
 
         return QSize(width, size.height())
 
-    def wheelEvent(self, event):
-        """Enable mouse wheel/touchpad to scroll through tabs horizontally.
+    def _scroll_left(self):
+        """Scroll viewport to the left (show tabs on the left)."""
+        # Find native scroll buttons and click the left one
+        buttons = self.findChildren(QToolButton)
+        for btn in buttons:
+            if btn not in [self._left_scroll_btn, self._right_scroll_btn]:
+                if btn.arrowType() == Qt.LeftArrow:
+                    btn.click()
+                    break
 
-        Changes the active tab, which automatically scrolls it into view.
+    def _scroll_right(self):
+        """Scroll viewport to the right (show tabs on the right)."""
+        # Find native scroll buttons and click the right one
+        buttons = self.findChildren(QToolButton)
+        for btn in buttons:
+            if btn not in [self._left_scroll_btn, self._right_scroll_btn]:
+                if btn.arrowType() == Qt.RightArrow:
+                    btn.click()
+                    break
+
+    def _update_scroll_buttons(self):
+        """Update visibility and enabled state of custom scroll buttons."""
+        # Find native scroll buttons to check their state
+        native_buttons = []
+        for btn in self.findChildren(QToolButton):
+            if btn not in [self._left_scroll_btn, self._right_scroll_btn]:
+                native_buttons.append(btn)
+
+        if len(native_buttons) >= 2:
+            # Native buttons exist = tabs are scrollable
+            left_native = native_buttons[0]
+            right_native = native_buttons[1]
+
+            # Show/enable custom buttons based on native button state
+            self._left_scroll_btn.setEnabled(left_native.isEnabled())
+            self._right_scroll_btn.setEnabled(right_native.isEnabled())
+
+            # Only show buttons when they can be clicked
+            self._left_scroll_btn.setVisible(left_native.isEnabled())
+            self._right_scroll_btn.setVisible(right_native.isEnabled())
+        else:
+            # No native buttons = no overflow, hide custom buttons
+            self._left_scroll_btn.setVisible(False)
+            self._right_scroll_btn.setVisible(False)
+
+    def resizeEvent(self, event):
+        """Position scroll buttons on resize."""
+        super().resizeEvent(event)
+
+        # Position left button at the left edge
+        self._left_scroll_btn.move(0, (self.height() - 53) // 2)
+
+        # Position right button at the right edge
+        right_x = self.width() - self._right_scroll_btn.width()
+        self._right_scroll_btn.move(right_x, (self.height() - 53) // 2)
+
+        # Raise buttons to be on top
+        self._left_scroll_btn.raise_()
+        self._right_scroll_btn.raise_()
+
+    def wheelEvent(self, event):
+        """Enable mouse wheel/touchpad to scroll through tab bar horizontally.
+
+        Scrolls the viewport without changing the active tab.
+        Direction: scroll up = scroll right, scroll down = scroll left.
         """
         delta = event.angleDelta().y()
-        current = self.currentIndex()
 
-        if delta > 0 and current > 0:
-            # Scroll left (go to previous tab)
-            self.setCurrentIndex(current - 1)
-        elif delta < 0 and current < self.count() - 1:
-            # Scroll right (go to next tab)
-            self.setCurrentIndex(current + 1)
+        # Use custom scroll buttons with enabled state checking
+        # Reverse direction: scroll up -> viewport moves right, scroll down -> viewport moves left
+        if delta > 0 and self._right_scroll_btn.isEnabled():
+            # Scroll up = move viewport right (show tabs on the right)
+            self._scroll_right()
+        elif delta < 0 and self._left_scroll_btn.isEnabled():
+            # Scroll down = move viewport left (show tabs on the left)
+            self._scroll_left()
 
         event.accept()
 
