@@ -1,9 +1,10 @@
 from PyQt5.QtGui import QPalette, QIntValidator, QDoubleValidator
-from PyQt5.QtCore import Qt, pyqtSignal, QLocale, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QLocale, QTimer, QSize
 from PyQt5.QtWidgets import (QLabel, QWidget, QVBoxLayout, QLineEdit, QPushButton,
                              QSpinBox, QDoubleSpinBox, QTextEdit, QHBoxLayout,
-                             QSizePolicy, QSplitter)
+                             QSizePolicy, QSplitter, QTabBar, QStyleFactory, QApplication)
 from datetime import datetime as dt
+import sys
 
 
 # used in PSMMeasureTab
@@ -378,7 +379,60 @@ class TabConfirmationPopup(QWidget):
         self.activateWindow()  # Ensure popup gets focus
 
 
+class BrowserStyleTabBar(QTabBar):
+    """Custom tab bar with fixed-width tabs and horizontal scrolling.
+
+    Features:
+    - Fixed width tabs (150-200px range based on text length)
+    - Horizontal scrolling with arrow buttons when tabs overflow
+    - Mouse wheel/touchpad scrolling support
+    - macOS compatibility (forces Fusion style for scroll buttons)
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        # Enable scrolling behavior
+        self.setExpanding(False)  # Don't stretch tabs to fill width
+        self.setUsesScrollButtons(True)  # Show left/right arrow buttons
+        self.setMovable(False)  # Disable drag-and-drop reordering
+        self.setElideMode(Qt.ElideRight)  # Truncate long text with "..."
+
+        # Fix for macOS - force Fusion style to show scroll buttons
+        # macOS native style doesn't show scroll buttons by default
+        if sys.platform == 'darwin':
+            self.setStyle(QStyleFactory.create('Fusion'))
+
+    def tabSizeHint(self, index):
+        """Return flexible width for tabs (150-200px based on text length)."""
+        size = QTabBar.tabSizeHint(self, index)
+
+        # Constrain width between 150px and 200px
+        # This allows shorter tab names to use less space
+        # while preventing very long names from making tabs too wide
+        width = max(150, min(size.width(), 200))
+
+        return QSize(width, size.height())
+
+    def wheelEvent(self, event):
+        """Enable mouse wheel/touchpad to scroll through tabs horizontally.
+
+        Changes the active tab, which automatically scrolls it into view.
+        """
+        delta = event.angleDelta().y()
+        current = self.currentIndex()
+
+        if delta > 0 and current > 0:
+            # Scroll left (go to previous tab)
+            self.setCurrentIndex(current - 1)
+        elif delta < 0 and current < self.count() - 1:
+            # Scroll right (go to next tab)
+            self.setCurrentIndex(current + 1)
+
+        event.accept()
+
+
 __all__ = [
     'SetWidget', 'SpinBox', 'DoubleSpinBox', 'ToggleButton', 'StartButton', 'IndicatorWidget',
-    'CommandWidget', 'FloatTextEdit', 'StepsWidget', 'TabConfirmationPopup'
+    'CommandWidget', 'FloatTextEdit', 'StepsWidget', 'TabConfirmationPopup', 'BrowserStyleTabBar'
 ]

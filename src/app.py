@@ -10,7 +10,7 @@ from PyQt5.QtCore import QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QLabel,
     QFileDialog, QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QTabBar, QStackedWidget, QStyle)
 from PyQt5.QtGui import QCursor
-from widgets import TabConfirmationPopup
+from widgets import TabConfirmationPopup, BrowserStyleTabBar
 
 from config import *
 from utils import (
@@ -130,7 +130,7 @@ class MainWindow(QMainWindow):
 
         # create horizontal top bar: [Logo] [Plus] [Tab Bar] [Gear]
         top_bar_widget = QWidget()
-        top_bar_widget.setFixedHeight(60)  # Fix height to prevent stretching
+        top_bar_widget.setFixedHeight(80)  # Fix height to prevent stretching
         top_bar_layout = QHBoxLayout(top_bar_widget)
         top_bar_layout.setContentsMargins(8, 5, 8, 5)
         top_bar_layout.setSpacing(8)
@@ -138,17 +138,18 @@ class MainWindow(QMainWindow):
         # create logo pixmap label (smaller for horizontal layout)
         self.logo = QLabel(alignment=Qt.AlignCenter, objectName="logo")
         pixmap = QPixmap(resource_path + "/images/airmodus-envea-logo.png")
-        self.logo.setPixmap(pixmap.scaled(200, 50, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        self.logo.setFixedHeight(50)
+        self.logo.setPixmap(pixmap.scaled(267, 67, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self.logo.setFixedHeight(67)
         top_bar_layout.addWidget(self.logo)
 
         # create tab bar (ONLY the tabs, not the content)
-        self.device_tab_bar = QTabBar()
-        self.device_tab_bar.setExpanding(True)  # Tabs expand to fill space
+        self.device_tab_bar = BrowserStyleTabBar()
         self.device_tab_bar.setStyleSheet("""
             QTabBar::tab {
-                height: 40px;
-                padding: 6px 14px;
+                min-width: 150px;
+                max-width: 200px;
+                height: 53px;
+                padding: 8px 14px;
                 background-color: #3a3a3a;
                 color: #cccccc;
                 border: none;
@@ -162,6 +163,28 @@ class MainWindow(QMainWindow):
             }
             QTabBar::tab:hover {
                 background-color: #4a4a4a;
+            }
+
+            /* Scroll button area */
+            QTabBar::scroller {
+                width: 40px;
+            }
+
+            /* Scroll button styling */
+            QTabBar QToolButton {
+                background-color: #3a3a3a;
+                border: none;
+                padding: 5px;
+                color: #999999;
+            }
+
+            QTabBar QToolButton:hover {
+                background-color: #4a4a4a;
+                color: #ffffff;
+            }
+
+            QTabBar QToolButton:pressed {
+                background-color: #2a2a2a;
             }
         """)
         self.device_tab_bar.currentChanged.connect(self._on_tab_changed)
@@ -251,25 +274,25 @@ class MainWindow(QMainWindow):
             tab_index: Index of the tab to add close button to
         """
         close_button = QPushButton("×")
-        close_button.setFixedSize(28, 28)
+        close_button.setFixedSize(39, 39)
         close_button.setStyleSheet("""
             QPushButton {
                 background: transparent;
                 border: none;
                 color: #999;
-                font-size: 20px;
+                font-size: 39px;
                 font-weight: bold;
                 padding: 0px;
-                padding-top: 2px;
                 margin: 0px;
-                margin-top: 4px;
-                margin-right: 4px;
-                border-radius: 4px;
+                margin-top: -5px;
+                margin-right: 8px;
+                border-radius: 0px;
             }
             QPushButton:hover {
                 color: #fff;
                 background-color: rgba(255, 255, 255, 0.1);
-                border-radius: 4px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
             }
         """)
         close_button.setToolTip("Remove device")
