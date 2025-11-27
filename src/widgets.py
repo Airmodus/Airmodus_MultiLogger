@@ -394,7 +394,7 @@ class BrowserStyleTabBar(QTabBar):
         super().__init__(parent)
 
         # Enable scrolling behavior
-        self.setExpanding(False)  # Don't stretch tabs to fill width
+        self.setExpanding(True)  # Stretch tabs to fill available width
         self.setUsesScrollButtons(True)  # Show left/right arrow buttons
         self.setMovable(False)  # Disable drag-and-drop reordering
         self.setElideMode(Qt.ElideRight)  # Truncate long text with "..."
@@ -409,10 +409,6 @@ class BrowserStyleTabBar(QTabBar):
         # macOS native style doesn't show scroll buttons by default
         if sys.platform == 'darwin':
             self.setStyle(QStyleFactory.create('Fusion'))
-
-        # Set maximum width to prevent window expansion
-        # The tab bar will scroll horizontally instead of expanding
-        self.setMaximumWidth(800)
 
         # Create custom scroll buttons overlaid on native ones
         self._left_scroll_btn = QToolButton(self)
@@ -514,26 +510,46 @@ class BrowserStyleTabBar(QTabBar):
 
     def _update_scroll_buttons(self):
         """Update visibility and enabled state of custom scroll buttons."""
-        # Find native scroll buttons to check their state
-        native_buttons = []
-        for btn in self.findChildren(QToolButton):
-            if btn not in [self._left_scroll_btn, self._right_scroll_btn]:
-                native_buttons.append(btn)
+        # Calculate if scrolling is needed by checking if tabs overflow
+        tab_count = self.count()
+        if tab_count == 0:
+            self._left_scroll_btn.setVisible(False)
+            self._right_scroll_btn.setVisible(False)
+            return
 
-        if len(native_buttons) >= 2:
-            # Native buttons exist = tabs are scrollable
-            left_native = native_buttons[0]
-            right_native = native_buttons[1]
+        # Calculate total width needed for all tabs
+        total_tabs_width = 0
+        for i in range(tab_count):
+            tab_rect = self.tabRect(i)
+            total_tabs_width += tab_rect.width()
 
-            # Show/enable custom buttons based on native button state
-            self._left_scroll_btn.setEnabled(left_native.isEnabled())
-            self._right_scroll_btn.setEnabled(right_native.isEnabled())
+        # Check if tabs overflow the visible area
+        scrolling_needed = total_tabs_width > self.width()
 
-            # Only show buttons when they can be clicked
-            self._left_scroll_btn.setVisible(left_native.isEnabled())
-            self._right_scroll_btn.setVisible(right_native.isEnabled())
+        if scrolling_needed:
+            # Find native scroll buttons to check scroll position
+            native_buttons = []
+            for btn in self.findChildren(QToolButton):
+                if btn not in [self._left_scroll_btn, self._right_scroll_btn]:
+                    native_buttons.append(btn)
+
+            if len(native_buttons) >= 2:
+                left_native = native_buttons[0]
+                right_native = native_buttons[1]
+
+                # Show/enable custom buttons based on native button state
+                self._left_scroll_btn.setEnabled(left_native.isEnabled())
+                self._right_scroll_btn.setEnabled(right_native.isEnabled())
+                self._left_scroll_btn.setVisible(left_native.isEnabled())
+                self._right_scroll_btn.setVisible(right_native.isEnabled())
+            else:
+                # Scrolling needed but no native buttons yet, show both
+                self._left_scroll_btn.setVisible(True)
+                self._right_scroll_btn.setVisible(True)
+                self._left_scroll_btn.setEnabled(True)
+                self._right_scroll_btn.setEnabled(True)
         else:
-            # No native buttons = no overflow, hide custom buttons
+            # No scrolling needed, hide custom buttons
             self._left_scroll_btn.setVisible(False)
             self._right_scroll_btn.setVisible(False)
 
@@ -551,6 +567,9 @@ class BrowserStyleTabBar(QTabBar):
         # Raise buttons to be on top
         self._left_scroll_btn.raise_()
         self._right_scroll_btn.raise_()
+
+        # Update scroll button visibility based on whether scrolling is needed
+        self._update_scroll_buttons()
 
     def wheelEvent(self, event):
         """Enable mouse wheel/touchpad to scroll through tab bar horizontally.

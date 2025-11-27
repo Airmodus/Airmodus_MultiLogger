@@ -153,6 +153,12 @@ class MainWindow(QMainWindow):
         self.logo.setFixedSize(220, 55)
         top_bar_layout.addWidget(self.logo, stretch=0)
 
+        # Create container for tab bar
+        tab_bar_container = QWidget()
+        tab_bar_container_layout = QHBoxLayout(tab_bar_container)
+        tab_bar_container_layout.setContentsMargins(0, 0, 0, 0)
+        tab_bar_container_layout.setSpacing(0)
+
         # create tab bar (ONLY the tabs, not the content)
         self.device_tab_bar = BrowserStyleTabBar()
         self.device_tab_bar.setStyleSheet("""
@@ -187,7 +193,9 @@ class MainWindow(QMainWindow):
         """)
         self.device_tab_bar.currentChanged.connect(self._on_tab_changed)
 
-        top_bar_layout.addWidget(self.device_tab_bar, stretch=1)
+        tab_bar_container_layout.addWidget(self.device_tab_bar, stretch=1)
+
+        top_bar_layout.addWidget(tab_bar_container, stretch=1)
 
         # create add device button (in top bar after tabs, before gear)
         self.add_device_button = QPushButton("+")
@@ -559,6 +567,10 @@ class MainWindow(QMainWindow):
 
         # Create and add the actual device widget
         self._add_device_from_config(device_config)
+
+        # Select the newly added tab
+        new_tab_index = self.device_tab_bar.count() - 1
+        self.device_tab_bar.setCurrentIndex(new_tab_index)
 
         # Update CPC/RHTP dictionaries
         self._update_cpc_dict()
