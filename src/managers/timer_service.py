@@ -73,27 +73,27 @@ class TimerService:
         current_time = dt.fromtimestamp(self.data_holder.current_time)
 
         # Loop through all CPC devices
-        for dev_param in self.main_window.params.child('Device settings').children():
-            if dev_param.child('Device type').value() != CPC:
+        for device_config in self.main_window.config.devices:
+            if device_config.device_type != CPC:
                 continue
 
-            dev_id = dev_param.child('DevID').value()
+            dev_id = device_config.device_id
 
             # Check if database enabled for this device
-            db_enabled_device = dev_param.child('Database enabled')
-            if not db_enabled_device or not db_enabled_device.value():
+            db_enabled = device_config.extra_params.get('database_enabled', False)
+            if not db_enabled:
                 continue
 
             # Check if linked RHTP is set
-            linked_rhtp_param = dev_param.child('Linked RHTP')
-            if not linked_rhtp_param or linked_rhtp_param.value() == 'None':
+            linked_rhtp = device_config.extra_params.get('linked_rhtp', 'None')
+            if linked_rhtp == 'None':
                 # Show error in database tab and disable database
                 cpc_widget = self.data_holder.device_widgets.get(dev_id)
                 if cpc_widget and hasattr(cpc_widget, 'database_tab'):
                     cpc_widget.database_tab.add_message(
                         f"{current_time.strftime('%H:%M:%S')}: Error - No RHTP linked. Database disabled."
                     )
-                dev_param.child('Database enabled').setValue(False)
+                device_config.extra_params['database_enabled'] = False
                 continue
 
             # Get device widgets
@@ -102,7 +102,7 @@ class TimerService:
                 continue
 
             # Get linked RHTP widget
-            rhtp_id = linked_rhtp_param.value()
+            rhtp_id = linked_rhtp
             rhtp_widget = self.data_holder.device_widgets.get(rhtp_id)
             if not rhtp_widget or not hasattr(rhtp_widget, 'current_data') or not rhtp_widget.current_data:
                 # RHTP data not available
@@ -116,12 +116,10 @@ class TimerService:
             averager = self.main_window.database_manager.averagers.get(dev_id)
             if not averager:
                 # Create averager if missing
-                interval_param = dev_param.child('DB averaging interval')
-                if interval_param:
-                    interval_str = interval_param.value()
-                    interval_map = {'1 minute': 1, '5 minutes': 5, '10 minutes': 10, '15 minutes': 15, '1 hour': 60, '3 hours': 180}
-                    interval_minutes = interval_map.get(interval_str, 1)
-                    averager = self.main_window.database_manager.create_averager(dev_id, interval_minutes)
+                interval_str = device_config.extra_params.get('db_averaging_interval', '1 minute')
+                interval_map = {'1 minute': 1, '5 minutes': 5, '10 minutes': 10, '15 minutes': 15, '1 hour': 60, '3 hours': 180}
+                interval_minutes = interval_map.get(interval_str, 1)
+                averager = self.main_window.database_manager.create_averager(dev_id, interval_minutes)
 
             if not averager:
                 continue
@@ -147,7 +145,7 @@ class TimerService:
 
                 if averaged_data:
                     # Get CPC serial number and inlet flow
-                    serial_number = dev_param.child('Serial number').value()
+                    serial_number = device_config.serial_number
                     inlet_flow = None
                     if hasattr(cpc_widget, 'settings') and cpc_widget.settings:
                         # Use measured flow (actual) first, fallback to nominal flow (setpoint)

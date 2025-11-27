@@ -25,10 +25,12 @@ from devices.data_writers import PSMDataWriter
 
 # PSM widget
 class PSMWidget(ComplexDevice):
-    def __init__(self, device_parameter, device_type, *args, **kwargs):
-        super().__init__(device_parameter, device_type=device_type, *args, **kwargs)
-        self.device_type = device_type # store device type (PSM or PSM 2.0)
+    def __init__(self, device_config, *args, **kwargs):
+        super().__init__(device_config, *args, **kwargs)
+        # device_type is already set by BaseDevice from device_config
+        device_type = device_config.device_type
         self.connected_cpc_device = None  # Direct reference to connected CPC widget
+        self._needs_cpc_dropdown_update = False  # Flag for lazy dropdown updates
         # create set tab for PSM
         self.set_tab = PSMSetTab(device_type)
         self.addTab(self.set_tab, "Set")
@@ -42,7 +44,7 @@ class PSMWidget(ComplexDevice):
         self.plot_tab = SinglePlot(device_type=PSM)
         self.addTab(self.plot_tab, "PSM plot")
         # create contour plot tab for PSM
-        self.contour_tab = PSMContourTab(self.device_parameter)
+        self.contour_tab = PSMContourTab(self.device_config)
         self.addTab(self.contour_tab, "Contour Plot")
 
         # create list of PSM status widgets, used in update_errors
@@ -66,12 +68,118 @@ class PSMWidget(ComplexDevice):
         # Data writer configuration (composition over inheritance)
         self.data_writer = PSMDataWriter(self)
 
+        # Add Connected CPC dropdown to Device settings tab
+        self._add_connected_cpc_dropdown()
+
         # Add Device tab at the end
         self._add_device_tab_at_end()
 
     def get_plot_keys(self):
         """PSM has a single concentration plot."""
         return ['']
+
+    def showEvent(self, event):
+        """Override showEvent to lazily update CPC dropdown when widget becomes visible."""
+        super().showEvent(event)
+        # Update CPC dropdown if needed (deferred from device addition)
+        if self._needs_cpc_dropdown_update:
+            self._needs_cpc_dropdown_update = False
+            if hasattr(self, 'app_config') and hasattr(self, 'connected_cpc_dropdown'):
+                # Use QTimer.singleShot to defer update to next event loop iteration
+                # This allows the UI to finish showing the widget before updating dropdown
+                from PyQt5.QtCore import QTimer
+                QTimer.singleShot(0, self._populate_cpc_dropdown)
+
+    def set_app_config(self, app_config):
+        """Set the app config reference for contour tab historical data loading."""
+        if hasattr(self, 'contour_tab'):
+            self.contour_tab.app_config = app_config
+        # Store app_config reference for CPC dropdown
+        self.app_config = app_config
+        # Mark dropdown for lazy update instead of updating immediately
+        # This prevents blocking during device creation
+        if hasattr(self, 'connected_cpc_dropdown'):
+            self._needs_cpc_dropdown_update = True
+
+    def _add_connected_cpc_dropdown(self):
+        """Add Connected CPC dropdown to Device settings tab."""
+        # Add Connected CPC dropdown after standard fields
+        from PyQt5.QtWidgets import QComboBox
+        self.connected_cpc_dropdown = QComboBox()
+        self.connected_cpc_dropdown.setStyleSheet("padding: 5px;")
+        self.connected_cpc_dropdown.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        # Set minimum width for dropdown popup to show full option text
+        self.connected_cpc_dropdown.view().setMinimumWidth(250)
+
+        # Don't populate immediately - add just "None" option to avoid empty dropdown
+        # Actual population will happen lazily when PSM tab is shown (via showEvent)
+        self.connected_cpc_dropdown.blockSignals(True)
+        self.connected_cpc_dropdown.addItem("None", "None")
+        self.connected_cpc_dropdown.blockSignals(False)
+        # Mark as needing update for when tab is shown
+        self._needs_cpc_dropdown_update = True
+
+        # Connect change signal
+        def update_connected_cpc(index):
+            selected_cpc_id = self.connected_cpc_dropdown.currentData()
+            if selected_cpc_id is None:
+                selected_cpc_id = 'None'
+            self.device_config.extra_params['connected_cpc'] = selected_cpc_id
+            # Trigger config save
+            if hasattr(self, 'on_config_changed'):
+                self.on_config_changed()
+
+        self.connected_cpc_dropdown.currentIndexChanged.connect(update_connected_cpc)
+
+        # Add to layout AFTER populating (Qt calculates width based on content)
+        self._device_settings_form_layout.addRow("Connected CPC:", self.connected_cpc_dropdown)
+
+    def _populate_cpc_dropdown(self, cpc_dict=None):
+        """
+        Populate Connected CPC dropdown from CPC devices.
+
+        Args:
+            cpc_dict: Optional dict of {name: device_id} for CPCs. If not provided,
+                     will iterate through app_config.devices (slower).
+        """
+        # Store current selection
+        current_cpc_id = self.device_config.extra_params.get('connected_cpc', 'None')
+
+        # Disable updates during population to batch all Qt redraws
+        self.connected_cpc_dropdown.setUpdatesEnabled(False)
+        self.connected_cpc_dropdown.blockSignals(True)
+
+        # Clear and rebuild dropdown
+        self.connected_cpc_dropdown.clear()
+
+        # Always add "None" option first
+        self.connected_cpc_dropdown.addItem("None", "None")
+
+        # Add CPC devices - use dict if provided (fast), otherwise iterate (slow)
+        if cpc_dict:
+            # Use pre-built dict (O(n) performance)
+            for cpc_name, cpc_id in cpc_dict.items():
+                if cpc_id != 'None':  # Skip the 'None' entry
+                    self.connected_cpc_dropdown.addItem(cpc_name, cpc_id)
+        else:
+            # Fallback: iterate through devices (O(n) but called from O(n) loop = O(n²))
+            if hasattr(self, 'app_config') and self.app_config:
+                from config import CPC
+                for device_config in self.app_config.devices:
+                    if device_config.device_type == CPC:
+                        device_name = device_config.device_nickname or device_config.device_type_name
+                        self.connected_cpc_dropdown.addItem(device_name, device_config.device_id)
+
+        # Restore previous selection
+        index = self.connected_cpc_dropdown.findData(current_cpc_id)
+        if index >= 0:
+            self.connected_cpc_dropdown.setCurrentIndex(index)
+
+        self.connected_cpc_dropdown.blockSignals(False)
+
+        # Re-enable updates and trigger single geometry recalculation
+        # Qt will automatically calculate proper dropdown width
+        self.connected_cpc_dropdown.setUpdatesEnabled(True)
 
     # convert PSM status hex to binary and update error label colors
     def update_errors(self, status_hex):
@@ -167,7 +275,7 @@ class PSMWidget(ComplexDevice):
                 return "Fixed mode"
         return "Idle"
 
-    def process_parsed_messages(self, parsed_messages, device_param, data_holder):
+    def process_parsed_messages(self, parsed_messages, device_config, data_holder):
         """
         Process PSM messages with buffering, settings compilation, and error handling.
         """
@@ -371,7 +479,7 @@ class PSMWidget(ComplexDevice):
                 # Determine scan status (firmware version dependent)
                 scan_status = "9"  # undefined by default
                 try:
-                    firmware_version_str = self.device_parameter.child('Firmware version').value()
+                    firmware_version_str = self.device_config.extra_params.get('firmware_version', '')
                     if firmware_version_str != "":
                         firmware_version = firmware_version_str.split(".")
                         # Retrofit: version >= 0.5.5
@@ -594,7 +702,7 @@ class PSMWidget(ComplexDevice):
     def has_device_specific_errors(self):
         """PSM has CO flow error (PSM Retrofit only)."""
         from config import PSM
-        if self.device_type == PSM:
+        if self.device_config.device_type == PSM:
             return hasattr(self.set_tab, 'set_co_flow') and self.set_tab.set_co_flow.error
         return False
 
@@ -615,7 +723,7 @@ class PSMWidget(ComplexDevice):
         if self.settings:
             self.settings.dilution_parameters = []
 
-    def send_read_commands(self, dev_conn, device_param):
+    def send_read_commands(self, dev_conn, device_config):
         """
         Send PSM read commands for settings and dilution parameters.
 
@@ -629,7 +737,7 @@ class PSMWidget(ComplexDevice):
         if self.settings and not self.settings.dilution_parameters:
             dev_conn.send_delayed_message(":SYST:VCMP", 150)
 
-    def validate_10hz_mode(self, params, device_param):
+    def validate_10hz_mode(self, app_config, device_config):
         """
         Validate and synchronize PSM 10 Hz mode.
 
@@ -637,14 +745,17 @@ class PSMWidget(ComplexDevice):
         """
         from config import CPC
 
-        if device_param.child('10 hz').value():
-            cpc_id = device_param.child('Connected CPC').value()
+        if device_config.extra_params.get('10_hz', False):
+            cpc_id = device_config.extra_params.get('connected_cpc', 'None')
             if cpc_id != 'None':
                 # Find connected CPC and enable its 10 Hz mode
-                for cpc in params.child('Device settings').children():
-                    if cpc.child('DevID').value() == cpc_id and cpc.child('Device type').value() == CPC:
-                        if not cpc.child('10 hz').value():
-                            cpc.child('10 hz').setValue(True)
+                for cpc_config in app_config.devices:
+                    if cpc_config.device_id == cpc_id and cpc_config.device_type == CPC:
+                        if not cpc_config.extra_params.get('10_hz', False):
+                            cpc_config.extra_params['10_hz'] = True
+                            # Trigger config save
+                            if hasattr(self, 'on_config_changed'):
+                                self.on_config_changed()
                         break
 
 

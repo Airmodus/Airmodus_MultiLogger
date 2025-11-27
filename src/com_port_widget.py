@@ -31,7 +31,6 @@ class ComPortWidget(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.is_osx = platform.system() == 'Darwin'
         self.available_ports = {}  # Will store {display_text: port_value}
         self.port_statuses = {}  # Will store {port_value: status}
         self.port_info = {}  # Will store {port_value: {serial_number, device_type, etc}}
@@ -80,13 +79,6 @@ class ComPortWidget(QtWidgets.QWidget):
     def _on_manual_change(self):
         """Handle manual text entry in the line edit."""
         value = self.line_edit.text()
-        # Convert to appropriate type
-        if not self.is_osx:
-            # On Windows/Linux, try to convert to int
-            try:
-                value = int(value)
-            except ValueError:
-                pass  # Keep as string if not a valid integer
         self.sigChanged.emit(self)  # Emit for pyqtgraph compatibility
         self.sigValueChanged.emit(value)
 
@@ -95,22 +87,9 @@ class ComPortWidget(QtWidgets.QWidget):
         if port_value is None or port_value == "No ports available":
             return
 
-        # Extract the appropriate part based on platform
-        if self.is_osx:
-            # On macOS, use the full path (everything before the dash)
-            display_value = port_value
-        else:
-            # On Windows, extract just the number from COM3 -> 3
-            if port_value.startswith('COM'):
-                try:
-                    display_value = str(int(port_value[3:]))
-                except ValueError:
-                    display_value = port_value
-            else:
-                display_value = port_value
-
+        # Use the raw port value directly on all platforms
         # Update the text field (this will trigger sigValueChanged via _on_manual_change)
-        self.line_edit.setText(display_value)
+        self.line_edit.setText(port_value)
 
     def set_available_ports(self, ports_dict, port_statuses=None, port_info=None):
         """
@@ -188,14 +167,7 @@ class ComPortWidget(QtWidgets.QWidget):
 
     def value(self):
         """Get the current value from the line edit."""
-        value = self.line_edit.text()
-        if not self.is_osx:
-            # On Windows/Linux, convert to int if possible
-            try:
-                value = int(value)
-            except ValueError:
-                pass
-        return value
+        return self.line_edit.text()
 
     def setValue(self, value):
         """Set the value in the line edit."""
@@ -242,10 +214,9 @@ class ComPortParameter(Parameter):
     itemClass = ComPortParameterItem
 
     def __init__(self, **opts):
-        # Set default options
+        # Set default options - always use 'str' for cross-platform compatibility
         if 'type' not in opts:
-            # Default to 'str' on macOS, 'int' on Windows/Linux
-            opts['type'] = 'str' if platform.system() == 'Darwin' else 'int'
+            opts['type'] = 'str'
 
         super().__init__(**opts)
 

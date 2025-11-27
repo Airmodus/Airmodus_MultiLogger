@@ -3,14 +3,14 @@ from time import time
 import os
 import traceback
 import json
+import logging
 
 from PyQt5.QtGui import QPixmap, QIcon
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QLabel,
     QFileDialog, QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QTabBar, QStackedWidget, QStyle)
 from PyQt5.QtGui import QCursor
 from widgets import TabConfirmationPopup
-from pyqtgraph.parametertree import ParameterTree
 
 from config import *
 from utils import (
@@ -25,14 +25,14 @@ from plots import (
 )
 
 from devices import (
-    CPCWidget, 
-    PSMWidget, 
-    CO2Widget, 
-    ElectrometerWidget, 
+    CPCWidget,
+    PSMWidget,
+    CO2Widget,
+    ElectrometerWidget,
     RHTPWidget,
-    eDiluterWidget, 
-    AFMWidget, 
-    TSIWidget, 
+    eDiluterWidget,
+    AFMWidget,
+    TSIWidget,
     ExampleDeviceWidget
 )
 
@@ -45,42 +45,48 @@ from managers import (
 )
 
 from serial_connection import SerialDeviceConnection
-from params import p
+from devices.device_data import AppConfig, DataSettings, PlotSettings, DeviceConfig
+from config_migration import params_dict_to_app_config
 
 
 # main program
 class MainWindow(QMainWindow):
+    # Qt signals for configuration changes
+    data_settings_changed = pyqtSignal(DataSettings)
+    plot_settings_changed = pyqtSignal(PlotSettings)
+    device_config_changed = pyqtSignal(int, DeviceConfig)  # device_id, config
 
-    def __init__(self, params=p, parent=None):
+    def __init__(self, parent=None):
         super().__init__() # super init function must be called when subclassing a Qt class
         self.setWindowTitle("Airmodus MultiLogger v. " + version_number) # set window title
 
-        self.params = params # predefined parameter tree
+        # New typed configuration (replaces params)
+        self.config = AppConfig()
         self.config_file_path = "" # path to the configuration file
+
+        # Device ID counter (replaces ScalableGroup.n_devices)
+        self._next_device_id = 0
+
+        # CPC/RHTP dictionaries for inter-device linking
+        self.cpc_dict = {'None': 'None'}
+        self.rhtp_dict = {'None': 'None'}
 
         # Extracted inits
         self.data_holder = DataHolder()
         self.data_holder.error_icon = QIcon(resource_path + "/icons/error.png")
         self.data_holder.disconnected_icon = QIcon(resource_path + "/icons/disconnected.png")
 
-        self._setup_parameter_tree()
         self._setup_gui()
 
-        # Add any existing devices AFTER GUI setup (so device_tabs exists)
-        for child in self.params.child('Device settings').children():
-            self.device_added(self.params.child('Device settings'), child)
+        # Add any existing devices from config AFTER GUI setup
+        for device_config in self.config.devices:
+            self._add_device_from_config(device_config)
 
-        self.device_manager = DeviceManager(self.params, self.data_holder, self.data_holder.device_widgets)
+        self.device_manager = DeviceManager(self.config, self.data_holder, self.data_holder.device_widgets)
 
         # Update device_manager with device_tabs and device_tab_bar references after GUI setup
         self.device_manager.device_tabs = self.device_tabs
         self.device_manager.device_tab_bar = self.device_tab_bar
-
-        # Set device_manager and data_holder in ScalableGroup for port selection dialog
-        device_settings = self.params.child('Device settings')
-        if device_settings:
-            device_settings.device_manager = self.device_manager
-            device_settings.data_holder = self.data_holder
 
         # Start initial port scan to populate dropdowns
         QTimer.singleShot(100, self.device_manager.list_com_ports)
@@ -89,7 +95,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(500, self.device_manager.start_port_monitoring)
 
         self.plot_manager = PlotManager(self, self.data_holder, self.main_plot)
-        self.data_logger = DataLogger(self.data_holder, self.params)
+        self.data_logger = DataLogger(self.data_holder, self.config)
 
         # Initialize database manager
         from managers.database_manager import DatabaseManager
@@ -100,52 +106,22 @@ class MainWindow(QMainWindow):
         self.timer_service = TimerService(self, self.data_holder, self.device_manager, self.plot_manager, self.data_logger)
         self.timer_service.start()
 
-        # load ini file if available
+        # load ini file if available (with auto-migration)
         self.load_ini()
 
         # Update PSM connected CPC references after all devices are loaded
-        # This is needed because during device creation, the CPC device might not exist yet
-        from config import PSM, PSM2
-        for dev in self.params.child('Device settings').children():
-            if dev.child('Device type').value() in [PSM, PSM2]:
-                dev_id = dev.child('DevID').value()
-                psm_widget = self.data_holder.device_widgets.get(dev_id)
-                if psm_widget and hasattr(psm_widget, 'connected_cpc_device'):
-                    try:
-                        cpc_id = dev.child('Connected CPC').value()
-                        if cpc_id != 'None':
-                            cpc_widget = self.data_holder.device_widgets.get(cpc_id)
-                            psm_widget.connected_cpc_device = cpc_widget
-                    except KeyError:
-                        pass
+        self._update_psm_cpc_connections()
 
         # Set initial window size
         self.resize(1400, 800)
 
-    def _setup_parameter_tree(self):
-        """Create and configure the ParameterTree."""
-        # create parameter tree
-        self.t = ParameterTree()
-        self.t.setParameters(self.params, showTop=False)
-        self.t.setHeaderHidden(True)
-
-        # Hide Data and Plot settings from left panel (accessed via gear icon)
-        data_settings = self.params.child('Data settings')
-        if data_settings:
-            data_settings.hide()
-
-        plot_settings = self.params.child('Plot settings')
-        if plot_settings:
-            plot_settings.hide()
-
-        # load CSS style and apply it to the main window
+    def _setup_gui(self):
+        """Build main layout, splitters, tabs, etc."""
+        # Load CSS style and apply it to the main window
         with open(script_path + "/style.css", "r") as f:
             self.style = f.read()
         self.setStyleSheet(self.style)
 
-
-    def _setup_gui(self):
-        """Build main layout, splitters, tabs, etc."""
         # create main container widget to hold all UI elements
         main_container = QWidget()
         container_layout = QVBoxLayout(main_container)
@@ -253,15 +229,12 @@ class MainWindow(QMainWindow):
         self.device_tab_bar.addTab("Main plot")
         # Note: Main plot tab has no close button (we only add close buttons to device tabs)
 
-        # Keep parameter tree but hide it (used internally for state management)
-        self.t.setVisible(False)
-
         # Set central widget
         self.setCentralWidget(main_container)
 
         # Create and add status bar for always-visible field monitoring
         from status_bar import MultiLoggerStatusBar
-        self.status_bar = MultiLoggerStatusBar(self.data_holder, self.params, self)
+        self.status_bar = MultiLoggerStatusBar(self.data_holder, self.config, self)
         self.status_bar.main_window = self  # Set reference for tab switching
         self.setStatusBar(self.status_bar)
 
@@ -355,14 +328,66 @@ class MainWindow(QMainWindow):
         if dev_id is None:
             return
 
-        # Find and remove the device parameter (triggers device_removed signal)
-        device_settings = self.params.child('Device settings')
+        # Find device config
+        device_config = next((d for d in self.config.devices if d.device_id == dev_id), None)
+        if not device_config:
+            return
 
-        for device_param in device_settings.children():
-            param_dev_id = device_param.child('DevID').value()
-            if param_dev_id == dev_id:
-                device_settings.removeChild(device_param)
-                return
+        # Remove from status bar
+        if hasattr(self, 'status_bar'):
+            self.status_bar.remove_device_status(dev_id)
+
+        # If it's a CPC with database enabled, unregister from database manager
+        if device_config.device_type == CPC and hasattr(self, 'database_manager'):
+            db_enabled = device_config.extra_params.get('database_enabled', False)
+            if db_enabled:
+                self.database_manager.unregister_device(dev_id)
+
+                # Update global status in all remaining CPC tabs
+                for dev_id_other, widget_other in self.data_holder.device_widgets.items():
+                    if dev_id_other != dev_id and hasattr(widget_other, 'device_type') and widget_other.device_type == CPC:
+                        if hasattr(widget_other, 'database_tab'):
+                            widget_other.database_tab.update_global_connection_status()
+                            widget_other.database_tab.sync_global_status_to_all_cpcs()
+
+        # Close serial connection if open
+        if hasattr(widget, 'connection'):
+            try:
+                widget.connection.close()
+            except AttributeError:
+                pass
+
+        # Remove curve from main plot
+        try:
+            self.data_holder.curve_dict[dev_id].setData(x=[], y=[])
+        except KeyError:
+            pass
+
+        # Remove from GUI
+        widget_index = self.device_tabs.indexOf(widget)
+        if widget_index >= 0:
+            self.device_tabs.removeWidget(widget)
+            self.device_tab_bar.removeTab(widget_index)
+
+        # Clear data holder
+        self.data_holder.clear_for_device(dev_id)
+
+        # Remove from device_widgets dict
+        if dev_id in self.data_holder.device_widgets:
+            del self.data_holder.device_widgets[dev_id]
+
+        # Remove from config
+        self.config.devices = [d for d in self.config.devices if d.device_id != dev_id]
+
+        # Update CPC/RHTP dicts
+        self._update_cpc_dict()
+        self._update_rhtp_dict()
+
+        # Refresh PSM Connected CPC dropdowns
+        self._refresh_psm_cpc_dropdowns()
+
+        # Save configuration
+        self.save_ini()
 
     def _update_close_button_visibility(self):
         """Show close button only on selected tab (except Main plot)."""
@@ -389,30 +414,104 @@ class MainWindow(QMainWindow):
     def _open_settings_dialog(self):
         """Open the data settings dialog."""
         from dialogs.data_settings_dialog import DataSettingsDialog
-        dialog = DataSettingsDialog(self.params, self.data_holder, self)
+        dialog = DataSettingsDialog(self.config, self.data_holder, self)
         dialog.exec_()
 
     def _add_new_device(self):
         """Open dialog to add a new device."""
-        device_settings = self.params.child('Device settings')
-        if device_settings:
-            device_settings.addNew()
+        from dialogs import PortSelectionDialog
+        from devices.device_data import create_device_settings
+        from config_migration import _get_device_type_name
+
+        # Show port selection dialog
+        dialog = PortSelectionDialog(self.device_manager, self.data_holder)
+        if dialog.exec_() != dialog.Accepted:
+            return  # User cancelled
+
+        selected_port = dialog.get_selected_port()
+        device_type_name = dialog.get_selected_type()
+
+        if not selected_port or not device_type_name:
+            return  # Invalid selection
+
+        # Convert device type name to device ID
+        name_to_id = {name: dev_id for dev_id, name in self.data_holder.device_names.items()}
+        device_type = name_to_id.get(device_type_name)
+
+        if device_type is None:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Unknown Device Type",
+                f"Cannot create device of type '{device_type_name}'.\n\n"
+                f"This device type is not supported."
+            )
+            return
+
+        # Create device configuration
+        device_config = DeviceConfig(
+            device_id=self._next_device_id,
+            device_type=device_type,
+            device_type_name=device_type_name,
+            com_port=selected_port,
+            serial_number="",
+            device_nickname="",
+            plot_to_main=True,
+            settings=create_device_settings(device_type),
+            extra_params={}
+        )
+
+        # Add device-specific parameters
+        if device_type in [CPC, TSI_CPC]:
+            device_config.extra_params['10_hz'] = False
+            if device_type == CPC:
+                device_config.extra_params['database_enabled'] = False
+                device_config.extra_params['linked_rhtp'] = 'None'
+                device_config.extra_params['db_averaging_interval'] = '1 minute'
+
+        if device_type in [PSM, PSM2]:
+            device_config.extra_params['10_hz'] = False
+            device_config.extra_params['connected_cpc'] = 'None'
+            device_config.extra_params['calibration_file_path'] = ''
+            device_config.extra_params['firmware_version'] = ''
+            if device_type == PSM:
+                device_config.extra_params['co_flow'] = ''
+
+        # Increment device ID counter
+        self._next_device_id += 1
+
+        # Add to configuration
+        self.config.devices.append(device_config)
+
+        # Create and add the actual device widget
+        self._add_device_from_config(device_config)
+
+        # Update CPC/RHTP dictionaries
+        self._update_cpc_dict()
+        self._update_rhtp_dict()
+
+        # Don't refresh PSM CPC dropdowns immediately - they'll update lazily when PSM tabs are shown
+        # This prevents blocking the main thread during device addition
+        # Mark all PSMs as needing dropdown updates
+        for device_config in self.config.devices:
+            if device_config.device_type in [PSM, PSM2]:
+                psm_widget = self.data_holder.device_widgets.get(device_config.device_id)
+                if psm_widget and hasattr(psm_widget, '_needs_cpc_dropdown_update'):
+                    psm_widget._needs_cpc_dropdown_update = True
+
+        # Save configuration
+        self.save_ini()
 
     def _connect_signals(self):
         """Wire up all signals/slots."""
 
-        # connect parameter tree's save data parameter
-        self.params.child('Data settings').child('Save data').sigValueChanged.connect(self.data_logger.save_changed)
-        # connect file path parameter to filepath_changed function
-        self.params.child('Data settings').child('File path').sigValueChanged.connect(self.data_logger.filepath_changed)
-        # connect file tag parameter to reset_all_filenames function
-        self.params.child('Data settings').child('File tag').sigValueChanged.connect(self.data_logger.reset_all_filenames)
-        # Note: Update serial ports button removed - continuous monitoring is now automatic
+        # Connect config change signals to managers and save
+        # Note: Individual setting changes will emit these signals from dialogs/widgets
+        self.data_settings_changed.connect(self.data_logger.on_data_settings_changed)
+        self.data_settings_changed.connect(lambda: self.save_ini())
+        self.plot_settings_changed.connect(lambda: self.save_ini())
+        self.device_config_changed.connect(lambda: self.save_ini())
 
-        # connect parameter tree's sigChildAdded signal to device_added function
-        self.params.child("Device settings").sigChildAdded.connect(self.device_added)
-        # connect parameter tree's sigChildRemoved signal to device_removed function
-        self.params.child("Device settings").sigChildRemoved.connect(self.device_removed)
         # connect main_plot's viewboxes' sigXRangeChanged signals to x_range_changed function
         for viewbox in self.main_plot.viewboxes.values():
             viewbox.sigXRangeChanged.connect(self.x_range_changed)
@@ -423,9 +522,6 @@ class MainWindow(QMainWindow):
         self.device_manager.port_scan_started.connect(self._on_port_scan_started)
         self.device_manager.port_scan_complete.connect(self._on_port_scan_complete)
         self.device_manager.port_scan_progress.connect(self._on_port_scan_progress)
-
-        # connect parameter tree's sigTreeStateChanged signal to save_ini function
-        self.params.sigTreeStateChanged.connect(self.save_ini)
 
     # set COM port inquiry flag
     def set_inquiry_flag(self):
@@ -458,20 +554,24 @@ class MainWindow(QMainWindow):
     
 
     def save_ini(self):
+        """Save configuration to resume_config.json."""
         # check if resume on startup is on
-        resume_measurements = 0
-        if self.params.child('Data settings').child('Resume on startup').value():
-            resume_measurements = 1
+        resume_measurements = 1 if self.config.data_settings.resume_on_startup else 0
+
         # store resume config path
         self.config_file_path = os.path.join(save_path, 'resume_config.json')
+
+        # Write config.ini with path and resume flag
         with open(os.path.join(save_path, 'config.ini'),'w') as f:
             f.write(self.config_file_path)
             f.write(';')
             f.write(str(resume_measurements))
-        # save the configuration to the JSON file
+
+        # Save the configuration using AppConfig
         self.save_configuration(self.config_file_path)
     
     def load_ini(self):
+        """Load configuration with automatic migration from old format."""
         try:
             # load the configuration file "config.ini" from the save_path
             with open(os.path.join(save_path, 'config.ini'),'r') as f:
@@ -486,417 +586,317 @@ class MainWindow(QMainWindow):
                 # if resume on startup is on, load the stored configuration
                 if resume_measurements:
                     self.load_configuration(json_path)
+        except FileNotFoundError:
+            # First run - no config file exists yet, this is normal
+            logging.info("No config.ini found (first run). Configuration will be saved on exit.")
         except Exception as e:
-            # If the file does not exist, raise an exception saying that the file does not exist
-            #print("No ini file found")
-            print(traceback.format_exc())
+            # Unexpected error - print full traceback
+            logging.error(f"Error loading config.ini: {e}")
+            logging.error(traceback.format_exc())
         
     def save_configuration(self, json_path):
-        # Get the parameter tree values
-        parameter_values = self.save_parameters_recursive(self.params)
+        """Save AppConfig to JSON file."""
+        # Build configuration dict
+        config_dict = self.config.to_dict()
+
         # Add database connection string
         if hasattr(self, 'database_manager') and hasattr(self.database_manager, 'connection_string_cached'):
-            parameter_values['database_connection_string'] = self.database_manager.connection_string_cached
-        # Save the configuration to the JSON file
+            config_dict['database_connection_string'] = self.database_manager.connection_string_cached
+
+        # Save to JSON file
         with open(json_path, 'w') as file:
-            json.dump(parameter_values, file)
-    
-    def save_parameters_recursive(self, parameters):
-        result = {}
-        for param in parameters:
-            if param.hasChildren():
-                result[param.name()] = self.save_parameters_recursive(param.children())
-            else:
-                # Check if the parameter value is an instance of SerialDeviceConnection
-                if isinstance(param.value(), SerialDeviceConnection):
-                    # store parameter value as None
-                    result[param.name()] = None
-                else:
-                    result[param.name()] = param.value()
-        return result
+            json.dump(config_dict, file, indent=2)
 
     def load_configuration(self, json_path=None):
-        if json_path:
-            # Load the configuration from the JSON file
-            with open(json_path, 'r') as file:
-                parameter_values = json.load(file)
-            # Add devices in configuration file to the parameter tree
-            self.load_devices(parameter_values.get('Device settings', {}))
-            # Set the loaded parameter values to the parameter tree
-            self.load_parameters_recursive(self.params, parameter_values)
-
-            # Load database connection string
-            if 'database_connection_string' in parameter_values:
-                conn_string = parameter_values['database_connection_string']
-                if hasattr(self, 'database_manager'):
-                    self.database_manager.connection_string_cached = conn_string
-
-                # Update all CPC ACTRIS tabs with the connection string
-                from config import CPC
-                for dev_id, widget in self.data_holder.device_widgets.items():
-                    if hasattr(widget, 'device_type') and widget.device_type == CPC:
-                        if hasattr(widget, 'database_tab'):
-                            widget.database_tab.connection_string_input.setText(conn_string)
-
-                # Restore database enabled state for CPCs that had it enabled
-                # This must happen AFTER connection string is set and parameters are loaded
-                device_settings_group = self.params.child('Device settings')
-                if device_settings_group:
-                    for dev_param in device_settings_group.children():
-                        if dev_param.child('Device type').value() == CPC:
-                            db_enabled_param = dev_param.child('Database enabled')
-                            if db_enabled_param and db_enabled_param.value():
-                                # Get the CPC widget
-                                dev_id = dev_param.child('DevID').value()
-                                cpc_widget = self.data_holder.device_widgets.get(dev_id)
-
-                                if cpc_widget and hasattr(cpc_widget, 'database_tab'):
-                                    # Block signals to prevent validation during restoration
-                                    cpc_widget.database_tab.db_enabled_checkbox.blockSignals(True)
-
-                                    # Ensure connection string is set in the input field
-                                    if not cpc_widget.database_tab.connection_string_input.text():
-                                        cpc_widget.database_tab.connection_string_input.setText(conn_string)
-
-                                    # Repopulate RHTP dropdown (it might be empty at this point)
-                                    cpc_widget.database_tab.populate_rhtp_dropdown()
-
-                                    # Restore the linked RHTP selection
-                                    try:
-                                        linked_rhtp_param = dev_param.child('Linked RHTP')
-                                        if linked_rhtp_param:
-                                            rhtp_id = linked_rhtp_param.value()
-                                            if rhtp_id != 'None':
-                                                index = cpc_widget.database_tab.linked_rhtp_dropdown.findData(rhtp_id)
-                                                if index >= 0:
-                                                    cpc_widget.database_tab.linked_rhtp_dropdown.setCurrentIndex(index)
-                                    except KeyError:
-                                        pass
-
-                                    # Set checkbox visually (signals blocked, won't trigger validation)
-                                    cpc_widget.database_tab.db_enabled_checkbox.setChecked(True)
-
-                                    # Unblock signals
-                                    cpc_widget.database_tab.db_enabled_checkbox.blockSignals(False)
-
-                                    # Manually connect to database (bypass validation)
-                                    interval_param = dev_param.child('DB averaging interval')
-                                    interval_str = interval_param.value() if interval_param else '1 minute'
-                                    interval_map = {'1 minute': 1, '5 minutes': 5, '10 minutes': 10, '15 minutes': 15, '1 hour': 60, '3 hours': 180}
-                                    interval_minutes = interval_map.get(interval_str, 1)
-
-                                    # Register device with database manager
-                                    success, message = self.database_manager.register_device(dev_id, conn_string)
-                                    if success:
-                                        # Create averager
-                                        self.database_manager.create_averager(dev_id, interval_minutes)
-
-                                        # Update UI status
-                                        cpc_widget.database_tab.db_status_value.setText("Enabled")
-                                        cpc_widget.database_tab.db_status_value.setStyleSheet("color: green;")
-
-                                        # Update device parameter
-                                        dev_param.child('Database enabled').setValue(True)
-
-                                        # Update global status
-                                        cpc_widget.database_tab.update_global_connection_status()
-                                        cpc_widget.database_tab.sync_global_status_to_all_cpcs()
-    
-    def load_devices(self, device_settings):
-        # remove all devices from the parameter tree
-        self.params.child('Device settings').clearChildren()
-        # Handle None or empty device settings
-        if not device_settings:
-            return
-        try:
-            # go through each device in the device settings
-            for dev_name, dev_values in device_settings.items():
-                # get 'DevID' and 'Device type' values
-                dev_id = dev_values.get('DevID', None)
-                dev_type = dev_values.get('Device type', None)
-                # Skip if device type is invalid
-                if dev_type is None or dev_type == '' or dev_type not in self.data_holder.device_names:
-                    continue
-                # set n_devices to current dev_id
-                self.params.child('Device settings').n_devices = dev_id
-                # add device to the parameter tree
-                self.params.child('Device settings').addNew(self.data_holder.device_names[dev_type], device_name=dev_name)
-        except (AttributeError, KeyError) as e:
-            print(f"Error loading devices: {e}")
-            pass
-            
-    def load_parameters_recursive(self, parameters, values):
-        for param in parameters:
-            if param.hasChildren():
-                self.load_parameters_recursive(param.children(), values.get(param.name(), {}))
-            else:
-                if param.name() == 'Connection':
-                    # skip 'Connection' parameter (SerialDeviceConnection)
-                    # SerialDeviceConnection was created when the device was added (load_devices)
-                    pass
-                elif param.name() == 'Connected':
-                    # skip 'Connected' parameter, this is checked in connection_test()
-                    pass
-                elif param.name() == 'Plot to main':
-                    # Load the value for 'Plot to main' parameter
-                    # This parameter is correctly typed when the device is created
-                    # For RHTP/AFM devices it's a list type with string values
-                    # For other devices it's boolean
-                    # We need to load the saved value carefully
-                    saved_value = values.get(param.name(), param.value())
-                    # Only set the value if it's compatible with the parameter type
-                    if param.opts.get('type') == 'list':
-                        # For list parameters, only set if saved value is in the list
-                        if saved_value in param.opts.get('values', []):
-                            param.setValue(saved_value)
-                    else:
-                        # For boolean parameters, set the value as usual
-                        param.setValue(saved_value)
-                # Check if parameter name is CO flow
-                elif param.name() == 'CO flow':
-                    # Set the parameter value as usual
-                    param.setValue(values.get(param.name(), param.value()))
-                    # Set CO flow value to related PSM widget
-                    try:
-                        self.data_holder.device_widgets[param.parent().child("DevID").value()].set_tab.set_co_flow.value_spinbox.setValue(round(float(param.value()), 3))
-                    except ValueError:
-                        pass # if value has not been saved, skip
-                # Check if parameter name is 10 hz
-                elif param.name() == '10 hz':
-                    # Set the parameter value as usual
-                    param.setValue(values.get(param.name(), param.value()))
-                    # if device type is PSM or PSM2
-                    if param.parent().child('Device type').value() in [PSM, PSM2]:
-                        # Set 10 hz status (True/False) to ten_hz button
-                        self.data_holder.device_widgets[param.parent().child("DevID").value()].measure_tab.ten_hz.change_color(int(values.get(param.name(), param.value())))
-                else:
-                    # Set the parameter value as usual
-                    param.setValue(values.get(param.name(), param.value()))
-    
-    def x_range_changed(self, viewbox):
-        # if autoscale y is on
-        if self.params.child("Plot settings").child('Autoscale Y').value():
-            viewbox.enableAutoRange(axis='y')
-            viewbox.setAutoVisible(y=True)
-    
-    # called when main plot's auto range button is clicked
-    def auto_range_clicked(self):
-        # disable follow
-        self.params.child("Plot settings").child('Follow').setValue(False)
-        # set autorange on for individual plots
-        for dev in self.params.child('Device settings').children():
-            dev_id = dev.child('DevID').value()
-            dev_type = dev.child('Device type').value()
-            if dev_type == ELECTROMETER:
-                for plot in self.data_holder.device_widgets[dev_id].plot_tab.plots:
-                    plot.enableAutoRange()
-            else:
-                self.data_holder.device_widgets[dev_id].plot_tab.plot.enableAutoRange()
-            
-    
-    # set the 'Plot to main' selection of all RHTP devices to the same value
-    # called when 'Plot to main' selection of any RHTP device is changed
-    def rhtp_axis_changed(self, value):
-        for dev in self.params.child('Device settings').children():
-            if dev.child('Device type').value() == RHTP and dev.child('Plot to main').value() != value:
-                dev.child('Plot to main').setValue(value)
-    # same as above but for AFM devices
-    def afm_axis_changed(self, value):
-        for dev in self.params.child('Device settings').children():
-            if dev.child('Device type').value() == AFM and dev.child('Plot to main').value() != value:
-                dev.child('Plot to main').setValue(value)
-    
-    
-    
-    # rename device parameter according to device type and serial number
-    def rename_device(self, device):
-        # combine device type name and serial number into device name
-        device_type = device.child('Device type').value() # device type number
-        # Check if device type is valid (may be empty during initial load)
-        if not device_type or device_type not in self.data_holder.device_names:
-            return
-        device_type_name = self.data_holder.device_names[device_type] # device type name
-        serial_number = device.child('Serial number').value() # serial number
-        device_name = device_type_name + " " + serial_number
-        # set device name
-        device.setName(device_name)
-        # update tab name
-        self.rename_tab(device)
-
-    # update device tab name according to device parameter name or nickname
-    def rename_tab(self, device):
-        # get tab index of device widget
-        device_id = device.child('DevID').value()
-        # Check if device widget exists (may not during initial load)
-        if device_id not in self.data_holder.device_widgets:
-            return
-        device_widget = self.data_holder.device_widgets[device_id]
-        tab_index = self.device_tabs.indexOf(device_widget)
-        # check if device has a nickname
-        if device.child('Device nickname').value() != "":
-            device_name = device.child('Device nickname').value()
-        else: # if no nickname, use device parameter name (device type and serial number)
-            device_name = device.name()
-        # update tab name in tab bar
-        if tab_index >= 0:
-            self.device_tab_bar.setTabText(tab_index, device_name)
-        # update checkbox name in main plot
-        if hasattr(self.main_plot, 'update_device_checkbox_name'):
-            self.main_plot.update_device_checkbox_name(device_id, device_name)
-
-    # triggered when a new device is added to the parameter tree
-    # sigChildAdded(self, param, child, index) - Emitted when a child (device) is added
-    def device_added(self, param, child):
-        """
-        Handle device addition to the application.
-
-        Creates the device widget and sets up signal/slot connections
-        using the device registry for a declarative, maintainable approach.
-        """
-        if param.name() != "Device settings":
+        """Load configuration with automatic migration from old parameter tree format."""
+        if not json_path:
             return
 
+        # Load the configuration from the JSON file
+        with open(json_path, 'r') as file:
+            data = json.load(file)
+
+        # Detect format: old (parameter tree) vs new (AppConfig)
+        is_old_format = 'Data settings' in data or 'Device settings' in data
+
+        if is_old_format:
+            logging.info(f"Detected old configuration format in {json_path}, auto-migrating...")
+            # Migrate old format to new AppConfig
+            self.config = params_dict_to_app_config(data)
+            logging.info("Migration complete. Configuration will be saved in new format.")
+        else:
+            # Load new format directly
+            self.config = AppConfig.from_dict(data)
+
+        # Load database connection string
+        if 'database_connection_string' in data:
+            conn_string = data['database_connection_string']
+            if hasattr(self, 'database_manager'):
+                self.database_manager.connection_string_cached = conn_string
+
+        # Clear existing devices and load from config
+        self._load_devices_from_config()
+
+        # Update device ID counter to avoid collisions
+        if self.config.devices:
+            self._next_device_id = max(d.device_id for d in self.config.devices) + 1
+
+        # Restore database connections for CPCs
+        self._restore_database_connections(data.get('database_connection_string'))
+
+    def _load_devices_from_config(self):
+        """Load all devices from self.config and create widgets."""
+        for device_config in self.config.devices:
+            self._add_device_from_config(device_config)
+
+    def _add_device_from_config(self, device_config: DeviceConfig):
+        """Create and add a device widget from a DeviceConfig."""
         from devices.registry import create_device_widget, setup_device_connections
 
-        # Extract device parameters
-        device_param = child
-        device_type = child.child("Device type").value()
-        device_id = child.child("DevID").value()
-        device_port = child.child("COM port")
-        connection = device_param.child('Connection').value()
-
-        # Set up common signal connections for all devices
-        device_param.child("Serial number").sigValueChanged.connect(
-            lambda: self.data_logger.reset_device_filenames(device_id))
-        device_param.child("Device nickname").sigValueChanged.connect(
-            lambda: self.data_logger.reset_device_filenames(device_id))
-        device_param.child("Device nickname").sigValueChanged.connect(
-            lambda: self.rename_tab(device_param))
-        device_param.child("Serial number").sigValueChanged.connect(
-            lambda: self.rename_device(device_param))
-
-        # Connect COM port change to SerialDeviceConnection
-        if osx_mode:
-            device_port.sigValueChanged.connect(
-                lambda: connection.change_port(str(device_port.value())))
-        else:
-            device_port.sigValueChanged.connect(
-                lambda: connection.change_port('COM' + str(device_port.value())))
+        # Create serial connection (runtime state, stored in widget)
+        connection = SerialDeviceConnection()
+        if device_config.com_port:
+            # Don't connect immediately - just set the port
+            # The device_manager.connection_test() will handle actual connection
+            # This prevents blocking the main thread during device creation
+            connection.set_port(device_config.com_port)
 
         # Create widget using device registry
         try:
-            widget = create_device_widget(device_type, device_param)
+            widget = create_device_widget(device_config.device_type, device_config)
         except ValueError as e:
-            print(f"Error creating device widget: {e}")
+            logging.error(f"Error creating device widget: {e}")
             return
 
-        # Set device ID in widget (required for device to manage its own state)
-        widget.dev_id = device_id
+        # Set device ID and store connection in widget
+        widget.dev_id = device_config.device_id
+        widget.connection = connection
 
         # Set up device-specific connections using device registry
-        setup_device_connections(device_type, widget, device_param, connection, self)
+        setup_device_connections(device_config.device_type, widget, device_config, connection, self)
+
+        # Restore device-specific UI states from extra_params
+        if device_config.device_type in [PSM, PSM2]:
+            # Set app config for contour tab historical data loading
+            if hasattr(widget, 'set_app_config'):
+                widget.set_app_config(self.config)
+
+            # Restore 10 Hz button state
+            if '10_hz' in device_config.extra_params:
+                widget.measure_tab.ten_hz.change_color(int(device_config.extra_params['10_hz']))
+
+            # Restore CO flow (PSM Retrofit only)
+            if device_config.device_type == PSM and 'co_flow' in device_config.extra_params:
+                try:
+                    co_flow_val = float(device_config.extra_params['co_flow'])
+                    widget.set_tab.set_co_flow.value_spinbox.setValue(round(co_flow_val, 3))
+                except (ValueError, AttributeError):
+                    pass
+
+        if device_config.device_type == CPC:
+            # Set app config for database tab RHTP dropdown
+            if hasattr(widget, 'set_app_config'):
+                widget.set_app_config(self.config)
 
         # Connect viewbox x-range change for autoscale
-        from config import ELECTROMETER, RHTP, AFM
-        if device_type == ELECTROMETER:
+        if device_config.device_type == ELECTROMETER:
             for plot in widget.plot_tab.plots:
                 plot.getViewBox().sigXRangeChanged.connect(self.x_range_changed)
-        elif device_type in [RHTP, AFM]:
+        elif device_config.device_type in [RHTP, AFM]:
             for viewbox in widget.plot_tab.viewboxes:
                 viewbox.sigXRangeChanged.connect(self.x_range_changed)
         else:
             widget.plot_tab.viewbox.sigXRangeChanged.connect(self.x_range_changed)
 
         # Register widget and initialize data structures
-        self.data_holder.device_widgets[device_id] = widget
-        self.data_holder.reset_for_device(device_id, widget)
-        self.data_holder.init_plot_data_for_device(device_id, widget)
+        self.data_holder.device_widgets[device_config.device_id] = widget
+        self.data_holder.reset_for_device(device_config.device_id, widget)
+        self.data_holder.init_plot_data_for_device(device_config.device_id, widget)
 
-        # Add widget to GUI and initialize error tracking
-        # Add to stacked widget (content area)
+        # Add widget to GUI
         self.device_tabs.addWidget(widget)
-        # Add to tab bar (top bar)
-        tab_index = self.device_tab_bar.addTab(widget.name)
-        # Create custom close button on right side
+        tab_name = device_config.device_nickname or device_config.device_type_name
+        if device_config.serial_number:
+            tab_name = f"{device_config.device_type_name} {device_config.serial_number}"
+        tab_index = self.device_tab_bar.addTab(tab_name)
         self._add_close_button_to_tab(tab_index)
-        # Update close button visibility (hide on new tabs, show only on selected)
         self._update_close_button_visibility()
-        self.data_holder.device_errors[device_id] = False
+
+        # Initialize error tracking
+        self.data_holder.device_errors[device_config.device_id] = False
 
         # Add device to status bar
         if hasattr(self, 'status_bar'):
-            device_name = child.child('Device nickname').value() or child.name()
-            self.status_bar.add_device_status(device_id, device_name)
-
-        # Add device checkbox to main plot
-        # NOTE: We don't add it here because for RHTP/AFM devices, the 'Plot to main'
-        # parameter gets replaced with a list type AFTER sigChildAdded is emitted.
-        # Instead, we'll add it after a short delay to ensure parameter is configured.
-        if hasattr(self.main_plot, 'add_device_checkbox'):
-            device_name = child.child('Device nickname').value() or child.name()
-            # Use QTimer to defer the call until after all device configuration is complete
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self.main_plot.add_device_checkbox(device_id, device_name, device_param, widget))
+            self.status_bar.add_device_status(device_config.device_id, tab_name)
 
         # Set main_window reference for CPC database tab
-        from config import CPC
-        if device_type == CPC and hasattr(widget, 'database_tab'):
+        if device_config.device_type == CPC and hasattr(widget, 'database_tab'):
             widget.database_tab.main_window = self
-            # Load connection string from cached value
             if hasattr(self.database_manager, 'connection_string_cached'):
                 widget.database_tab.connection_string_input.setText(self.database_manager.connection_string_cached)
-            # Update global connection status
             widget.database_tab.update_global_connection_status()
 
-    # triggered when a device is removed from the parameter tree
-    # sigChildRemoved(self, parent, child, index) - Emitted when a child (device) is removed
-    def device_removed(self, param, child):
-        if param == self.params.child("Device settings"):
-            device_id = child.child("DevID").value()
-            device_type = child.child("Device type").value()
+    def _restore_database_connections(self, conn_string):
+        """Restore database connections for CPC devices."""
+        if not conn_string or not hasattr(self, 'database_manager'):
+            return
 
-            # Remove from status bar
-            if hasattr(self, 'status_bar'):
-                self.status_bar.remove_device_status(device_id)
+        # Update all CPC ACTRIS tabs with connection string
+        for dev_id, widget in self.data_holder.device_widgets.items():
+            if hasattr(widget, 'device_type') and widget.device_type == CPC:
+                if hasattr(widget, 'database_tab'):
+                    widget.database_tab.connection_string_input.setText(conn_string)
 
-            # Remove device checkbox from main plot
-            if hasattr(self.main_plot, 'remove_device_checkbox'):
-                self.main_plot.remove_device_checkbox(device_id)
+        # Restore database enabled state for CPCs
+        for device_config in self.config.devices:
+            if device_config.device_type != CPC:
+                continue
 
-            # If it's a CPC with database enabled, unregister from database manager
-            from config import CPC
-            if device_type == CPC and hasattr(self, 'database_manager'):
-                # Check if database was enabled for this device
-                db_enabled_param = child.child('Database enabled')
-                if db_enabled_param and db_enabled_param.value():
-                    # Unregister device (will disconnect if last device)
-                    self.database_manager.unregister_device(device_id)
+            db_enabled = device_config.extra_params.get('database_enabled', False)
+            if not db_enabled:
+                continue
 
-                    # Update global status in all remaining CPC tabs
-                    for dev_id, widget in self.data_holder.device_widgets.items():
-                        if dev_id != device_id and hasattr(widget, 'device_type') and widget.device_type == CPC:
-                            if hasattr(widget, 'database_tab'):
-                                widget.database_tab.update_global_connection_status()
-                                widget.database_tab.sync_global_status_to_all_cpcs()
+            cpc_widget = self.data_holder.device_widgets.get(device_config.device_id)
+            if not cpc_widget or not hasattr(cpc_widget, 'database_tab'):
+                continue
 
-            # remove device widget from stacked widget and tab bar
-            widget = self.data_holder.device_widgets[device_id]
-            widget_index = self.device_tabs.indexOf(widget)
-            if widget_index >= 0:
-                self.device_tabs.removeWidget(widget)
-                self.device_tab_bar.removeTab(widget_index)
-            # close serial connection if open
-            try:
-                child.child('Connection').value().close()
-            except AttributeError:
-                pass
-            # set empty data to data_holder.curve_dict (remove curve from Main plot)
-            try:
-                self.data_holder.curve_dict[device_id].setData(x=[], y=[])
-            except KeyError:
-                pass
+            # Block signals during restoration
+            cpc_widget.database_tab.db_enabled_checkbox.blockSignals(True)
 
-            self.data_holder.clear_for_device(device_id)
+            # Populate RHTP dropdown
+            cpc_widget.database_tab.populate_rhtp_dropdown()
+
+            # Restore linked RHTP selection (by device_id, not index)
+            linked_rhtp = device_config.extra_params.get('linked_rhtp', 'None')
+            if linked_rhtp != 'None':
+                index = cpc_widget.database_tab.linked_rhtp_dropdown.findData(linked_rhtp)
+                if index >= 0:
+                    cpc_widget.database_tab.linked_rhtp_dropdown.setCurrentIndex(index)
+
+            # Set checkbox
+            cpc_widget.database_tab.db_enabled_checkbox.setChecked(True)
+            cpc_widget.database_tab.db_enabled_checkbox.blockSignals(False)
+
+            # Connect to database
+            interval_str = device_config.extra_params.get('db_averaging_interval', '1 minute')
+            interval_map = {'1 minute': 1, '5 minutes': 5, '10 minutes': 10, '15 minutes': 15, '1 hour': 60, '3 hours': 180}
+            interval_minutes = interval_map.get(interval_str, 1)
+
+            success, message = self.database_manager.register_device(device_config.device_id, conn_string)
+            if success:
+                self.database_manager.create_averager(device_config.device_id, interval_minutes)
+                cpc_widget.database_tab.db_status_value.setText("Enabled")
+                cpc_widget.database_tab.db_status_value.setStyleSheet("color: green;")
+                cpc_widget.database_tab.update_global_connection_status()
+                cpc_widget.database_tab.sync_global_status_to_all_cpcs()
+
+    def _update_psm_cpc_connections(self):
+        """Update PSM connected CPC references after all devices are loaded."""
+        for device_config in self.config.devices:
+            if device_config.device_type not in [PSM, PSM2]:
+                continue
+
+            cpc_id = device_config.extra_params.get('connected_cpc', 'None')
+            if cpc_id == 'None':
+                continue
+
+            psm_widget = self.data_holder.device_widgets.get(device_config.device_id)
+            if psm_widget and hasattr(psm_widget, 'connected_cpc_device'):
+                cpc_widget = self.data_holder.device_widgets.get(cpc_id)
+                if cpc_widget:
+                    psm_widget.connected_cpc_device = cpc_widget
+
+    def _update_cpc_dict(self):
+        """Update CPC dictionary for PSM device linking."""
+        self.cpc_dict = {'None': 'None'}
+        for device_config in self.config.devices:
+            if device_config.device_type in [CPC, TSI_CPC]:
+                name = device_config.device_nickname or f"{device_config.device_type_name} {device_config.serial_number}"
+                if not name.strip():
+                    name = device_config.device_type_name
+                self.cpc_dict[name] = device_config.device_id
+
+    def _update_rhtp_dict(self):
+        """Update RHTP dictionary for CPC database linking."""
+        self.rhtp_dict = {'None': 'None'}
+        for device_config in self.config.devices:
+            if device_config.device_type == RHTP:
+                name = device_config.device_nickname or f"{device_config.device_type_name} {device_config.serial_number}"
+                if not name.strip():
+                    name = device_config.device_type_name
+                self.rhtp_dict[name] = device_config.device_id
+
+    def _refresh_psm_cpc_dropdowns(self):
+        """Refresh Connected CPC dropdowns in all PSM widgets."""
+        # Use pre-built cpc_dict for performance (avoids nested iteration)
+        for device_config in self.config.devices:
+            if device_config.device_type in [PSM, PSM2]:
+                psm_widget = self.data_holder.device_widgets.get(device_config.device_id)
+                if psm_widget and hasattr(psm_widget, '_populate_cpc_dropdown'):
+                    psm_widget._populate_cpc_dropdown(self.cpc_dict)
+
+    def x_range_changed(self, viewbox):
+        # if autoscale y is on
+        if self.config.plot_settings.autoscale_y:
+            viewbox.enableAutoRange(axis='y')
+            viewbox.setAutoVisible(y=True)
+
+    # called when main plot's auto range button is clicked
+    def auto_range_clicked(self):
+        # disable follow
+        self.config.plot_settings.follow = False
+        # emit signal to save config
+        self.plot_settings_changed.emit(self.config.plot_settings)
+
+        # set autorange on for individual plots
+        for device_config in self.config.devices:
+            widget = self.data_holder.device_widgets.get(device_config.device_id)
+            if not widget:
+                continue
+
+            if device_config.device_type == ELECTROMETER:
+                for plot in widget.plot_tab.plots:
+                    plot.enableAutoRange()
+            else:
+                widget.plot_tab.plot.enableAutoRange()
+
+    # update device tab name when serial number changes
+    def rename_device(self, device_id: int):
+        """Update tab name based on device type and serial number."""
+        # Find device config
+        device_config = next((d for d in self.config.devices if d.device_id == device_id), None)
+        if not device_config:
+            return
+
+        # Update tab name
+        self.rename_tab(device_id)
+
+    # update device tab name according to nickname or serial number
+    def rename_tab(self, device_id: int):
+        """Update tab name for a device based on nickname or serial number."""
+        # Find device config
+        device_config = next((d for d in self.config.devices if d.device_id == device_id), None)
+        if not device_config:
+            return
+
+        # Check if device widget exists
+        if device_id not in self.data_holder.device_widgets:
+            return
+
+        device_widget = self.data_holder.device_widgets[device_id]
+        tab_index = self.device_tabs.indexOf(device_widget)
+
+        # Build tab name: nickname, or "Type SerialNumber"
+        if device_config.device_nickname:
+            device_name = device_config.device_nickname
+        elif device_config.serial_number:
+            device_name = f"{device_config.device_type_name} {device_config.serial_number}"
+        else:
+            device_name = device_config.device_type_name
+
+        # update tab name in tab bar
+        if tab_index >= 0:
+            self.device_tab_bar.setTabText(tab_index, device_name)
 
     def closeEvent(self, event):
         """Handle application close event - cleanup database connections."""

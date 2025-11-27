@@ -30,35 +30,40 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
     across all devices and makes it easy to add new device types.
 
     Attributes:
-        device_parameter: Reference to the device's parameter tree
-        name: Device name from parameter tree
+        device_config: Reference to the device's configuration (DeviceConfig)
+        name: Device name from config
         dev_id: Device ID for tracking
         dev_type: Device type constant from config
         plot_tab: Widget for plotting device data
         current_data: Typed dataclass containing current measurement values
         settings: Typed dataclass containing device settings (for complex devices)
         errors: Current error state
+        connection: Serial connection (set by app when device is added)
+        is_connected: Runtime connection state flag
     """
 
-    def __init__(self, device_parameter, device_type=None, *args, **kwargs):
+    def __init__(self, device_config, *args, **kwargs):
         """
         Initialize base device.
 
         Args:
-            device_parameter: Parameter tree reference for this device
-            device_type: Device type constant from config (optional)
+            device_config: DeviceConfig instance for this device
             *args, **kwargs: Additional arguments passed to QTabWidget
         """
         super().__init__()
-        self.device_parameter = device_parameter
-        self.name = device_parameter.name()
-        self.dev_id = None  # Will be set by app when device is added
-        self.dev_type = device_type
+        self.device_config = device_config
+        self.name = device_config.device_type_name
+        self.dev_id = device_config.device_id
+        self.dev_type = device_config.device_type
         self.plot_tab = None  # Should be set by subclass
 
+        # Runtime connection state (set by DeviceManager)
+        self.connection = None  # SerialDeviceConnection instance
+        self.is_connected = False  # Connection status flag
+
         # Data storage (device owns its data now)
-        self.current_data = create_device_data(device_type) if device_type else None
-        self.settings = create_device_settings(device_type)
+        self.current_data = create_device_data(device_config.device_type) if device_config.device_type else None
+        self.settings = create_device_settings(device_config.device_type)
         self.errors = {}
 
         # Serial communication state
@@ -115,10 +120,13 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         self.nickname_edit.setPlaceholderText("Enter device nickname...")
         self.nickname_edit.setStyleSheet("padding: 5px;")
 
-        # Connect to parameter tree
+        # Update config when nickname changes
         def update_nickname():
             new_nickname = self.nickname_edit.text()
-            self.device_parameter.child('Device nickname').setValue(new_nickname)
+            self.device_config.device_nickname = new_nickname
+            # Trigger config save via main window (will be connected in app.py)
+            if hasattr(self, 'on_config_changed'):
+                self.on_config_changed()
 
         self.nickname_edit.textChanged.connect(update_nickname)
         form_layout.addRow("Device Nickname:", self.nickname_edit)
@@ -129,9 +137,57 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         form_layout.addRow("Serial Number:", self.serial_number_label)
 
         # Device type display (read-only)
-        self.device_type_label = QLabel(self.device_parameter.name())
+        self.device_type_label = QLabel(self.device_config.device_type_name)
         self.device_type_label.setStyleSheet("color: white; background-color: #2a2a2a; padding: 5px; border-radius: 3px;")
         form_layout.addRow("Device Type:", self.device_type_label)
+
+        # Main plot value dropdown (only for multi-value devices)
+        plot_value_labels = self.get_plot_value_labels()
+        if plot_value_labels:
+            from PyQt5.QtWidgets import QComboBox
+            self.main_plot_dropdown = QComboBox()
+            self.main_plot_dropdown.setStyleSheet("padding: 5px;")
+
+            # Populate dropdown with values
+            for key, label in plot_value_labels.items():
+                self.main_plot_dropdown.addItem(label, key)
+
+            # Set current value from config
+            current_value = self.device_config.extra_params.get('main_plot_value', '')
+            index = self.main_plot_dropdown.findData(current_value)
+            if index >= 0:
+                self.main_plot_dropdown.setCurrentIndex(index)
+
+            # Calculate proper width for dropdown to show full text
+            max_width = 0
+            font_metrics = self.main_plot_dropdown.fontMetrics()
+            for i in range(self.main_plot_dropdown.count()):
+                text = self.main_plot_dropdown.itemText(i)
+                text_width = font_metrics.boundingRect(text).width()
+                max_width = max(max_width, text_width)
+
+            # Add padding for dropdown arrow and margins
+            dropdown_width = max_width + 50
+
+            # Set minimum width for both the combo box and its popup view
+            self.main_plot_dropdown.setMinimumWidth(dropdown_width)
+            self.main_plot_dropdown.view().setMinimumWidth(dropdown_width)
+
+            # Connect change signal
+            def update_main_plot_value(index):
+                selected_key = self.main_plot_dropdown.itemData(index)
+                self.device_config.extra_params['main_plot_value'] = selected_key
+                # Trigger config save
+                if hasattr(self, 'on_config_changed'):
+                    self.on_config_changed()
+
+            self.main_plot_dropdown.currentIndexChanged.connect(update_main_plot_value)
+            form_layout.addRow("Main Plot Value:", self.main_plot_dropdown)
+        else:
+            self.main_plot_dropdown = None
+
+        # Store form_layout reference for later use
+        self._device_settings_form_layout = form_layout
 
         form_group.setLayout(form_layout)
         layout.addWidget(form_group)
@@ -140,13 +196,8 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         # Store the device tab (will be inserted at the end by _add_device_tab_at_end)
         self._device_settings_tab = settings_tab
 
-        # Update values from parameter tree
+        # Update values from config
         self._update_device_settings_display()
-
-        # Connect parameter signals to update display
-        self.device_parameter.child('COM port').sigValueChanged.connect(self._update_device_settings_display)
-        self.device_parameter.child('Serial number').sigValueChanged.connect(self._update_device_settings_display)
-        self.device_parameter.child('Device nickname').sigValueChanged.connect(self._update_nickname_display)
 
     def _add_device_tab_at_end(self):
         """Insert the Device settings tab at the end of all tabs."""
@@ -155,24 +206,23 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
             self.addTab(self._device_settings_tab, "Device")
 
     def _update_device_settings_display(self):
-        """Update the device settings display from parameter tree."""
+        """Update the device settings display from config."""
         # Update COM port
-        com_port = self.device_parameter.child('COM port').value()
+        com_port = self.device_config.com_port
         if com_port and com_port != 'Select port...':
             self.com_port_label.setText(str(com_port))
         else:
             self.com_port_label.setText("Not set")
 
         # Update serial number
-        serial_number = self.device_parameter.child('Serial number').value()
+        serial_number = self.device_config.serial_number
         if serial_number:
             self.serial_number_label.setText(serial_number)
         else:
             self.serial_number_label.setText("Not detected")
 
-    def _update_nickname_display(self):
-        """Update nickname display without triggering textChanged signal."""
-        nickname = self.device_parameter.child('Device nickname').value()
+        # Update nickname
+        nickname = self.device_config.device_nickname
         # Block signals to prevent feedback loop
         self.nickname_edit.blockSignals(True)
         self.nickname_edit.setText(nickname)
@@ -196,7 +246,7 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
             return
 
         # Get current device type for filtering
-        current_device_type = self.device_parameter.name()
+        current_device_type = self.device_config.device_type_name
 
         # Open port selection dialog with filtering
         dialog = PortSelectionDialog(
@@ -216,31 +266,36 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
     def _change_device_port(self, new_port, new_type):
         """Change device to a different COM port and reconnect."""
         # Get current port
-        old_port = self.device_parameter.child('COM port').value()
+        old_port = self.device_config.com_port
 
         logging.info(f"[PORT CHANGE] Device {self.dev_id} changing from {old_port} to {new_port}")
 
         # Close existing connection if connected
         try:
-            if self.device_parameter.child('Connected').value():
-                connection = self.device_parameter.child('Connection').value()
-                if hasattr(connection, 'connection') and connection.connection.is_open:
-                    connection.close()
+            if self.is_connected and self.connection:
+                if hasattr(self.connection, 'connection') and self.connection.connection.is_open:
+                    self.connection.close()
                     logging.info(f"[PORT CHANGE] Closed connection on {old_port}")
         except Exception as e:
             logging.error(f"[PORT CHANGE] Error closing old connection: {e}")
 
-        # Update COM port parameter
-        self.device_parameter.child('COM port').setValue(new_port)
+        # Update COM port in config
+        self.device_config.com_port = new_port
 
         # Update the connection object's port
         try:
-            connection = self.device_parameter.child('Connection').value()
-            if hasattr(connection, 'set_port'):
-                connection.set_port(new_port)
+            if self.connection and hasattr(self.connection, 'set_port'):
+                self.connection.set_port(new_port)
                 logging.info(f"[PORT CHANGE] Updated connection port to {new_port}")
         except Exception as e:
             logging.error(f"[PORT CHANGE] Error updating connection port: {e}")
+
+        # Update display
+        self._update_device_settings_display()
+
+        # Trigger config save via main window
+        if hasattr(self, 'on_config_changed'):
+            self.on_config_changed()
 
         # The connection will be automatically re-established by the connection_test timer
 
@@ -320,6 +375,24 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         Example:
             CPC: {':pd': 86400, ':pr': 86400} → 24-hour pulse duration/ratio buffers
             Most devices: {} → no rolling buffers needed
+        """
+        return {}
+
+    def get_plot_value_labels(self):
+        """
+        Get human-readable labels for plot values.
+
+        Override this method for devices with multiple plottable values
+        to provide user-friendly names for the dropdown selector.
+
+        Returns:
+            dict: {key_suffix: label} mapping plot keys to display names
+                 Empty dict means no dropdown needed (single value device)
+
+        Example:
+            RHTP: {':rh': 'Relative Humidity', ':t': 'Temperature', ':p': 'Pressure'}
+            AFM: {':f': 'Flow', ':sf': 'Standard Flow', ':rh': 'RH', ':t': 'Temp', ':p': 'Pressure'}
+            Single-value device: {} (default)
         """
         return {}
 
@@ -451,7 +524,7 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         """
         pass
 
-    def send_read_commands(self, dev_conn, device_param):
+    def send_read_commands(self, dev_conn, device_config):
         """
         Send device-specific read commands to request data.
 
@@ -463,11 +536,11 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
 
         Args:
             dev_conn: Connection object with send_message() method
-            device_param: Parameter tree reference for this device
+            device_config: DeviceConfig object for this device
         """
         pass
 
-    def validate_10hz_mode(self, params, device_param):
+    def validate_10hz_mode(self, app_config, device_config):
         """
         Validate and synchronize 10 Hz mode settings.
 
@@ -476,8 +549,8 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         - PSM: Ensure connected CPC has 10Hz enabled
 
         Args:
-            params: Root parameter tree (for accessing other devices)
-            device_param: Parameter tree reference for this device
+            app_config: AppConfig object (for accessing other devices)
+            device_config: DeviceConfig object for this device
         """
         pass
 
@@ -675,7 +748,7 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
 
         return results
 
-    def process_parsed_messages(self, parsed_messages, device_param, data_holder):
+    def process_parsed_messages(self, parsed_messages, device_config, data_holder):
         """
         Process parsed messages and update device state.
 
@@ -690,7 +763,7 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
 
         Args:
             parsed_messages: List of parsed message dicts from handle_serial_data()
-            device_param: Parameter tree reference for this device
+            device_config: DeviceConfig object for this device
             data_holder: Reference to DataHolder for shared state
 
         Returns:
@@ -802,7 +875,7 @@ class SimpleDevice(BaseDevice):
         from utils import create_error_response
         return create_error_response(message, command, error)
 
-    def send_read_commands(self, dev_conn, device_param):
+    def send_read_commands(self, dev_conn, device_config):
         """
         Default implementation for simple read-command devices.
 
@@ -865,9 +938,9 @@ class ComplexDevice(BaseDevice):
     Examples: CPC, PSM, eDiluter.
     """
 
-    def __init__(self, device_parameter, device_type=None, *args, **kwargs):
+    def __init__(self, device_config, *args, **kwargs):
         """Initialize complex device with additional tabs and widgets."""
-        super().__init__(device_parameter, device_type, *args, **kwargs)
+        super().__init__(device_config, *args, **kwargs)
         self.set_tab = None  # Should be set by subclass
         self.status_tab = None  # Should be set by subclass
 

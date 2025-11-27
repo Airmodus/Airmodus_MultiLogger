@@ -30,13 +30,15 @@ class PSMContourTab(QWidget):
     - Color: log10(dN/dlogDp) concentration
     """
 
-    def __init__(self, device_parameter):
+    def __init__(self, device_config, app_config=None):
         super().__init__()
-        self.device_parameter = device_parameter
+        self.device_config = device_config
+        self.app_config = app_config  # Will be set later by PSM widget
 
         # State flags
         self.calibration_loaded = False
         self.plot_initialized = False
+        self._historical_data_loaded = False  # Track if we've loaded historical data
 
         # Calibration data
         self.calibration_df = None
@@ -63,6 +65,17 @@ class PSMContourTab(QWidget):
 
         # Try to auto-load calibration on startup
         self._try_autoload_calibration()
+
+    def showEvent(self, event):
+        """Override showEvent to lazily load historical data when tab becomes visible."""
+        super().showEvent(event)
+        # Load historical data on first show (if calibration is loaded)
+        # Only load if this widget is actually visible to the user (not just being initialized)
+        if self.calibration_loaded and not self._historical_data_loaded and self.isVisible():
+            self._historical_data_loaded = True
+            # Defer to next event loop to avoid blocking tab switch
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(100, self._load_historical_data)
 
     def _create_calibration_prompt(self):
         """Create the initial calibration file prompt view."""
@@ -141,12 +154,8 @@ class PSMContourTab(QWidget):
     def _try_autoload_calibration(self):
         """Try to auto-load calibration file from saved parameter."""
         try:
-            # Check if parameter exists (may not exist for devices loaded from old configs)
-            calib_param = self.device_parameter.child('Calibration file path')
-            if calib_param is None:
-                return
-
-            calib_path = calib_param.value()
+            # Get calibration path from device config extra_params
+            calib_path = self.device_config.extra_params.get('calibration_file_path', '')
             if calib_path and os.path.exists(calib_path):
                 self._load_calibration(calib_path)
         except Exception as e:
@@ -217,8 +226,8 @@ class PSMContourTab(QWidget):
                            self.calibration_df['cal_maxdeteff'].iloc[-1])
             )
 
-            # Save calibration path to parameter
-            self.device_parameter.child('Calibration file path').setValue(file_path)
+            # Save calibration path to config
+            self.device_config.extra_params['calibration_file_path'] = file_path
 
             # Mark calibration as loaded
             self.calibration_loaded = True
@@ -232,8 +241,8 @@ class PSMContourTab(QWidget):
 
             print(f"Calibration loaded: {num_bins} bins from {min_diameter:.2f} to {max_diameter:.2f} nm")
 
-            # Auto-load historical data after calibration loads
-            self._load_historical_data()
+            # Don't auto-load historical data immediately - defer to when tab is shown
+            # This prevents blocking the main thread during device creation
 
         except Exception as e:
             print(f"Error loading calibration file: {e}")
@@ -267,7 +276,7 @@ class PSMContourTab(QWidget):
         clear_buffer_action.triggered.connect(self._clear_scan_buffer)
 
         reload_action = menu.addAction("Reload historical data")
-        reload_action.triggered.connect(self._load_historical_data)
+        reload_action.triggered.connect(lambda: (setattr(self, '_historical_data_loaded', False), self._load_historical_data()))
 
         # Show menu at button position
         menu.exec_(self.settings_btn.mapToGlobal(QPoint(0, self.settings_btn.height())))
@@ -275,6 +284,7 @@ class PSMContourTab(QWidget):
     def _clear_calibration(self):
         """Clear calibration and return to prompt view."""
         self.calibration_loaded = False
+        self._historical_data_loaded = False  # Reset flag
         self.calibration_df = None
         self.bin_limits_dp = None
         self.bin_centers_dp = None
@@ -284,7 +294,7 @@ class PSMContourTab(QWidget):
         self._current_scan = None
 
         # Clear parameter
-        self.device_parameter.child('Calibration file path').setValue('')
+        self.device_config.extra_params['calibration_file_path'] = ''
 
         # Switch back to prompt view
         self.plot_widget.hide()
@@ -505,26 +515,18 @@ class PSMContourTab(QWidget):
             return
 
         try:
-            # Get device information from parameters
-            device_type = self.device_parameter.child('Device type').value()
-            serial_number = self.device_parameter.child('Serial number').value()
-            device_nickname = self.device_parameter.child('Device nickname').value()
+            # Get device information from config
+            device_type = self.device_config.device_type
+            serial_number = self.device_config.serial_number
+            device_nickname = self.device_config.device_nickname
 
-            # Get file path from global settings
-            # Navigate up to root parameter tree
-            # device_parameter -> Device settings -> root
-            device_settings = self.device_parameter.parent()
-            if device_settings is None:
-                print("Cannot access Device settings")
+            # Get file path from global config
+            if not self.app_config:
+                print("Cannot access app config")
                 return
 
-            root_params = device_settings.parent()
-            if root_params is None:
-                print("Cannot access root parameters")
-                return
-
-            file_path = root_params.child('Data settings').child('File path').value()
-            file_tag = root_params.child('Data settings').child('File tag').value()
+            file_path = self.app_config.data_settings.file_path
+            file_tag = self.app_config.data_settings.file_tag
 
             print(f"Searching for today's .dat file in: {file_path}")
 

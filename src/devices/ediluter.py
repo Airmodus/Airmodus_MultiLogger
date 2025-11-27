@@ -12,8 +12,8 @@ from devices.data_writers import EDiluterDataWriter
 
 # eDiluter widget
 class eDiluterWidget(ComplexDevice):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__(device_parameter, device_type=EDILUTER, *args, **kwargs)
+    def __init__(self, device_config, *args, **kwargs):
+        super().__init__(device_config, *args, **kwargs)
         self.current_mode = None # used for storing current mode
         # create set tab for eDiluter
         self.set_tab = eDiluterSetTab()
@@ -81,7 +81,7 @@ class eDiluterWidget(ComplexDevice):
                 return f"DF: {dilution:.0f}"
         return super().get_status_bar_text()
 
-    def process_parsed_messages(self, parsed_messages, device_param, data_holder):
+    def process_parsed_messages(self, parsed_messages, device_config, data_holder):
         """
         Process eDiluter messages with buffering and GUI updates.
         """

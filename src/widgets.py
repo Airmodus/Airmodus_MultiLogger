@@ -339,17 +339,42 @@ class TabConfirmationPopup(QWidget):
             tab_bar: QTabBar instance
             tab_index: Index of the tab to position below
         """
-        # Get tab rectangle and convert to global coordinates
-        tab_rect = tab_bar.tabRect(tab_index)
-        global_pos = tab_bar.mapToGlobal(tab_rect.bottomLeft())
+        from PyQt5.QtWidgets import QTabBar, QApplication
+        from PyQt5.QtCore import QPoint
 
-        # Position popup on the right side of the tab (aligned with X button)
-        # Place it so the right edge of popup aligns with right edge of tab
-        popup_x = global_pos.x() + tab_rect.width() - self.width()
-        popup_y = global_pos.y() + 2  # Small gap below tab
+        # Get the close button for positioning
+        close_button = tab_bar.tabButton(tab_index, QTabBar.RightSide)
+
+        # Try multiple positioning strategies in order of preference
+        if close_button and close_button.isVisible():
+            # Strategy 1: Position relative to close button using geometry
+            button_geometry = close_button.geometry()
+            button_global_pos = close_button.parentWidget().mapToGlobal(button_geometry.topLeft())
+
+            popup_x = button_global_pos.x() + button_geometry.width() - self.width()
+            popup_y = button_global_pos.y() + button_geometry.height() + 2
+        else:
+            # Strategy 2: Use tab rectangle
+            tab_rect = tab_bar.tabRect(tab_index)
+
+            if not tab_rect.isNull() and not tab_rect.isEmpty():
+                global_pos = tab_bar.mapToGlobal(tab_rect.bottomRight())
+                popup_x = global_pos.x() - self.width()
+                popup_y = global_pos.y() + 2
+            else:
+                # Strategy 3: Fallback to safe position below tab bar center
+                tab_bar_global = tab_bar.mapToGlobal(QPoint(0, 0))
+                popup_x = tab_bar_global.x() + (tab_bar.width() // 2) - (self.width() // 2)
+                popup_y = tab_bar_global.y() + tab_bar.height() + 5
+
+        # Ensure popup is within screen bounds
+        screen = QApplication.desktop().screenGeometry()
+        popup_x = max(0, min(popup_x, screen.width() - self.width()))
+        popup_y = max(0, min(popup_y, screen.height() - self.height()))
 
         self.move(popup_x, popup_y)
         self.show()
+        self.raise_()  # Bring to front
         self.activateWindow()  # Ensure popup gets focus
 
 

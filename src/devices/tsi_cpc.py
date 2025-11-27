@@ -7,8 +7,8 @@ from devices.data_writers import TSICPCDataWriter
 
 # TSI CPC widget
 class TSIWidget(SimpleDevice):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__(device_parameter, device_type=TSI_CPC, *args, **kwargs)
+    def __init__(self, device_config, *args, **kwargs):
+        super().__init__(device_config, *args, **kwargs)
         # create plot widget for TSI CPC (uses CPC plot type)
         self.plot_tab = SinglePlot(device_type=CPC)
         self.addTab(self.plot_tab, "TSI CPC plot")
@@ -24,6 +24,13 @@ class TSIWidget(SimpleDevice):
     def get_plot_keys(self):
         """TSI CPC has concentration and raw concentration plots like Airmodus CPC."""
         return ['', ':raw']
+
+    def get_plot_value_labels(self):
+        """Return labels for TSI CPC plot values."""
+        return {
+            '': 'Concentration (#/cc)',
+            ':raw': 'Raw Concentration (#/cc)'
+        }
 
     def get_read_command(self):
         """TSI CPC auto-pushes data, no read command needed."""
@@ -96,7 +103,7 @@ class TSIWidget(SimpleDevice):
                 'update_gui': False
             }
 
-    def send_read_commands(self, dev_conn, device_param):
+    def send_read_commands(self, dev_conn, device_config):
         """Send TSI CPC read commands."""
         dev_conn.send_multiple_messages(self)
 

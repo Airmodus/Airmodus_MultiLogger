@@ -8,8 +8,8 @@ from plotting.device_plot_configs import ExampleDevicePlotConfig
 # Example device widget - demonstrates minimal device pattern
 @register_device(EXAMPLE_DEVICE)
 class ExampleDeviceWidget(SimpleDevice):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__(device_parameter, device_type=EXAMPLE_DEVICE, *args, **kwargs)
+    def __init__(self, device_config, *args, **kwargs):
+        super().__init__(device_config, *args, **kwargs)
 
         # Create plot widget
         self.plot_tab = SinglePlot(device_type=EXAMPLE_DEVICE)

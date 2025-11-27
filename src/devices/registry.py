@@ -54,25 +54,22 @@ class DeviceConfig:
         self.setup_connections_func = setup_connections_func
         self.has_special_setup = has_special_setup
 
-    def create_widget(self, device_param, device_type=None):
+    def create_widget(self, device_config):
         """Create widget instance for this device type."""
-        if device_type:
-            return self.widget_class(device_param, device_type)
-        else:
-            return self.widget_class(device_param)
+        return self.widget_class(device_config)
 
-    def setup_connections(self, widget, device_param, connection, app):
+    def setup_connections(self, widget, device_config, connection, app):
         """Set up device-specific signal/slot connections."""
         if self.setup_connections_func:
-            self.setup_connections_func(widget, device_param, connection, app)
+            self.setup_connections_func(widget, device_config, connection, app)
 
 
 # Connection setup functions for each device type
-def setup_cpc_connections(widget, device_param, connection, app):
+def setup_cpc_connections(widget, device_config, connection, app):
     """Set up CPC-specific connections."""
     from utils import command_entered
 
-    device_id = device_param.child('DevID').value()
+    device_id = device_config.device_id
 
     # Set tab buttons
     widget.set_tab.drain.clicked.connect(
@@ -113,19 +110,15 @@ def setup_cpc_connections(widget, device_param, connection, app):
     widget.pulse_quality.average_time_select.currentIndexChanged.connect(
         lambda: app.plot_manager.pulse_quality_update(device_id))
     widget.pulse_quality.start_analysis.clicked.connect(
-        lambda: app.pulse_analysis_start(device_id, device_param))
-
-    # Update CPC dict on nickname change
-    device_param.child("Device nickname").sigValueChanged.connect(
-        device_param.parent().update_cpc_dict)
+        lambda: app.pulse_analysis_start(device_id, device_config))
 
 
-def setup_psm_connections(widget, device_param, connection, app):
+def setup_psm_connections(widget, device_config, connection, app):
     """Set up PSM-specific connections."""
     from utils import command_entered, ten_hz_clicked, psm_update, psm_flow_send, cpc_flow_send
 
-    device_id = device_param.child('DevID').value()
-    device_type = device_param.child('Device type').value()
+    device_id = device_config.device_id
+    device_type = device_config.device_type
 
     # Measure tab buttons
     widget.measure_tab.scan.clicked.connect(
@@ -135,7 +128,7 @@ def setup_psm_connections(widget, device_param, connection, app):
     widget.measure_tab.fixed.clicked.connect(
         lambda: connection.send_set(widget.measure_tab.compile_fixed()))
     widget.measure_tab.ten_hz.clicked.connect(
-        lambda: ten_hz_clicked(device_param, widget))
+        lambda: ten_hz_clicked(device_config, widget))
 
     # Temperature setpoints
     temps = [
@@ -159,21 +152,21 @@ def setup_psm_connections(widget, device_param, connection, app):
 
     # CPC inlet flow
     widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(
-        lambda value: psm_flow_send(device_param, value))
+        lambda value: psm_flow_send(device_config, value))
     widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
     widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(
-        lambda: psm_flow_send(device_param, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
+        lambda: psm_flow_send(device_config, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
     widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
 
     # CPC sample flow
     widget.set_tab.set_cpc_sample_flow.value_spinbox.stepChanged.connect(
-        lambda value: cpc_flow_send(device_param, value))
+        lambda value: cpc_flow_send(device_config, value))
     widget.set_tab.set_cpc_sample_flow.value_input.returnPressed.connect(
-        lambda: cpc_flow_send(device_param, float(widget.set_tab.set_cpc_sample_flow.value_input.text())))
+        lambda: cpc_flow_send(device_config, float(widget.set_tab.set_cpc_sample_flow.value_input.text())))
 
-    # CO flow (PSM Retrofit only)
+    # CO flow (PSM Retrofit only) - Save to extra_params
     from config import PSM
     if device_type == PSM:
         widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(
@@ -181,13 +174,13 @@ def setup_psm_connections(widget, device_param, connection, app):
         widget.set_tab.set_co_flow.value_input.returnPressed.connect(
             lambda: psm_update(device_id, app.data_holder.device_widgets))
         widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(
-            lambda value: device_param.child('CO flow').setValue(str(round(value, 3))))
+            lambda value: device_config.extra_params.update({'co_flow': str(round(value, 3))}))
         widget.set_tab.set_co_flow.value_input.returnPressed.connect(
-            lambda: device_param.child('CO flow').setValue(widget.set_tab.set_co_flow.value_input.text()))
+            lambda: device_config.extra_params.update({'co_flow': widget.set_tab.set_co_flow.value_input.text()}))
 
     # Command input
     widget.set_tab.command_widget.command_input.returnPressed.connect(
-        lambda: command_entered(device_id, device_param, app.data_holder.device_widgets,
+        lambda: command_entered(device_id, device_config, app.data_holder.device_widgets,
                                app.data_holder.latest_command))
     widget.set_tab.command_widget.command_input.returnPressed.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
@@ -203,28 +196,19 @@ def setup_psm_connections(widget, device_param, connection, app):
     # Wire up connected CPC device reference
     def update_connected_cpc():
         """Update PSM's reference to connected CPC widget."""
-        try:
-            cpc_id = device_param.child('Connected CPC').value()
-            if cpc_id != 'None':
-                widget.connected_cpc_device = app.data_holder.device_widgets.get(cpc_id)
-            else:
-                widget.connected_cpc_device = None
-        except KeyError:
-            # Connected CPC parameter doesn't exist yet (still being initialized)
+        cpc_id = device_config.extra_params.get('connected_cpc', 'None')
+        if cpc_id != 'None':
+            widget.connected_cpc_device = app.data_holder.device_widgets.get(cpc_id)
+        else:
             widget.connected_cpc_device = None
 
-    # Set initial reference and update when parameter changes
+    # Set initial reference
     update_connected_cpc()
-    try:
-        device_param.child('Connected CPC').sigValueChanged.connect(lambda: update_connected_cpc())
-    except KeyError:
-        # Connected CPC parameter doesn't exist yet, signal will be connected later
-        pass
 
 
-def setup_ediluter_connections(widget, device_param, connection, app):
+def setup_ediluter_connections(widget, device_config, connection, app):
     """Set up eDiluter-specific connections."""
-    device_id = device_param.child('DevID').value()
+    device_id = device_config.device_id
 
     # Mode buttons
     widget.set_tab.init.clicked.connect(
@@ -248,52 +232,16 @@ def setup_ediluter_connections(widget, device_param, connection, app):
 
     # Command input
     widget.set_tab.command_widget.command_input.returnPressed.connect(
-        lambda: app.command_entered(device_id, device_param, app.data_holder.device_widgets,
+        lambda: app.command_entered(device_id, device_config, app.data_holder.device_widgets,
                                     app.data_holder.latest_command))
 
 
-def setup_tsi_cpc_connections(widget, device_param, connection, app):
+def setup_tsi_cpc_connections(widget, device_config, connection, app):
     """Set up TSI CPC-specific connections."""
-    # Add baud rate parameter
-    device_param.addChild({'name': 'Baud rate', 'type': 'int', 'value': 115200})
-    device_param.child('Baud rate').sigValueChanged.connect(
-        lambda: connection.set_baud_rate(device_param.child('Baud rate').value()))
-
-    # Update CPC dict on nickname change
-    device_param.child("Device nickname").sigValueChanged.connect(
-        device_param.parent().update_cpc_dict)
-
-
-def setup_rhtp_connections(widget, device_param, connection, app):
-    """Set up RHTP-specific connections."""
-    from PyQt5.QtCore import QTimer
-    device_id = device_param.child('DevID').value()
-
-    # Check if there are other RHTP devices
-    for dev in app.params.child('Device settings').children():
-        if dev.child('Device type').value() == RHTP and dev.child('DevID').value() != device_id:
-            QTimer.singleShot(50, lambda d=dev: app.rhtp_axis_changed(d.child('Plot to main').value()))
-            break
-
-    # Connect plot axis change
-    QTimer.singleShot(60, lambda: device_param.child("Plot to main").sigValueChanged.connect(
-        lambda parameter: app.rhtp_axis_changed(parameter.value())))
-
-
-def setup_afm_connections(widget, device_param, connection, app):
-    """Set up AFM-specific connections."""
-    from PyQt5.QtCore import QTimer
-    device_id = device_param.child('DevID').value()
-
-    # Check if there are other AFM devices
-    for dev in app.params.child('Device settings').children():
-        if dev.child('Device type').value() == AFM and dev.child('DevID').value() != device_id:
-            QTimer.singleShot(50, lambda d=dev: app.afm_axis_changed(d.child('Plot to main').value()))
-            break
-
-    # Connect plot axis change
-    QTimer.singleShot(60, lambda: device_param.child("Plot to main").sigValueChanged.connect(
-        lambda parameter: app.afm_axis_changed(parameter.value())))
+    # Store baud rate in extra_params
+    if 'baud_rate' not in device_config.extra_params:
+        device_config.extra_params['baud_rate'] = 115200
+        connection.set_baud_rate(115200)
 
 
 from devices.cpc import CPCWidget
@@ -334,13 +282,11 @@ DEVICE_REGISTRY = {
 
     RHTP: DeviceConfig(
         widget_class=RHTPWidget,
-        setup_connections_func=setup_rhtp_connections,
         has_special_setup=True  # Has special viewbox setup
     ),
 
     AFM: DeviceConfig(
         widget_class=AFMWidget,
-        setup_connections_func=setup_afm_connections,
         has_special_setup=True  # Has special viewbox setup
     ),
 
@@ -360,13 +306,13 @@ DEVICE_REGISTRY = {
 }
 
 
-def create_device_widget(device_type, device_param):
+def create_device_widget(device_type, device_config):
     """
     Factory function to create a device widget.
 
     Args:
         device_type: Device type constant (CPC, PSM, etc.)
-        device_param: Device parameter tree reference
+        device_config: DeviceConfig instance
 
     Returns:
         Device widget instance
@@ -378,17 +324,17 @@ def create_device_widget(device_type, device_param):
         raise ValueError(f"Unknown device type: {device_type}")
 
     config = DEVICE_REGISTRY[device_type]
-    return config.create_widget(device_param, device_type if device_type in [PSM, PSM2] else None)
+    return config.create_widget(device_config)
 
 
-def setup_device_connections(device_type, widget, device_param, connection, app):
+def setup_device_connections(device_type, widget, device_config, connection, app):
     """
     Set up device-specific signal/slot connections.
 
     Args:
         device_type: Device type constant
         widget: Device widget instance
-        device_param: Device parameter tree reference
+        device_config: DeviceConfig instance
         connection: Serial connection object
         app: Main application instance
     """
@@ -397,7 +343,7 @@ def setup_device_connections(device_type, widget, device_param, connection, app)
 
     config = DEVICE_REGISTRY[device_type]
     if config.setup_connections_func:
-        config.setup_connections_func(widget, device_param, connection, app)
+        config.setup_connections_func(widget, device_config, connection, app)
 
 
 def has_special_viewbox_setup(device_type):

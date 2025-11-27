@@ -8,8 +8,8 @@ from devices.data_writers import ElectrometerDataWriter
 
 # ELECTROMETER widget
 class ElectrometerWidget(SimpleDevice):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__(device_parameter, device_type=ELECTROMETER, *args, **kwargs)
+    def __init__(self, device_config, *args, **kwargs):
+        super().__init__(device_config, *args, **kwargs)
         # create plot widget for Electrometer
         self.plot_tab = ElectrometerPlot()
         self.addTab(self.plot_tab, "Electrometer plot")
@@ -25,6 +25,14 @@ class ElectrometerWidget(SimpleDevice):
     def get_plot_keys(self):
         """Electrometer has three voltage channels."""
         return [':1', ':2', ':3']
+
+    def get_plot_value_labels(self):
+        """Return labels for Electrometer plot values."""
+        return {
+            ':1': 'Channel 1 (V)',
+            ':2': 'Channel 2 (V)',
+            ':3': 'Channel 3 (V)'
+        }
 
     def get_read_command(self):
         """Electrometer requires a read command."""
@@ -67,7 +75,7 @@ class ElectrometerWidget(SimpleDevice):
                 'update_gui': False
             }
 
-    def send_read_commands(self, dev_conn, device_param):
+    def send_read_commands(self, dev_conn, device_config):
         """
         Send Electrometer read command.
 

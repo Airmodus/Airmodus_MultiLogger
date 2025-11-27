@@ -7,8 +7,8 @@ from devices.data_writers import AFMDataWriter
 
 # AFM widget
 class AFMWidget(SimpleDevice):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__(device_parameter, device_type=AFM, *args, **kwargs)
+    def __init__(self, device_config, *args, **kwargs):
+        super().__init__(device_config, *args, **kwargs)
         # create plot widget for AFM
         self.plot_tab = AFMPlot()
         self.addTab(self.plot_tab, "AFM plot")
@@ -24,6 +24,16 @@ class AFMWidget(SimpleDevice):
     def get_plot_keys(self):
         """AFM has flow, standard flow, RH, temperature, and pressure."""
         return [':f', ':sf', ':rh', ':t', ':p']
+
+    def get_plot_value_labels(self):
+        """Return labels for AFM plot values."""
+        return {
+            ':f': 'Flow (L/min)',
+            ':sf': 'Standard Flow (L/min)',
+            ':rh': 'Relative Humidity (%)',
+            ':t': 'Temperature (°C)',
+            ':p': 'Pressure (hPa)'
+        }
 
     def get_read_command(self):
         """AFM auto-pushes data, no read command needed."""

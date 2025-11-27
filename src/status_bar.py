@@ -194,10 +194,10 @@ class MultiLoggerStatusBar(QStatusBar):
     [Device1] [Device2] [Device3] | [Saving] | [Errors] | [Time]
     """
 
-    def __init__(self, data_holder, params, parent=None):
+    def __init__(self, data_holder, config, parent=None):
         super().__init__(parent)
         self.data_holder = data_holder
-        self.params = params
+        self.config = config
         self.device_widgets = {}  # dev_id -> DeviceStatusWidget
         self.device_separators = {}  # dev_id -> VerticalSeparator (separator after this device)
         self.main_window = None  # Set by MainWindow after creation
@@ -333,18 +333,13 @@ class MultiLoggerStatusBar(QStatusBar):
         if dev_id not in self.device_widgets:
             return
 
-        # Get device parameter
-        device_param = None
-        for dev in self.params.child('Device settings').children():
-            if dev.child('DevID').value() == dev_id:
-                device_param = dev
-                break
-
-        if not device_param:
+        # Get device widget
+        device_widget = self.data_holder.device_widgets.get(dev_id)
+        if not device_widget:
             return
 
-        # Get connection status
-        connected = device_param.child('Connected').value()
+        # Get connection status from runtime state
+        connected = device_widget.is_connected
 
         # Get error status
         has_error = self.data_holder.device_errors.get(dev_id, False)
@@ -393,7 +388,7 @@ class MultiLoggerStatusBar(QStatusBar):
     def update_global_status(self):
         """Update global status (saving, errors, time)."""
         # Update saving status
-        save_data = self.params.child('Data settings').child('Save data').value()
+        save_data = self.config.data_settings.save_data
         saving_status = self.data_holder.saving_status
 
         if not save_data:
@@ -439,10 +434,9 @@ class MultiLoggerStatusBar(QStatusBar):
 
             # Build error tooltip
             error_devices = []
-            for dev in self.params.child('Device settings').children():
-                dev_id = dev.child('DevID').value()
-                if self.data_holder.device_errors.get(dev_id, False):
-                    device_name = dev.child('Device nickname').value() or dev.name()
+            for device_config in self.config.devices:
+                if self.data_holder.device_errors.get(device_config.device_id, False):
+                    device_name = device_config.device_nickname or device_config.device_type_name
                     error_devices.append(f"• {device_name}")
 
             tooltip = "<b>Devices with errors:</b><br>" + "<br>".join(error_devices)

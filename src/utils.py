@@ -1,6 +1,5 @@
 from numpy import full, nan, roll
 from config import MAX_TIME_SEC, CPC, PSM, PSM2
-from params import p  # For accessing params in some helpers if needed
 
 # compile settings list for CPC .par file
 def compile_cpc_settings(prnt, pall):
@@ -64,43 +63,41 @@ def psm_update(device_id, device_widgets):
         device.needs_settings_fetch = True
 
 # sends set flow rate to PSM
-def psm_flow_send(device, value):
-    device.child("Connection").value().send_set_val(value, ":SET:FLOW:CPC ", decimals=3)
+def psm_flow_send(psm_widget, value):
+    if psm_widget.connection:
+        psm_widget.connection.send_set_val(value, ":SET:FLOW:CPC ", decimals=3)
 
 # sends set flow rate to CPC
-def cpc_flow_send(device, value):
-    # get connected CPC ID
-    cpc_id = device.child("Connected CPC").value()
+def cpc_flow_send(psm_widget, value, device_widgets):
+    # get connected CPC ID from PSM device config
+    cpc_id = psm_widget.device_config.extra_params.get('connected_cpc', 'None')
     # if PSM is connected to CPC, send value to CPC
     if cpc_id != 'None':
-        # get connected CPC device parameter
-        for cpc in p.child('Device settings').children():
-            if cpc.child('DevID').value() == cpc_id:
-                cpc_device = cpc
-                break
-        # if device is Airmodus CPC
-        if cpc_device.child('Device type').value() == CPC:
+        # get connected CPC widget
+        cpc_widget = device_widgets.get(cpc_id)
+        if cpc_widget and cpc_widget.device_config.device_type == CPC:
             # send flow rate set value to CPC
-            cpc_device.child("Connection").value().send_set_val(value, ":SET:FLOW ", decimals=3)
+            if cpc_widget.connection:
+                cpc_widget.connection.send_set_val(value, ":SET:FLOW ", decimals=3)
 
 # change PSM's 10 Hz parameter and button status
-def ten_hz_clicked(psm_param, psm_widget):
-    # get current status of PSM 10 hz parameter
-    status = psm_param.child('10 hz').value()
+def ten_hz_clicked(psm_widget, config):
+    # get current status of PSM 10 hz parameter from extra_params
+    status = psm_widget.device_config.extra_params.get('10_hz', False)
     # if 10 hz is off, turn it on
     if status == False:
         # set 10 hz flag to True
-        psm_param.child('10 hz').setValue(True)
-        psm_widget.measure_tab.ten_hz.change_color(1)       
+        psm_widget.device_config.extra_params['10_hz'] = True
+        psm_widget.measure_tab.ten_hz.change_color(1)
     # if 10 hz is on, turn it off
     elif status == True:
         # set 10 hz flag to False
-        psm_param.child('10 hz').setValue(False)
+        psm_widget.device_config.extra_params['10_hz'] = False
         psm_widget.measure_tab.ten_hz.change_color(0)
 
 
 # when command is entered, send message to device and update .par file
-def command_entered(dev_id, dev_param, device_widgets, latest_command):
+def command_entered(dev_id, device_widgets, config):
     try:
         # get message from command input and clear input
         device_widget = device_widgets[dev_id]
@@ -111,10 +108,11 @@ def command_entered(dev_id, dev_param, device_widgets, latest_command):
         command_widget.update_text_box(message)
 
         # send message to device
-        dev_param.child('Connection').value().send_message(message)
+        if device_widget.connection:
+            device_widget.connection.send_message(message)
 
         # if saving is on, store command in device's latest_command property
-        if p.child('Data settings').child('Save data').value():
+        if config.data_settings.save_data:
             device_widget.latest_command = message
 
     except Exception as e:

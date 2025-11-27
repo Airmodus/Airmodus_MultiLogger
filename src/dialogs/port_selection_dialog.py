@@ -39,6 +39,9 @@ class PortSelectionDialog(QDialog):
         # Query fresh port data from device_manager
         self.port_info = self._get_port_info()
 
+        # Track port name to table row mapping for incremental updates
+        self._port_to_row = {}
+
         # Build UI
         self._setup_ui()
 
@@ -154,69 +157,194 @@ class PortSelectionDialog(QDialog):
 
         self.setLayout(layout)
 
-    def _populate_table(self):
-        """Fill table with port information."""
-        if not self.port_info:
-            # No ports available
-            self.port_table.setRowCount(1)
-            no_ports_item = QTableWidgetItem("No COM ports detected")
-            no_ports_item.setForeground(QColor('#999'))
-            self.port_table.setItem(0, 0, no_ports_item)
-            self.port_table.setSpan(0, 0, 1, 4)
+    def _add_port_row(self, port, port_data):
+        """Add a new row for the given port."""
+        # Insert new row at the end
+        row = self.port_table.rowCount()
+        self.port_table.insertRow(row)
+
+        # Track this port's row
+        self._port_to_row[port] = row
+
+        # Populate the row
+        # Port
+        port_item = QTableWidgetItem(port)
+        self.port_table.setItem(row, 0, port_item)
+
+        # Device Type
+        device_type = port_data.get('device_type', 'Unknown')
+        type_item = QTableWidgetItem(device_type)
+        self.port_table.setItem(row, 1, type_item)
+
+        # Serial Number
+        serial = port_data.get('serial_number', '-')
+        if serial and len(serial) > 15:
+            serial = serial[:12] + "..."
+        serial_item = QTableWidgetItem(serial)
+        self.port_table.setItem(row, 2, serial_item)
+
+        # Status
+        status = port_data.get('status', 'unknown')
+        status_text = status.replace('_', ' ').title()
+        status_item = QTableWidgetItem(status_text)
+        self.port_table.setItem(row, 3, status_item)
+
+        # Apply styling
+        self._update_row_styling(row, port, port_data)
+
+    def _remove_port_row(self, port):
+        """Remove the row for the given port and update row indices."""
+        if port not in self._port_to_row:
             return
 
-        self.port_table.setRowCount(len(self.port_info))
+        row = self._port_to_row[port]
+        self.port_table.removeRow(row)
 
-        for row, (port, info) in enumerate(self.port_info.items()):
-            # Port
-            port_item = QTableWidgetItem(port)
-            self.port_table.setItem(row, 0, port_item)
+        # Remove from tracking
+        del self._port_to_row[port]
 
-            # Device Type
-            device_type = info.get('device_type', 'Unknown')
-            type_item = QTableWidgetItem(device_type)
-            if device_type and device_type != 'Unknown':
-                type_item.setForeground(QColor('green'))
-                type_item.setToolTip("Device type detected automatically")
-            self.port_table.setItem(row, 1, type_item)
+        # Update indices for all rows after the removed row
+        for p, idx in list(self._port_to_row.items()):
+            if idx > row:
+                self._port_to_row[p] = idx - 1
 
-            # Serial Number
-            serial = info.get('serial_number', '-')
-            if serial and len(serial) > 15:
-                # Truncate long serial numbers
-                serial = serial[:12] + "..."
-            serial_item = QTableWidgetItem(serial)
-            self.port_table.setItem(row, 2, serial_item)
+    def _update_port_row(self, row, port, port_data):
+        """Update an existing row only if data has changed."""
+        changed = False
 
-            # Status
-            status = info.get('status', 'unknown')
-            status_text = status.replace('_', ' ').title()
-            status_item = QTableWidgetItem(status_text)
+        # Check and update Device Type
+        device_type = port_data.get('device_type', 'Unknown')
+        type_item = self.port_table.item(row, 1)
+        if type_item and type_item.text() != device_type:
+            type_item.setText(device_type)
+            changed = True
 
-            # Color code by status
-            if status == 'available':
-                status_item.setForeground(QColor('green'))
-                port_item.setToolTip("Click to add device on this port")
-            elif status in ['in_use', 'connected']:
-                # In filter mode, allow selection of in-use ports (show in yellow/orange)
-                if self.filter_device_type:
-                    status_item.setForeground(QColor('orange'))
-                    port_item.setToolTip("Click to switch this device to this port (will disconnect other device)")
-                else:
-                    # In add new device mode, disable in-use ports
-                    status_item.setForeground(QColor('red'))
-                    # Gray out entire row
-                    for col in range(4):
-                        item = self.port_table.item(row, col)
-                        if item:
-                            item.setForeground(QColor('#999'))
-                            item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
-                    port_item.setToolTip("Port already in use by another device")
-            elif status == 'error':
+        # Check and update Serial Number
+        serial = port_data.get('serial_number', '-')
+        if serial and len(serial) > 15:
+            serial = serial[:12] + "..."
+        serial_item = self.port_table.item(row, 2)
+        if serial_item and serial_item.text() != serial:
+            serial_item.setText(serial)
+            changed = True
+
+        # Check and update Status
+        status = port_data.get('status', 'unknown')
+        status_text = status.replace('_', ' ').title()
+        status_item = self.port_table.item(row, 3)
+        if status_item and status_item.text() != status_text:
+            status_item.setText(status_text)
+            changed = True
+
+        # If any data changed, update styling
+        if changed:
+            self._update_row_styling(row, port, port_data)
+
+    def _update_row_styling(self, row, port, port_data):
+        """Apply styling to a row based on port data."""
+        device_type = port_data.get('device_type', 'Unknown')
+        status = port_data.get('status', 'unknown')
+
+        port_item = self.port_table.item(row, 0)
+        type_item = self.port_table.item(row, 1)
+        status_item = self.port_table.item(row, 3)
+
+        # Style device type
+        if device_type and device_type != 'Unknown':
+            type_item.setForeground(QColor('green'))
+            type_item.setToolTip("Device type detected automatically")
+        else:
+            type_item.setForeground(QColor('black'))
+            type_item.setToolTip("")
+
+        # Style status and entire row based on status
+        if status == 'available':
+            status_item.setForeground(QColor('green'))
+            port_item.setToolTip("Click to add device on this port")
+            # Ensure row is enabled
+            for col in range(4):
+                item = self.port_table.item(row, col)
+                if item:
+                    item.setFlags(item.flags() | Qt.ItemIsEnabled)
+                    if col != 1 and (device_type == 'Unknown' or not device_type):
+                        item.setForeground(QColor('black'))
+        elif status in ['in_use', 'connected']:
+            # In filter mode, allow selection of in-use ports (show in yellow/orange)
+            if self.filter_device_type:
                 status_item.setForeground(QColor('orange'))
-                port_item.setToolTip("Error communicating with port")
+                port_item.setToolTip("Click to switch this device to this port (will disconnect other device)")
+                # Ensure row is enabled
+                for col in range(4):
+                    item = self.port_table.item(row, col)
+                    if item:
+                        item.setFlags(item.flags() | Qt.ItemIsEnabled)
+            else:
+                # In add new device mode, disable in-use ports
+                status_item.setForeground(QColor('red'))
+                port_item.setToolTip("Port already in use by another device")
+                # Gray out entire row
+                for col in range(4):
+                    item = self.port_table.item(row, col)
+                    if item:
+                        item.setForeground(QColor('#999'))
+                        item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+        elif status == 'error':
+            status_item.setForeground(QColor('orange'))
+            port_item.setToolTip("Error communicating with port")
+            # Ensure row is enabled
+            for col in range(4):
+                item = self.port_table.item(row, col)
+                if item:
+                    item.setFlags(item.flags() | Qt.ItemIsEnabled)
 
-            self.port_table.setItem(row, 3, status_item)
+    def _populate_table(self):
+        """Fill table with port information using incremental updates."""
+        # Handle transition between empty and non-empty states
+        if not self.port_info:
+            # No ports available - show message if not already showing
+            if self.port_table.rowCount() != 1 or not self._is_showing_no_ports_message():
+                self.port_table.clearSpans()
+                self.port_table.setRowCount(1)
+                self._port_to_row.clear()
+                no_ports_item = QTableWidgetItem("No COM ports detected")
+                no_ports_item.setForeground(QColor('#999'))
+                self.port_table.setItem(0, 0, no_ports_item)
+                self.port_table.setSpan(0, 0, 1, 4)
+            return
+
+        # If we were showing "no ports" message, clear it and reset tracking
+        if self._is_showing_no_ports_message():
+            self.port_table.clearSpans()
+            self.port_table.setRowCount(0)
+            self._port_to_row.clear()
+
+        # Build sets of current vs new ports
+        current_ports = set(self._port_to_row.keys())
+        new_ports = set(self.port_info.keys())
+
+        # Remove ports that disappeared
+        ports_to_remove = current_ports - new_ports
+        for port in ports_to_remove:
+            self._remove_port_row(port)
+
+        # Add new ports
+        ports_to_add = new_ports - current_ports
+        for port in ports_to_add:
+            self._add_port_row(port, self.port_info[port])
+
+        # Update existing ports (only if data changed)
+        ports_to_update = current_ports & new_ports
+        for port in ports_to_update:
+            row = self._port_to_row[port]
+            self._update_port_row(row, port, self.port_info[port])
+
+    def _is_showing_no_ports_message(self):
+        """Check if the table is currently showing the 'no ports' message."""
+        if self.port_table.rowCount() == 1:
+            first_item = self.port_table.item(0, 0)
+            if first_item and first_item.text() == "No COM ports detected":
+                return True
+        return False
 
     def _on_port_clicked(self, row, column):
         """Handle port selection."""

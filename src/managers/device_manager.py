@@ -22,9 +22,9 @@ class DeviceManager(QObject):
     port_scan_complete = pyqtSignal()
     port_discovered = pyqtSignal(dict)  # port info dict
 
-    def __init__(self, params, data_holder, device_widgets, device_tabs=None, parent=None):
+    def __init__(self, config, data_holder, device_widgets, device_tabs=None, parent=None):
         super().__init__(parent)
-        self.params = params
+        self.config = config
         self.data_holder = data_holder
         self.device_widgets = device_widgets
         self.device_tabs = device_tabs  # Reference to MainWindow.device_tabs (QStackedWidget) for widget lookup
@@ -43,45 +43,56 @@ class DeviceManager(QObject):
         com_port_list = self._com_port_list
         self.data_holder.device_errors = {key: False for key in self.data_holder.device_errors}
 
-        for dev in self.params.child('Device settings').children():
-            connected = dev.child('Connected').value()
+        for device_config in self.config.devices:
+            dev_id = device_config.device_id
+            device_widget = self.data_holder.get_device(dev_id)
+
+            if not device_widget:
+                continue  # Skip if widget not found
+
+            connection = device_widget.connection
+
+            # Format port based on OS
             if self.osx_mode:
-                port = str(dev.child('COM port').value())
+                port = str(device_config.com_port)
             else:
-                port = "COM" + str(dev.child('COM port').value())
-            
-            if connected and port not in com_port_list:
+                port = "COM" + str(device_config.com_port)
+
+            # Check if currently connected
+            was_connected = hasattr(connection, 'connection') and connection.connection.is_open
+
+            # If was connected but port is no longer available, close connection
+            if was_connected and port not in com_port_list:
                 try:
-                    dev.child('Connection').value().close()
+                    connection.close()
                 except Exception as e:
                     logging.error(traceback.format_exc())
+
             connected = False
-            
+
+            # Try to establish or verify connection
             try:
-                if hasattr(dev.child('Connection').value(), 'connection') and dev.child('Connection').value().connection.is_open:
+                if hasattr(connection, 'connection') and connection.connection.is_open:
                     connected = True
                 else:
-                    dev.child('Connection').value().connect()
-                    if dev.child('Connection').value().connection.is_open:
+                    connection.connect()
+                    if connection.connection.is_open:
                         connected = True
             except AttributeError:
                 try:
-                    dev.child('Connection').value().set_port(port)
-                    dev.child('Connection').value().connect()
-                    if dev.child('Connection').value().connection.is_open:
+                    connection.set_port(port)
+                    connection.connect()
+                    if connection.connection.is_open:
                         connected = True
                 except Exception:
                     pass
             except Exception:
                 pass
-            
-            # IDN inquiry and connection state management
-            dev_id = dev.child('DevID').value()
-            device_widget = self.data_holder.get_device(dev_id)
 
+            # Handle connection state changes
             if device_widget:
                 # Handle connection established
-                if connected and not dev.child('Connected').value():
+                if connected and not was_connected:
                     # Log connection
                     logging.info(f"[SERIAL CONNECT] DevID={dev_id} Port={port} DeviceType={device_widget.dev_type}")
 
@@ -92,7 +103,7 @@ class DeviceManager(QObject):
                             print(f"[DEBUG IDN] Device manager: Added device {dev_id} to IDN inquiry list")
 
                     # Device-specific connection setup
-                    device_widget.on_connection_established(dev)
+                    device_widget.on_connection_established(device_config)
 
                     # Update UI styling if device has command widget
                     if device_widget.has_command_widget():
@@ -101,12 +112,12 @@ class DeviceManager(QObject):
                             self.device_widgets[dev_id].setStyleSheet("")
 
                 # Handle disconnection
-                if not connected and dev.child('Connected').value():
+                if not connected and was_connected:
                     # Log disconnection
                     logging.info(f"[SERIAL DISCONNECT] DevID={dev_id} Port={port}")
 
                     # Device-specific cleanup
-                    device_widget.on_disconnection(dev)
+                    device_widget.on_disconnection(device_config)
 
                     # Update UI styling if device has command widget
                     if device_widget.has_command_widget():
@@ -114,7 +125,8 @@ class DeviceManager(QObject):
                             self.device_widgets[dev_id].setObjectName("disconnected")
                             self.device_widgets[dev_id].setStyleSheet("")
 
-            dev.child('Connected').setValue(connected)
+            # Store connected state in widget for runtime access
+            device_widget.is_connected = connected
             if not self.data_holder.first_connection:
                 self.data_holder.first_connection = connected
 
@@ -199,27 +211,21 @@ class DeviceManager(QObject):
         }
 
         # Check if this port is actually connected to a device in the application
-        for dev in self.params.child('Device settings').children():
-            if dev.child('Connected').value():
+        for device_config in self.config.devices:
+            widget = self.data_holder.device_widgets.get(device_config.device_id)
+            if widget and hasattr(widget, 'is_connected') and widget.is_connected:
                 # Get port for this device
                 if self.osx_mode:
-                    port = str(dev.child('COM port').value())
+                    port = str(device_config.com_port)
                 else:
-                    port = "COM" + str(dev.child('COM port').value())
+                    port = "COM" + str(device_config.com_port)
 
                 # Mark this port as connected if it matches the discovered port
                 if port and port != 'Select port...' and port == port_info['port']:
                     port_statuses[port_info['port']] = 'connected'
                     break
 
-        # Update dropdowns progressively with new port info
-        self.params.child('Device settings').update_com_port_dropdowns(
-            self.data_holder.com_descriptions,
-            port_statuses,
-            port_info_dict
-        )
-
-        # Emit signal for UI updates
+        # Emit signal for UI updates (PortSelectionDialog will get fresh data when opened)
         self.port_discovered.emit(port_info)
 
         # Update GUI progressively
@@ -251,13 +257,14 @@ class DeviceManager(QObject):
             }
 
         # Check which ports are actually connected to devices in the application
-        for dev in self.params.child('Device settings').children():
-            if dev.child('Connected').value():
+        for device_config in self.config.devices:
+            widget = self.data_holder.device_widgets.get(device_config.device_id)
+            if widget and hasattr(widget, 'is_connected') and widget.is_connected:
                 # Get port for this device
                 if self.osx_mode:
-                    port = str(dev.child('COM port').value())
+                    port = str(device_config.com_port)
                 else:
-                    port = "COM" + str(dev.child('COM port').value())
+                    port = "COM" + str(device_config.com_port)
 
                 # Mark this port as connected in status dictionary
                 if port and port != 'Select port...' and port in port_statuses:
@@ -281,13 +288,6 @@ class DeviceManager(QObject):
 
         # Update GUI with final results
         self._update_gui_port_display()
-
-        # Update dropdowns for all devices with status and type info
-        self.params.child('Device settings').update_com_port_dropdowns(
-            self.data_holder.com_descriptions,
-            port_statuses,
-            port_info_dict
-        )
 
         # Check if inquiry flag timeout
         if self.data_holder.inquiry_flag and time() > self.data_holder.inquiry_time + 3:
@@ -348,47 +348,45 @@ class DeviceManager(QObject):
                 }
             }
 
-            # Update all device dropdowns to include the new port
-            self.params.child('Device settings').update_com_port_dropdowns(
-                self.data_holder.com_descriptions,
-                port_statuses,
-                port_info_dict
-            )
+            # Port info is cached and will be available when PortSelectionDialog opens
 
     def _on_port_removed(self, port: str):
         """Handle port disconnection - automatically disconnect devices using this port."""
         logging.info(f"Port removed: {port}")
 
         # Find and disconnect any devices using this port
-        for dev in self.params.child('Device settings').children():
+        for device_config in self.config.devices:
+            # Get port for this device
             if self.osx_mode:
-                device_port = str(dev.child('COM port').value())
+                device_port = str(device_config.com_port)
             else:
-                device_port = "COM" + str(dev.child('COM port').value())
+                device_port = "COM" + str(device_config.com_port)
 
-            # If this device is using the removed port, disconnect it
-            if device_port == port and dev.child('Connected').value():
+            widget = self.data_holder.device_widgets.get(device_config.device_id)
+            if not widget:
+                continue
+
+            # If this device is using the removed port and is connected, disconnect it
+            if device_port == port and hasattr(widget, 'is_connected') and widget.is_connected:
                 try:
                     # Close the connection
-                    if hasattr(dev.child('Connection').value(), 'connection'):
-                        dev.child('Connection').value().connection.close()
+                    if hasattr(widget.connection, 'connection'):
+                        widget.connection.connection.close()
                     logging.info(f"Auto-disconnected device on removed port: {port}")
                 except Exception as e:
                     logging.error(f"Error disconnecting device on port {port}: {e}")
 
                 # Update connected status
-                dev.child('Connected').setValue(False)
+                widget.is_connected = False
 
                 # Update UI for device-specific handling
-                dev_id = dev.child('DevID').value()
-                device_widget = self.data_holder.get_device(dev_id)
-                if device_widget:
-                    device_widget.on_disconnection(dev)
-                    # Update UI styling if device has command widget
-                    if device_widget.has_command_widget():
-                        if dev_id in self.device_widgets:
-                            self.device_widgets[dev_id].setObjectName("disconnected")
-                            self.device_widgets[dev_id].setStyleSheet("")
+                widget.on_disconnection(device_config)
+
+                # Update UI styling if device has command widget
+                if widget.has_command_widget():
+                    if device_config.device_id in self.device_widgets:
+                        self.device_widgets[device_config.device_id].setObjectName("disconnected")
+                        self.device_widgets[device_config.device_id].setStyleSheet("")
 
         # Remove from cache
         if port in self._com_port_list:
@@ -399,36 +397,42 @@ class DeviceManager(QObject):
 
     def get_dev_data(self):
         """Send read commands to connected devices."""
-        for dev in self.params.child('Device settings').children():
-            if dev.child('Connected').value():
-                dev_id = dev.child('DevID').value()
-                dev_conn = dev.child('Connection').value()
-                device_widget = self.data_holder.get_device(dev_id)
+        for device_config in self.config.devices:
+            widget = self.data_holder.device_widgets.get(device_config.device_id)
+            if not widget:
+                continue
 
-                if device_widget:
-                    try:
-                        # Device-specific read commands
-                        device_widget.send_read_commands(dev_conn, dev)
+            if hasattr(widget, 'is_connected') and widget.is_connected:
+                try:
+                    # Device-specific read commands
+                    widget.send_read_commands(widget.connection, device_config)
 
-                        # IDN/firmware inquiry
-                        if device_widget.supports_idn_inquiry():
-                            if dev_id in self.data_holder.idn_inquiry_devices:
-                                print(f"[DEBUG IDN] Device manager: Sending *IDN? query to device {dev_id} on port {dev.child('COM port').value()}")
-                                self._idn_inquiry(dev_conn.connection)
-                            elif device_widget.supports_firmware_inquiry():
-                                if dev.child('Firmware version').value() == "":
-                                    self._firmware_inquiry(dev_conn.connection)
-                    except Exception as e:
-                        logging.error(traceback.format_exc())
+                    # IDN/firmware inquiry
+                    if widget.supports_idn_inquiry():
+                        if device_config.device_id in self.data_holder.idn_inquiry_devices:
+                            print(f"[DEBUG IDN] Device manager: Sending *IDN? query to device {device_config.device_id} on port {device_config.com_port}")
+                            self._idn_inquiry(widget.connection.connection)
+                        elif widget.supports_firmware_inquiry():
+                            firmware_version = device_config.extra_params.get('firmware_version', '')
+                            if firmware_version == "":
+                                self._firmware_inquiry(widget.connection.connection)
+                except Exception as e:
+                    logging.error(traceback.format_exc())
  
 
     def _idn_inquiry(self, connection):
         """Delayed IDN send."""
-        QTimer.singleShot(IDN_INQUIRY_DELAY_MS, lambda: connection.write(b'*IDN?\n'))
+        def send_idn():
+            if hasattr(connection, 'connection') and connection.connection.is_open:
+                connection.write(b'*IDN?\n')
+        QTimer.singleShot(IDN_INQUIRY_DELAY_MS, send_idn)
 
     def _firmware_inquiry(self, connection):
         """Delayed firmware send."""
-        QTimer.singleShot(FIRMWARE_INQUIRY_DELAY_MS, lambda: connection.write(b':SYST:VER\n'))
+        def send_firmware():
+            if hasattr(connection, 'connection') and connection.connection.is_open:
+                connection.write(b':SYST:VER\n')
+        QTimer.singleShot(FIRMWARE_INQUIRY_DELAY_MS, send_firmware)
 
 
     def readIndata(self):
@@ -440,21 +444,19 @@ class DeviceManager(QObject):
         - device.handle_serial_data() - reads and parses serial data
         - device.process_parsed_messages() - processes results and updates state
         """
-        for dev in self.params.child('Device settings').children():
-            if dev.child('Connected').value():
-                dev_id = dev.child('DevID').value()
-                dev_conn = dev.child('Connection').value()
-                widget = self.data_holder.device_widgets.get(dev_id)
+        for device_config in self.config.devices:
+            widget = self.data_holder.device_widgets.get(device_config.device_id)
 
-                if not widget:
-                    continue  # Skip if widget not found
+            if not widget:
+                continue  # Skip if widget not found
 
+            if hasattr(widget, 'is_connected') and widget.is_connected:
                 try:
                     # Step 1: Device reads and parses its serial data
-                    parsed_messages = widget.handle_serial_data(dev_conn, self.data_holder)
+                    parsed_messages = widget.handle_serial_data(widget.connection, self.data_holder)
 
                     # Step 2: Device processes parsed messages and updates state
-                    result = widget.process_parsed_messages(parsed_messages, dev, self.data_holder)
+                    result = widget.process_parsed_messages(parsed_messages, device_config, self.data_holder)
 
                 except Exception as e:
                     print(traceback.format_exc())
@@ -463,14 +465,13 @@ class DeviceManager(QObject):
     # check and update 10 hz settings
     def ten_hz_check(self):
         # go through devices
-        for dev in self.params.child('Device settings').children():
+        for device_config in self.config.devices:
             try:
-                dev_id = dev.child('DevID').value()
-                device_widget = self.data_holder.get_device(dev_id)
+                device_widget = self.data_holder.get_device(device_config.device_id)
 
                 # Delegate 10 Hz validation to device
                 if device_widget and device_widget.supports_10hz_mode():
-                    device_widget.validate_10hz_mode(self.params, dev)
+                    device_widget.validate_10hz_mode(self.config, device_config)
 
             except Exception as e:
                 logging.error(traceback.format_exc())
@@ -480,9 +481,9 @@ class DeviceManager(QObject):
         if not self.device_tabs:
             return  # Skip if device_tabs not provided
 
-        for dev in self.params.child('Device settings').children():
+        for device_config in self.config.devices:
             try:
-                device_id = dev.child('DevID').value()
+                device_id = device_config.device_id
 
                 # Skip if device not fully initialized yet
                 if device_id not in self.data_holder.device_widgets:
@@ -491,7 +492,7 @@ class DeviceManager(QObject):
                 error = self.data_holder.device_errors.get(device_id, False)
                 device_widget = self.data_holder.device_widgets[device_id]
                 tab_index = self.device_tabs.indexOf(device_widget)
-                connected = dev.child('Connected').value()
+                connected = hasattr(device_widget, 'is_connected') and device_widget.is_connected
 
                 # Disconnected devices
                 if not connected:

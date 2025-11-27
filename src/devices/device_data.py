@@ -5,11 +5,12 @@ This module defines dataclasses for each device type, providing:
 - Type safety with named fields instead of magic array indices
 - Automatic array generation via to_array() for backward compatibility
 - Clear documentation of each device's data structure
+- Device configuration dataclasses (replacing parameter tree)
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, asdict
 from numpy import nan, isnan
-from typing import Protocol, List
+from typing import Protocol, List, Optional, Dict, Any
 import math
 
 class DeviceDataProtocol(Protocol):
@@ -448,3 +449,161 @@ def create_device_settings(device_type):
 
     # Other devices don't have typed settings yet
     return None
+
+
+# ============================================================================
+# Configuration Dataclasses (replacing parameter tree)
+# ============================================================================
+
+@dataclass
+class DataSettings:
+    """Global data logging settings."""
+    file_path: str = ""
+    file_tag: str = ""
+    save_data: bool = False
+    generate_daily_files: bool = False
+    resume_on_startup: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary for JSON storage."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'DataSettings':
+        """Deserialize from dictionary."""
+        return cls(**data)
+
+
+@dataclass
+class PlotSettings:
+    """Global plot display settings."""
+    follow: bool = True
+    time_window_s: float = 600.0  # 10 minutes default
+    autoscale_y: bool = True
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary for JSON storage."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'PlotSettings':
+        """Deserialize from dictionary."""
+        return cls(**data)
+
+
+@dataclass
+class DeviceConfig:
+    """
+    Device configuration (connection info + device-specific settings).
+
+    This replaces the parameter tree structure for device configuration,
+    providing a single source of truth for all device config data.
+    """
+    # Connection configuration
+    device_id: int
+    device_type: int  # From config.py constants (CPC, PSM, etc.)
+    device_type_name: str  # Human-readable name ("CPC", "PSM", etc.)
+    com_port: str = ""
+    serial_number: str = ""
+    device_nickname: str = ""
+
+    # Plot configuration
+    plot_to_main: bool = True
+
+    # Device-specific settings (CPCSettings, PSMSettings, etc.)
+    # Use None as default for devices without typed settings
+    settings: Optional[Any] = None  # Will be CPCSettings, PSMSettings, etc.
+
+    # Device-specific parameters (stored as dict for flexibility)
+    # Examples: {"10_hz": True, "connected_cpc_serial": "12345"}
+    extra_params: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary for JSON storage."""
+        result = {
+            'device_id': self.device_id,
+            'device_type': self.device_type,
+            'device_type_name': self.device_type_name,
+            'com_port': self.com_port,
+            'serial_number': self.serial_number,
+            'device_nickname': self.device_nickname,
+            'plot_to_main': self.plot_to_main,
+            'extra_params': self.extra_params,
+        }
+
+        # Serialize settings if present
+        if self.settings is not None:
+            result['settings'] = asdict(self.settings)
+            result['settings_type'] = type(self.settings).__name__
+        else:
+            result['settings'] = None
+            result['settings_type'] = None
+
+        return result
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'DeviceConfig':
+        """Deserialize from dictionary."""
+        # Extract settings and reconstruct typed settings object
+        settings_data = data.get('settings')
+        settings_type = data.get('settings_type')
+        settings_obj = None
+
+        if settings_data and settings_type:
+            # Reconstruct the appropriate settings dataclass
+            if settings_type == 'CPCSettings':
+                settings_obj = CPCSettings(**settings_data)
+            elif settings_type == 'PSMSettings':
+                # Handle list fields properly
+                settings_obj = PSMSettings(**settings_data)
+
+        # Create config without settings-related keys
+        config_data = {k: v for k, v in data.items()
+                      if k not in ('settings', 'settings_type')}
+        config_data['settings'] = settings_obj
+
+        return cls(**config_data)
+
+
+@dataclass
+class AppConfig:
+    """
+    Complete application configuration.
+
+    Single source of truth for all configuration data,
+    replacing the parameter tree system.
+    """
+    data_settings: DataSettings = field(default_factory=DataSettings)
+    plot_settings: PlotSettings = field(default_factory=PlotSettings)
+    devices: List[DeviceConfig] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary for JSON storage."""
+        return {
+            'data_settings': self.data_settings.to_dict(),
+            'plot_settings': self.plot_settings.to_dict(),
+            'devices': [device.to_dict() for device in self.devices]
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'AppConfig':
+        """Deserialize from dictionary."""
+        return cls(
+            data_settings=DataSettings.from_dict(data.get('data_settings', {})),
+            plot_settings=PlotSettings.from_dict(data.get('plot_settings', {})),
+            devices=[DeviceConfig.from_dict(d) for d in data.get('devices', [])]
+        )
+
+    def save_to_file(self, filepath: str) -> None:
+        """Save configuration to JSON file."""
+        import json
+        with open(filepath, 'w') as f:
+            json.dump(self.to_dict(), f, indent=2)
+
+    @classmethod
+    def load_from_file(cls, filepath: str) -> 'AppConfig':
+        """Load configuration from JSON file."""
+        import json
+        with open(filepath, 'r') as f:
+            data = json.load(f)
+        return cls.from_dict(data)

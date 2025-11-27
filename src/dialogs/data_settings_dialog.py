@@ -24,12 +24,11 @@ class DataSettingsDialog(QDialog):
     - Resume on startup checkbox
     """
 
-    def __init__(self, params, data_holder, parent=None):
+    def __init__(self, config, data_holder, parent=None):
         super().__init__(parent)
-        self.params = params
+        self.config = config
         self.data_holder = data_holder
-        self.data_settings = params.child('Data settings')
-        self.plot_settings = params.child('Plot settings')
+        self.main_window = parent  # Store parent (MainWindow) for signal emission
 
         self.setWindowTitle("Settings")
         self.resize(500, 400)
@@ -159,29 +158,21 @@ class DataSettingsDialog(QDialog):
             self.file_path_input.setText(directory)
 
     def _load_current_values(self):
-        """Load current parameter values into dialog widgets."""
+        """Load current config values into dialog widgets."""
         try:
             # Data settings
-            file_path = self.data_settings.child('File path').value()
-            file_tag = self.data_settings.child('File tag').value()
-            save_data = self.data_settings.child('Save data').value()
-            generate_daily = self.data_settings.child('Generate daily files').value()
-            resume_startup = self.data_settings.child('Resume on startup').value()
-
-            self.file_path_input.setText(file_path or "")
-            self.file_tag_input.setText(file_tag or "")
-            self.save_data_checkbox.setChecked(save_data)
-            self.generate_daily_checkbox.setChecked(generate_daily)
-            self.resume_startup_checkbox.setChecked(resume_startup)
+            data_settings = self.config.data_settings
+            self.file_path_input.setText(data_settings.file_path or "")
+            self.file_tag_input.setText(data_settings.file_tag or "")
+            self.save_data_checkbox.setChecked(data_settings.save_data)
+            self.generate_daily_checkbox.setChecked(data_settings.generate_daily_files)
+            self.resume_startup_checkbox.setChecked(data_settings.resume_on_startup)
 
             # Plot settings
-            follow = self.plot_settings.child('Follow').value()
-            time_window = self.plot_settings.child('Time window (s)').value()
-            autoscale_y = self.plot_settings.child('Autoscale Y').value()
-
-            self.follow_checkbox.setChecked(follow)
-            self.time_window_spinbox.setValue(time_window)
-            self.autoscale_y_checkbox.setChecked(autoscale_y)
+            plot_settings = self.config.plot_settings
+            self.follow_checkbox.setChecked(plot_settings.follow)
+            self.time_window_spinbox.setValue(int(plot_settings.time_window_s))
+            self.autoscale_y_checkbox.setChecked(plot_settings.autoscale_y)
 
             # Update save status label
             self._update_save_status_label()
@@ -189,19 +180,30 @@ class DataSettingsDialog(QDialog):
             print(f"Error loading settings values: {e}")
 
     def accept(self):
-        """Save dialog values back to parameter tree and close."""
+        """Save dialog values back to config and emit signals."""
         try:
             # Update Data settings
-            self.data_settings.child('File path').setValue(self.file_path_input.text())
-            self.data_settings.child('File tag').setValue(self.file_tag_input.text())
-            self.data_settings.child('Save data').setValue(self.save_data_checkbox.isChecked())
-            self.data_settings.child('Generate daily files').setValue(self.generate_daily_checkbox.isChecked())
-            self.data_settings.child('Resume on startup').setValue(self.resume_startup_checkbox.isChecked())
+            data_settings = self.config.data_settings
+            data_settings.file_path = self.file_path_input.text()
+            data_settings.file_tag = self.file_tag_input.text()
+            data_settings.save_data = self.save_data_checkbox.isChecked()
+            data_settings.generate_daily_files = self.generate_daily_checkbox.isChecked()
+            data_settings.resume_on_startup = self.resume_startup_checkbox.isChecked()
 
             # Update Plot settings
-            self.plot_settings.child('Follow').setValue(self.follow_checkbox.isChecked())
-            self.plot_settings.child('Time window (s)').setValue(self.time_window_spinbox.value())
-            self.plot_settings.child('Autoscale Y').setValue(self.autoscale_y_checkbox.isChecked())
+            plot_settings = self.config.plot_settings
+            plot_settings.follow = self.follow_checkbox.isChecked()
+            plot_settings.time_window_s = self.time_window_spinbox.value()
+            plot_settings.autoscale_y = self.autoscale_y_checkbox.isChecked()
+
+            # Emit signals to notify components
+            if self.main_window:
+                self.main_window.data_settings_changed.emit(data_settings)
+                self.main_window.plot_settings_changed.emit(plot_settings)
+
+            # Save configuration
+            if self.main_window:
+                self.main_window.save_configuration()
 
             # Close dialog
             super().accept()
@@ -212,7 +214,7 @@ class DataSettingsDialog(QDialog):
     def _update_save_status_label(self):
         """Update the save status label with current save info."""
         try:
-            save_data = self.data_settings.child('Save data').value()
+            save_data = self.config.data_settings.save_data
 
             if not save_data:
                 self.save_status_label.setText("Not currently saving")

@@ -511,7 +511,7 @@ class PSMPlotConfig(BasePlotConfig):
             return PSM
         return self.device.dev_type
 
-    def calculate_connected_cpc_values(self, device_param, data_holder):
+    def calculate_connected_cpc_values(self, data_holder):
         """
         Calculate PSM concentration from connected CPC.
 
@@ -519,12 +519,13 @@ class PSMPlotConfig(BasePlotConfig):
         concentration from the connected CPC.
 
         Args:
-            device_param: PSM device parameter
             data_holder: DataHolder instance with device data
         """
-        dev_type = device_param.child('Device type').value()
-        psm_id = device_param.child('DevID').value()
-        cpc_id = device_param.child('Connected CPC').value()
+        # Get PSM config from device widget
+        psm_widget = self.device
+        dev_type = psm_widget.device_config.device_type
+        psm_id = psm_widget.device_config.device_id
+        cpc_id = psm_widget.device_config.extra_params.get('connected_cpc', 'None')
 
         if cpc_id == 'None':
             return
@@ -535,15 +536,8 @@ class PSMPlotConfig(BasePlotConfig):
             if cpc_widget.pulse_analysis_index is not None and cpc_widget.pulse_analysis_index >= 0:
                 return  # CPC is in pulse analysis mode, don't use its data
 
-        # Get connected CPC device parameter
-        cpc_device = None
-        device_settings = device_param.parent()  # Get "Device settings" group
-        for cpc in device_settings.children():
-            if cpc.child('DevID').value() == cpc_id:
-                cpc_device = cpc
-                break
-
-        if not cpc_device or not cpc_device.child('Connected').value():
+        # Check if CPC is connected (runtime state)
+        if not cpc_widget or not cpc_widget.is_connected:
             return
 
         # Get PSM and CPC widgets

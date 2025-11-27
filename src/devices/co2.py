@@ -8,8 +8,8 @@ from devices.data_writers import CO2DataWriter
 # CO2 sensor widget
 @register_device(CO2_SENSOR)
 class CO2Widget(SimpleDevice):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__(device_parameter, device_type=CO2_SENSOR, *args, **kwargs)
+    def __init__(self, device_config, *args, **kwargs):
+        super().__init__(device_config, *args, **kwargs)
 
         # Create plot widget
         self.plot_tab = SinglePlot(device_type=CO2_SENSOR)

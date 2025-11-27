@@ -7,8 +7,8 @@ from devices.data_writers import RHTPDataWriter
 
 # RHTP widget
 class RHTPWidget(SimpleDevice):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__(device_parameter, device_type=RHTP, *args, **kwargs)
+    def __init__(self, device_config, *args, **kwargs):
+        super().__init__(device_config, *args, **kwargs)
         # create plot widget for RHTP
         self.plot_tab = TriplePlot(device_type=RHTP)
         self.addTab(self.plot_tab, "RHTP plot")
@@ -24,6 +24,14 @@ class RHTPWidget(SimpleDevice):
     def get_plot_keys(self):
         """RHTP has relative humidity, temperature, and pressure."""
         return [':rh', ':t', ':p']
+
+    def get_plot_value_labels(self):
+        """Return labels for RHTP plot values."""
+        return {
+            ':rh': 'Relative Humidity (%)',
+            ':t': 'Temperature (°C)',
+            ':p': 'Pressure (hPa)'
+        }
 
     def get_read_command(self):
         """RHTP auto-pushes data, no read command needed."""

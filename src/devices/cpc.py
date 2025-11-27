@@ -23,8 +23,8 @@ from devices.data_writers import CPCDataWriter
 
 # CPC widget containing CPC related GUI elements as tabs
 class CPCWidget(ComplexDevice):
-    def __init__(self, device_parameter, *args, **kwargs):
-        super().__init__(device_parameter, device_type=CPC, *args, **kwargs)
+    def __init__(self, device_config, *args, **kwargs):
+        super().__init__(device_config, *args, **kwargs)
 
         # CPC-specific data (device owns its data)
         self.ten_hz_data = full(10, nan)  # 10 Hz logging data buffer
@@ -37,7 +37,7 @@ class CPCWidget(ComplexDevice):
         self.status_tab = CPCStatusTab()
         self.addTab(self.status_tab, "Status")
         # create database/ACTRIS tab for database settings and status
-        self.database_tab = CPCDatabaseTab(device_parameter)
+        self.database_tab = CPCDatabaseTab(device_config)
         self.addTab(self.database_tab, "ACTRIS")
         # create plot widget for Concentration
         self.plot_tab = SinglePlot(device_type=CPC)
@@ -67,9 +67,23 @@ class CPCWidget(ComplexDevice):
         """CPC has concentration and raw concentration plots."""
         return ['', ':raw']
 
+    def get_plot_value_labels(self):
+        """Return labels for CPC plot values."""
+        return {
+            '': 'Concentration (#/cc)',
+            ':raw': 'Raw Concentration (#/cc)'
+        }
+
     def get_rolling_buffer_keys(self):
         """CPC has 24-hour rolling buffers for pulse analysis."""
         return {':pd': 86400, ':pr': 86400}
+
+    def set_app_config(self, app_config):
+        """Set the app config reference for database tab RHTP dropdown."""
+        if hasattr(self, 'database_tab'):
+            self.database_tab.app_config = app_config
+            # Don't populate immediately - the 5-second refresh timer will handle it
+            # This prevents blocking the main thread during device creation
 
     def get_read_command_sequence(self, ten_hz=False):
         """
@@ -189,7 +203,7 @@ class CPCWidget(ComplexDevice):
                 return f"{conc:.1f} #/cc"
         return super().get_status_bar_text()
 
-    def process_parsed_messages(self, parsed_messages, device_param, data_holder):
+    def process_parsed_messages(self, parsed_messages, device_config, data_holder):
         """
         Process CPC messages with buffering, settings compilation, and GUI updates.
         """
@@ -207,7 +221,7 @@ class CPCWidget(ComplexDevice):
         pall_list = data_holder.extra_data.pop(str(self.dev_id) + ":pall", full(28, nan))
 
         # Handle 10 Hz data if enabled
-        if device_param.child('10 hz').value():
+        if device_config.extra_params.get('10_hz', False):
             self.ten_hz_data = data_holder.extra_data.pop(
                 str(self.dev_id) + ":10hz", self.ten_hz_data)
 
@@ -262,10 +276,11 @@ class CPCWidget(ComplexDevice):
                 # Handle device identification
                 self.set_tab.command_widget.update_text_box(parsed['raw'])
                 serial_number = parsed['data']
-                if device_param.child('Serial number').value() != serial_number:
-                    device_param.child('Serial number').setValue(serial_number)
-                    # Update CPC dict in params
-                    device_param.parent().update_cpc_dict()
+                if device_config.serial_number != serial_number:
+                    device_config.serial_number = serial_number
+                    # Trigger config save
+                    if hasattr(self, 'on_config_changed'):
+                        self.on_config_changed()
                 if self.dev_id in data_holder.idn_inquiry_devices:
                     data_holder.idn_inquiry_devices.remove(self.dev_id)
 
@@ -529,7 +544,7 @@ class CPCWidget(ComplexDevice):
         """CPC supports 10 Hz mode."""
         return True
 
-    def send_read_commands(self, dev_conn, device_param):
+    def send_read_commands(self, dev_conn, device_config):
         """
         Send CPC read commands based on mode.
 
@@ -545,13 +560,13 @@ class CPCWidget(ComplexDevice):
             threshold = PULSE_ANALYSIS_THRESHOLDS[self.pulse_analysis_index]
             dev_conn.send_pulse_analysis_messages(threshold)
         # Check if in 10 Hz mode
-        elif device_param.child('10 hz').value():
+        elif device_config.extra_params.get('10_hz', False):
             dev_conn.send_multiple_messages(self, ten_hz=True)
         # Normal mode
         else:
             dev_conn.send_multiple_messages(self)
 
-    def validate_10hz_mode(self, params, device_param):
+    def validate_10hz_mode(self, app_config, device_config):
         """
         Validate and synchronize CPC 10 Hz mode.
 
@@ -564,30 +579,33 @@ class CPCWidget(ComplexDevice):
         """
         from config import PSM, PSM2
 
-        dev_id = device_param.child('DevID').value()
-        ten_hz_enabled = device_param.child('10 hz').value()
+        dev_id = device_config.device_id
+        ten_hz_enabled = device_config.extra_params.get('10_hz', False)
 
         if ten_hz_enabled:
             # When 10 Hz ON: Set TAVG to 0.1 if needed
-            if device_param.child('Connected').value():
+            if self.is_connected:
                 if self.settings and self.settings.averaging_time != 0.1:
-                    device_param.child('Connection').value().send_message(":SET:TAVG 0.1")
+                    self.connection.send_message(":SET:TAVG 0.1")
 
             # Validate PSM connection - check if any PSM has this CPC connected with 10Hz
             ten_hz_connected = any(
-                psm.child('Connected CPC').value() == dev_id and psm.child('10 hz').value()
-                for psm in params.child('Device settings').children()
-                if psm.child('Device type').value() in [PSM, PSM2]
+                psm_config.extra_params.get('connected_cpc') == dev_id and
+                psm_config.extra_params.get('10_hz', False)
+                for psm_config in app_config.devices
+                if psm_config.device_type in [PSM, PSM2]
             )
 
             # If no PSM with 10Hz is connected, disable 10Hz mode
             if not ten_hz_connected:
-                device_param.child('10 hz').setValue(False)
+                device_config.extra_params['10_hz'] = False
+                if hasattr(self, 'on_config_changed'):
+                    self.on_config_changed()
         else:
             # When 10 Hz OFF: Set TAVG to 1.0 if currently < 1
-            if device_param.child('Connected').value():
+            if self.is_connected:
                 if self.settings and self.settings.averaging_time < 1:
-                    device_param.child('Connection').value().send_message(":SET:TAVG 1")
+                    self.connection.send_message(":SET:TAVG 1")
 
 # set tab widget containing settings and message input
 # used in CPCWidget
@@ -889,10 +907,11 @@ class PulseQuality(QWidget):
 class CPCDatabaseTab(QWidget):
     """Database/ACTRIS tab for CPC devices showing database status and settings."""
 
-    def __init__(self, device_param, *args, **kwargs):
+    def __init__(self, device_config, *args, **kwargs):
         super().__init__()
 
-        self.device_param = device_param
+        self.device_config = device_config
+        self.app_config = None  # Will be set by CPC widget after creation
 
         layout = QGridLayout()
 
@@ -982,9 +1001,6 @@ class CPCDatabaseTab(QWidget):
         layout.addWidget(status_label, row, 0, 1, 2)
         row += 1
 
-<<<<<<< Updated upstream
-        # Database status indicator
-=======
         # Next Write Countdown - PROMINENT (simplified)
         next_write_label = QLabel("Next write:")
         next_write_label.setStyleSheet("font-size: 11pt;")
@@ -1005,7 +1021,6 @@ class CPCDatabaseTab(QWidget):
         row += 1
 
         # Device status indicator
->>>>>>> Stashed changes
         db_status_label = QLabel("Status:")
         layout.addWidget(db_status_label, row, 0)
         self.db_status_value = QLabel("Disabled")
@@ -1112,33 +1127,30 @@ class CPCDatabaseTab(QWidget):
         self.refresh_timer.timeout.connect(self.refresh_status)
         self.refresh_timer.start(5000)  # 5 seconds
 
-        # Initialize dropdowns with current values
-        self.populate_rhtp_dropdown()
-        self.refresh_status()  # Populate other fields and sync to parameters
+        # Don't initialize dropdowns immediately - the 5-second timer will handle it
+        # This prevents blocking during device creation
 
     def populate_rhtp_dropdown(self):
-        """Populate linked RHTP dropdown from rhtp_dict in device settings."""
-        device_settings = self.device_param.parent()
-        if not hasattr(device_settings, 'rhtp_dict'):
+        """Populate linked RHTP dropdown from RHTP devices in app config."""
+        if not self.app_config:
             return
 
-        # Store current selection (handle case where parameter doesn't exist yet)
-        current_rhtp_id = None
-        try:
-            linked_rhtp_param = self.device_param.child('Linked RHTP')
-            if linked_rhtp_param is not None:
-                current_rhtp_id = linked_rhtp_param.value()
-        except KeyError:
-            # Parameter doesn't exist yet (during initialization)
-            pass
+        # Store current selection
+        current_rhtp_id = self.device_config.extra_params.get('linked_rhtp', 'None')
 
         # Clear and rebuild dropdown
         self.linked_rhtp_dropdown.blockSignals(True)
         self.linked_rhtp_dropdown.clear()
 
-        # Add RHTP devices from rhtp_dict
-        for rhtp_name, rhtp_id in device_settings.rhtp_dict.items():
-            self.linked_rhtp_dropdown.addItem(rhtp_name, rhtp_id)
+        # Always add "None" option first
+        self.linked_rhtp_dropdown.addItem("None", "None")
+
+        # Add RHTP devices from config
+        from config import RHTP
+        for device_config in self.app_config.devices:
+            if device_config.device_type == RHTP:
+                device_name = device_config.device_nickname or device_config.device_type_name
+                self.linked_rhtp_dropdown.addItem(device_name, device_config.device_id)
 
         # Check if only "None" option exists (no RHTP devices available)
         if self.linked_rhtp_dropdown.count() == 1:
@@ -1177,52 +1189,36 @@ class CPCDatabaseTab(QWidget):
         # Refresh RHTP dropdown in case devices were added/removed
         self.populate_rhtp_dropdown()
 
-        # Update linked RHTP dropdown
-        try:
-            linked_rhtp_param = self.device_param.child('Linked RHTP')
-            if linked_rhtp_param is not None:
-                rhtp_id = linked_rhtp_param.value()
-                # Find index in dropdown that matches this ID
-                index = self.linked_rhtp_dropdown.findData(rhtp_id)
-                if index >= 0:
-                    self.linked_rhtp_dropdown.blockSignals(True)
-                    self.linked_rhtp_dropdown.setCurrentIndex(index)
-                    self.linked_rhtp_dropdown.blockSignals(False)
-        except KeyError:
-            pass  # Parameter doesn't exist yet
+        # Update linked RHTP dropdown from config
+        rhtp_id = self.device_config.extra_params.get('linked_rhtp', 'None')
+        index = self.linked_rhtp_dropdown.findData(rhtp_id)
+        if index >= 0:
+            self.linked_rhtp_dropdown.blockSignals(True)
+            self.linked_rhtp_dropdown.setCurrentIndex(index)
+            self.linked_rhtp_dropdown.blockSignals(False)
 
-        # Update averaging interval dropdown
-        try:
-            interval_param = self.device_param.child('DB averaging interval')
-            if interval_param is not None:
-                interval = interval_param.value()
-                index = self.interval_dropdown.findText(interval)
-                if index >= 0:
-                    self.interval_dropdown.blockSignals(True)
-                    self.interval_dropdown.setCurrentIndex(index)
-                    self.interval_dropdown.blockSignals(False)
-        except KeyError:
-            pass  # Parameter doesn't exist yet
+        # Update averaging interval dropdown from config
+        interval = self.device_config.extra_params.get('db_averaging_interval', '1 minute')
+        index = self.interval_dropdown.findText(interval)
+        if index >= 0:
+            self.interval_dropdown.blockSignals(True)
+            self.interval_dropdown.setCurrentIndex(index)
+            self.interval_dropdown.blockSignals(False)
 
-        # Update database enabled status
-        try:
-            db_enabled_param = self.device_param.child('Database enabled')
-            if db_enabled_param is not None:
-                enabled = db_enabled_param.value()
-                self.db_enabled_checkbox.setChecked(enabled)
+        # Update database enabled status from config
+        enabled = self.device_config.extra_params.get('database_enabled', False)
+        self.db_enabled_checkbox.setChecked(enabled)
 
-                # Disable dropdowns when database is active (prevent changing settings during recording)
-                self.linked_rhtp_dropdown.setEnabled(not enabled)
-                self.interval_dropdown.setEnabled(not enabled)
+        # Disable dropdowns when database is active (prevent changing settings during recording)
+        self.linked_rhtp_dropdown.setEnabled(not enabled)
+        self.interval_dropdown.setEnabled(not enabled)
 
-                if enabled:
-                    self.db_status_value.setText("Enabled")
-                    self.db_status_value.setStyleSheet("color: green;")
-                else:
-                    self.db_status_value.setText("Disabled")
-                    self.db_status_value.setStyleSheet("color: gray;")
-        except KeyError:
-            pass  # Parameter doesn't exist yet
+        if enabled:
+            self.db_status_value.setText("Enabled")
+            self.db_status_value.setStyleSheet("color: green;")
+        else:
+            self.db_status_value.setText("Disabled")
+            self.db_status_value.setStyleSheet("color: gray;")
 
     def update_last_write(self, timestamp_str):
         """Update last write timestamp display."""
@@ -1300,7 +1296,7 @@ class CPCDatabaseTab(QWidget):
             # Store full row data including primary key for updates/deletes
             self.row_data[i] = {
                 'time': row.get('time'),  # Full timestamp with timezone
-                'instr_id': row.get('instr_id', self.device_param.child('Serial number').value()),
+                'instr_id': row.get('instr_id', self.device_config.serial_number),
                 'data': row.copy()
             }
             # Starttime
@@ -1534,7 +1530,7 @@ class CPCDatabaseTab(QWidget):
         if success:
             self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: {message}")
             # Refresh table to show updated data
-            dev_id = self.device_param.child('DevID').value()
+            dev_id = self.device_config.device_id
             latest_rows = self.main_window.database_manager.get_latest_rows(10, dev_id)
             self.update_data_table(latest_rows)
             # Clear row selection after deletion
@@ -1547,31 +1543,27 @@ class CPCDatabaseTab(QWidget):
         # Get the selected RHTP device ID from the dropdown
         rhtp_id = self.linked_rhtp_dropdown.currentData()
 
-        # Update the hidden parameter
-        try:
-            linked_rhtp_param = self.device_param.child('Linked RHTP')
-            if linked_rhtp_param is not None:
-                linked_rhtp_param.setValue(rhtp_id)
-        except KeyError:
-            pass  # Parameter doesn't exist yet
+        # Update device config
+        self.device_config.extra_params['linked_rhtp'] = rhtp_id
+        # Trigger config save (CPC widget should have on_config_changed method)
+        if hasattr(self, 'on_config_changed'):
+            self.on_config_changed()
 
     def interval_changed(self, text):
         """Handle averaging interval dropdown selection change."""
         from datetime import datetime
 
-        # Update the hidden parameter
-        try:
-            interval_param = self.device_param.child('DB averaging interval')
-            if interval_param is not None:
-                interval_param.setValue(text)
-        except KeyError:
-            pass  # Parameter doesn't exist yet
+        # Update device config
+        self.device_config.extra_params['db_averaging_interval'] = text
+        # Trigger config save
+        if hasattr(self, 'on_config_changed'):
+            self.on_config_changed()
 
         # If database is enabled, recreate the averager with new interval
         if self.main_window and hasattr(self.main_window, 'database_manager'):
-            db_enabled_param = self.device_param.child('Database enabled')
-            if db_enabled_param and db_enabled_param.value():
-                dev_id = self.device_param.child('DevID').value()
+            db_enabled = self.device_config.extra_params.get('database_enabled', False)
+            if db_enabled:
+                dev_id = self.device_config.device_id
 
                 # Convert interval string to minutes
                 interval_map = {'1 minute': 1, '5 minutes': 5, '10 minutes': 10, '15 minutes': 15, '1 hour': 60, '3 hours': 180}
@@ -1600,7 +1592,7 @@ class CPCDatabaseTab(QWidget):
             self.db_enabled_checkbox.setChecked(False)
             return
 
-        dev_id = self.device_param.child('DevID').value()
+        dev_id = self.device_config.device_id
 
         if enabled:
             # Validation 1: Check connection string is not empty
@@ -1641,8 +1633,10 @@ class CPCDatabaseTab(QWidget):
                 interval_minutes = interval_map.get(interval_str, 1)
                 self.main_window.database_manager.create_averager(dev_id, interval_minutes)
 
-                # Update device parameter
-                self.device_param.child('Database enabled').setValue(True)
+                # Update device config
+                self.device_config.extra_params['database_enabled'] = True
+                if hasattr(self, 'on_config_changed'):
+                    self.on_config_changed()
 
                 # Update UI
                 self.db_status_value.setText("Enabled")
@@ -1667,8 +1661,10 @@ class CPCDatabaseTab(QWidget):
             # Disabling database
             success, message = self.main_window.database_manager.unregister_device(dev_id)
 
-            # Update device parameter
-            self.device_param.child('Database enabled').setValue(False)
+            # Update device config
+            self.device_config.extra_params['database_enabled'] = False
+            if hasattr(self, 'on_config_changed'):
+                self.on_config_changed()
 
             # Update UI
             self.db_status_value.setText("Disabled")
@@ -1715,7 +1711,7 @@ class CPCDatabaseTab(QWidget):
             QMessageBox.information(self, "Database Test", f"Success!\n\n{message}")
 
             # Refresh the preview table to show latest data
-            dev_id = self.device_param.child('DevID').value()
+            dev_id = self.device_config.device_id
             latest_rows = self.main_window.database_manager.get_latest_rows(10, dev_id)
             self.update_data_table(latest_rows)
             from datetime import datetime

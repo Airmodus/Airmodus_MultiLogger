@@ -6,9 +6,17 @@ from numpy import isnan, nan
 from config import osx_mode, TSI_CPC, EXAMPLE_DEVICE, PULSE_ANALYSIS_THRESHOLDS
 
 class DataLogger:
-    def __init__(self, data_holder, params):
+    def __init__(self, data_holder, config):
         self.data_holder = data_holder
-        self.params = params
+        self.config = config
+        self.data_settings = config.data_settings  # For quick access
+
+    def on_data_settings_changed(self, data_settings):
+        """Called when data settings change (connected to signal from app.py)."""
+        self.data_settings = data_settings
+        # Update file path if changed
+        if data_settings.file_path != self.data_holder.file_path:
+            self.filepath_changed(data_settings.file_path)
 
     def _is_device_in_pulse_analysis(self, dev_id):
         """Check if device is in pulse analysis mode."""
@@ -21,18 +29,14 @@ class DataLogger:
     def save_changed(self):
         """Triggered when saving is toggled on/off."""
         # if saving is toggled on
-        if self.params.child('Data settings').child('Save data').value():
+        if self.data_settings.save_data:
             # store start day
             self.data_holder.start_day = dt.now().strftime("%m%d")
             # get file path
-            self.data_holder.file_path = self.params.child('Data settings').child('File path').value()
-            # set file path as read only
-            self.params.child('Data settings').child('File path').setReadonly(True)
+            self.data_holder.file_path = self.data_settings.file_path
         # if saving is toggled off, reset filename dictionaries
         else:
             self.reset_all_filenames()
-            # disable read only file path
-            self.params.child('Data settings').child('File path').setReadonly(False)
             # reset timestamp and filename tracking
             self.data_holder.last_write_timestamp = None
             self.data_holder.most_recent_filename = ""
@@ -63,16 +67,16 @@ class DataLogger:
     def compare_day(self):
         """Compare current day to file start day (self.start_day defined in save_changed)."""
         # check if saving is on
-        if self.params.child('Data settings').child('Save data').value():
+        if self.data_settings.save_data:
             # check if new file should be started at midnight
-            if self.params.child("Data settings").child('Generate daily files').value():
+            if self.data_settings.generate_daily_files:
                 current_day = dt.fromtimestamp(self.data_holder.current_time).strftime("%m%d")
                 if current_day != self.data_holder.start_day:
                     self.reset_all_filenames() # start new file if day has changed
                     # update start day
                     self.data_holder.start_day = current_day
 
-    def _create_data_file(self, dev, dev_id, timestamp, file_extension):
+    def _create_data_file(self, device_config, timestamp, file_extension):
         """
         Create a new data file (.dat, .par, etc.) for a device.
 
@@ -82,22 +86,21 @@ class DataLogger:
         # format timestamp for filename
         timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
 
-        # get serial number from device settings
-        serial_number = dev.child('Serial number').value()
+        # get serial number from device config
+        serial_number = device_config.serial_number
         if serial_number != "":
             serial_number = '_' + serial_number
 
-        # get device type from device settings
-        device_type = dev.child('Device type').value()  # device type number
-        device_type_name = self.data_holder.device_names[device_type]  # device type name
+        # get device type name from device config
+        device_type_name = device_config.device_type_name
 
-        # get device nickname from device settings
-        device_nickname = dev.child('Device nickname').value()
+        # get device nickname from device config
+        device_nickname = device_config.device_nickname
         if device_nickname != "":
             device_nickname = '_' + device_nickname
 
         # get file tag from data settings
-        file_tag = self.params.child('Data settings').child('File tag').value()
+        file_tag = self.data_settings.file_tag
         if file_tag != "":
             file_tag = '_' + file_tag
 
@@ -116,7 +119,7 @@ class DataLogger:
 
         return filename
 
-    def _create_10hz_file(self, dev, dev_id, timestamp):
+    def _create_10hz_file(self, device_config, timestamp):
         """
         Create a 10Hz CSV file for CPC devices.
 
@@ -126,22 +129,21 @@ class DataLogger:
         # format timestamp for filename
         timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
 
-        # get serial number from device settings
-        serial_number = dev.child('Serial number').value()
+        # get serial number from device config
+        serial_number = device_config.serial_number
         if serial_number != "":
             serial_number = '_' + serial_number
 
-        # get device type from device settings
-        device_type = dev.child('Device type').value()
-        device_type_name = self.data_holder.device_names[device_type]
+        # get device type name from device config
+        device_type_name = device_config.device_type_name
 
-        # get device nickname from device settings
-        device_nickname = dev.child('Device nickname').value()
+        # get device nickname from device config
+        device_nickname = device_config.device_nickname
         if device_nickname != "":
             device_nickname = '_' + device_nickname
 
         # get file tag from data settings
-        file_tag = self.params.child('Data settings').child('File tag').value()
+        file_tag = self.data_settings.file_tag
         if file_tag != "":
             file_tag = '_' + file_tag
 
@@ -163,78 +165,58 @@ class DataLogger:
     def write_data(self):
         """Write data to file(s)."""
         # if saving is on
-        if self.params.child('Data settings').child('Save data').value():
+        if self.data_settings.save_data:
             # create timestamp from data_holder.current_time
             timestamp = dt.fromtimestamp(self.data_holder.current_time)
             timeStampStr = str(timestamp.strftime("%Y.%m.%d %H:%M:%S"))
             # go through each device
-            for dev in self.params.child('Device settings').children():
+            for device_config in self.config.devices:
                 # if device is TSI CPC, do nothing
-                if dev.child('Device type').value() == TSI_CPC:
+                if device_config.device_type == TSI_CPC:
                     pass
                 # if device is in pulse analysis mode, do nothing
-                elif self._is_device_in_pulse_analysis(dev.child('DevID').value()):
+                elif self._is_device_in_pulse_analysis(device_config.device_id):
                     pass
-                # if device is connected OR example device
-                elif dev.child('Connected').value() or dev.child('Device type').value() == EXAMPLE_DEVICE:
-                    try:
-                        # store device id to variable for clarity
-                        dev_id = dev.child('DevID').value()
+                else:
+                    device_widget = self.data_holder.get_device(device_config.device_id)
+                    if not device_widget:
+                        continue
 
-                        # Get device widget and verify it has data_writer
-                        device_widget = self.data_holder.get_device(dev_id)
-                        if not device_widget or not hasattr(device_widget, 'data_writer'):
-                            continue
+                    # Check if device is connected OR example device
+                    is_connected = hasattr(device_widget, 'is_connected') and device_widget.is_connected
+                    is_example = device_config.device_type == EXAMPLE_DEVICE
 
-                        data_writer = device_widget.data_writer
+                    if is_connected or is_example:
+                        try:
+                            # store device id to variable for clarity
+                            dev_id = device_config.device_id
 
-                        # if device is not yet in data_holder.dat_filenames dict, create files
-                        if dev_id not in self.data_holder.dat_filenames:
-                            # Create .dat file
-                            filename = self._create_data_file(dev, dev_id, timestamp, 'dat')
-                            self.data_holder.dat_filenames[dev_id] = filename
+                            # Verify device has data_writer
+                            if not hasattr(device_widget, 'data_writer'):
+                                continue
 
-                            # Create .par file if device writes .par files
-                            if 'par' in data_writer.get_file_types():
-                                filename = self._create_data_file(dev, dev_id, timestamp, 'par')
-                                self.data_holder.par_filenames[dev_id] = filename
-                                self.data_holder.par_updates[dev_id] = 1  # set .par update flag
+                            data_writer = device_widget.data_writer
 
-                        # Check if device needs special files (e.g., 10Hz logging)
-                        if data_writer.has_special_files(dev):
-                            if dev_id not in self.data_holder.ten_hz_filenames:
-                                filename = self._create_10hz_file(dev, dev_id, timestamp)
-                                self.data_holder.ten_hz_filenames[dev_id] = filename
-                           
-                        # Write .dat file
-                        filename = self.data_holder.file_path + self.data_holder.dat_filenames[dev_id]
+                            # if device is not yet in data_holder.dat_filenames dict, create files
+                            if dev_id not in self.data_holder.dat_filenames:
+                                # Create .dat file
+                                filename = self._create_data_file(device_config, timestamp, 'dat')
+                                self.data_holder.dat_filenames[dev_id] = filename
 
-                        # Check if header exists
-                        with open(filename, 'r', encoding='UTF-8') as file:
-                            file.seek(0)
-                            header_row1 = file.readline()
-                            write_headers = len(header_row1) == 0
+                                # Create .par file if device writes .par files
+                                if 'par' in data_writer.get_file_types():
+                                    filename = self._create_data_file(device_config, timestamp, 'par')
+                                    self.data_holder.par_filenames[dev_id] = filename
+                                    self.data_holder.par_updates[dev_id] = 1  # set .par update flag
 
-                        # Append file with new data
-                        with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
-                            # Write header if it doesn't exist
-                            if write_headers:
-                                file.write(data_writer.get_dat_header())
+                            # Check if device needs special files (e.g., 10Hz logging)
+                            if data_writer.has_special_files(device_config):
+                                if dev_id not in self.data_holder.ten_hz_filenames:
+                                    filename = self._create_10hz_file(device_config, timestamp)
+                                    self.data_holder.ten_hz_filenames[dev_id] = filename
 
-                            # Write the actual data
-                            file.write("\n")
-                            file.write(timeStampStr + ',')
-                            # Get data from data_writer
-                            write_data = data_writer.get_dat_data(dev, self.data_holder, timeStampStr)
-                            file.write(write_data)
-
-                        # Update last write timestamp after successful write
-                        self.data_holder.last_write_timestamp = self.data_holder.current_time
-                       
-                        # Write .par file if device has one and should be updated
-                        if 'par' in data_writer.get_file_types() and data_writer.should_write_par(dev, self.data_holder):
-                            # Get filename from dictionary and add path to front
-                            filename = self.data_holder.file_path + self.data_holder.par_filenames[dev_id]
+                            # Write .dat file
+                            filename = self.data_holder.file_path + self.data_holder.dat_filenames[dev_id]
 
                             # Check if header exists
                             with open(filename, 'r', encoding='UTF-8') as file:
@@ -246,39 +228,61 @@ class DataLogger:
                             with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
                                 # Write header if it doesn't exist
                                 if write_headers:
-                                    file.write(data_writer.get_par_header())
+                                    file.write(data_writer.get_dat_header())
 
-                                # Write settings data
+                                # Write the actual data
                                 file.write("\n")
                                 file.write(timeStampStr + ',')
-                                write_data = data_writer.get_par_data(dev, self.data_holder, timeStampStr)
-                                if write_data:
-                                    file.write(write_data)
+                                # Get data from data_writer
+                                write_data = data_writer.get_dat_data(device_config, self.data_holder, timeStampStr)
+                                file.write(write_data)
 
-                            # Reset par_updates flag after writing
-                            if dev_id in self.data_holder.par_updates:
-                                self.data_holder.par_updates[dev_id] = 0
-                       
-                        # Write special files if device needs them (e.g., 10Hz)
-                        if data_writer.has_special_files(dev):
-                            data_writer.write_special_files(dev, self.data_holder, timeStampStr,
-                                                           self.data_holder.ten_hz_filenames)
-                    # if saving fails, set saving status to 0
-                    except Exception as e:
-                        print(traceback.format_exc())
-                        logging.exception(e)
-                        self.data_holder.saving_status = 0 # set saving status to 0
-               
-                # if device is not connected
-                else:
-                    pass
-                # TODO change saving status if device is not connected?
+                            # Update last write timestamp after successful write
+                            self.data_holder.last_write_timestamp = self.data_holder.current_time
+
+                            # Write .par file if device has one and should be updated
+                            if 'par' in data_writer.get_file_types() and data_writer.should_write_par(device_config, self.data_holder):
+                                # Get filename from dictionary and add path to front
+                                filename = self.data_holder.file_path + self.data_holder.par_filenames[dev_id]
+
+                                # Check if header exists
+                                with open(filename, 'r', encoding='UTF-8') as file:
+                                    file.seek(0)
+                                    header_row1 = file.readline()
+                                    write_headers = len(header_row1) == 0
+
+                                # Append file with new data
+                                with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
+                                    # Write header if it doesn't exist
+                                    if write_headers:
+                                        file.write(data_writer.get_par_header())
+
+                                    # Write settings data
+                                    file.write("\n")
+                                    file.write(timeStampStr + ',')
+                                    write_data = data_writer.get_par_data(device_config, self.data_holder, timeStampStr)
+                                    if write_data:
+                                        file.write(write_data)
+
+                                # Reset par_updates flag after writing
+                                if dev_id in self.data_holder.par_updates:
+                                    self.data_holder.par_updates[dev_id] = 0
+
+                            # Write special files if device needs them (e.g., 10Hz)
+                            if data_writer.has_special_files(device_config):
+                                data_writer.write_special_files(device_config, self.data_holder, timeStampStr,
+                                                               self.data_holder.ten_hz_filenames)
+                        # if saving fails, set saving status to 0
+                        except Exception as e:
+                            print(traceback.format_exc())
+                            logging.exception(e)
+                            self.data_holder.saving_status = 0 # set saving status to 0
         else: # if saving is toggled off
             self.data_holder.saving_status = 0 # set saving status to 0
        
         # write data to pulse analysis file if pulse analysis is on
-        for dev in self.params.child('Device settings').children():
-            dev_id = dev.child('DevID').value()
+        for device_config in self.config.devices:
+            dev_id = device_config.device_id
             device_widget = self.data_holder.get_device(dev_id)
             if device_widget and hasattr(device_widget, 'pulse_analysis_index'):
                 if device_widget.pulse_analysis_index is not None: # when index is None, analysis has reached its end
@@ -305,20 +309,21 @@ class DataLogger:
                         device_widget.pulse_analysis_index += 1
                         # if all thresholds have been gone through, end pulse analysis
                         if device_widget.pulse_analysis_index >= len(PULSE_ANALYSIS_THRESHOLDS):
-                            self.pulse_analysis_stop(dev_id, dev)
+                            self.pulse_analysis_stop(dev_id, device_config)
                     except Exception as e:
                         print(traceback.format_exc())
                         logging.exception(e)
                         # stop pulse analysis if exception occurs
-                        self.pulse_analysis_stop(dev_id, dev)
+                        self.pulse_analysis_stop(dev_id, device_config)
 
-    def pulse_analysis_stop(self, device_id, device_param):
+    def pulse_analysis_stop(self, device_id, device_config):
         """Stop CPC pulse analysis, resume normal operation."""
         # restore original threshold value to device
         try:
             cpc_settings = self.data_holder.get_device_settings(device_id)
-            if cpc_settings:
-                device_param.child('Connection').value().send_message(":SET:OPC:THRS " + str(cpc_settings.opc_threshold))
+            device_widget = self.data_holder.device_widgets[device_id]
+            if cpc_settings and hasattr(device_widget, 'connection'):
+                device_widget.connection.send_message(":SET:OPC:THRS " + str(cpc_settings.opc_threshold))
         except Exception as e:
             print(traceback.format_exc())
             logging.exception(e)
@@ -346,7 +351,7 @@ class DataLogger:
 
     
     # start CPC pulse analysis, stop normal operation
-    def pulse_analysis_start(self, device_id, device_param):
+    def pulse_analysis_start(self, device_id, device_config):
         # ask for user confirmation before starting
         from PyQt5.QtWidgets import QMessageBox
         start = QMessageBox.question(self, 'Start pulse analysis?', 'Regular measurement for this device will pause for one minute.\nStart pulse analysis?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -367,19 +372,19 @@ class DataLogger:
             original_threshold = cpc_settings.opc_threshold if cpc_settings else nan
             # if threshold value is nan, stop pulse analysis
             if isnan(original_threshold):
-                self.pulse_analysis_stop(device_id, device_param)
+                self.pulse_analysis_stop(device_id, device_config)
                 return
 
             # clear previous pulse analysis points
             self.data_holder.device_widgets[device_id].pulse_quality.clear_analysis_points()
 
             # create file and store threshold value
-            filepath = self.params.child('Data settings').child('File path').value()
+            filepath = self.data_settings.file_path
             # timestamp
             timestamp = dt.fromtimestamp(self.data_holder.current_time)
             timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))
             # serial number
-            serial_number = device_param.child('Serial number').value()
+            serial_number = device_config.serial_number
             # compile filename and add to data_holder.pulse_analysis_filenames dictionary
             if osx_mode:
                 filename = filepath + '/' + timestamp_file + '_pulse_analysis_' + serial_number + '.csv'
@@ -392,9 +397,9 @@ class DataLogger:
                 file.write('\n') # create new line
                 # write header
                 file.write('Threshold (mV),Number of pulses,Dead time (µs),Pulse duration (ns)')
-        
+
         except Exception as e:
             print(traceback.format_exc())
             logging.exception(e)
             # if pulse analysis cannot be started, stop it (resume normal operation)
-            self.pulse_analysis_stop(device_id, device_param)
+            self.pulse_analysis_stop(device_id, device_config)
