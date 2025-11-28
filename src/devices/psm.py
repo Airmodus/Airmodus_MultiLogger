@@ -31,6 +31,9 @@ class PSMWidget(ComplexDevice):
         device_type = device_config.device_type
         self.connected_cpc_device = None  # Direct reference to connected CPC widget
         self._needs_cpc_dropdown_update = False  # Flag for lazy dropdown updates
+        # create plot widget for PSM (first tab)
+        self.plot_tab = SinglePlot(device_type=PSM)
+        self.addTab(self.plot_tab, "Plot")
         # create set tab for PSM
         self.set_tab = PSMSetTab(device_type)
         self.addTab(self.set_tab, "Set")
@@ -40,12 +43,9 @@ class PSMWidget(ComplexDevice):
         # create mode tab for PSM
         self.measure_tab = PSMMeasureTab()
         self.addTab(self.measure_tab, "Measure")
-        # create plot widget for PSM
-        self.plot_tab = SinglePlot(device_type=PSM)
-        self.addTab(self.plot_tab, "PSM plot")
         # create contour plot tab for PSM
         self.contour_tab = PSMContourTab(self.device_config)
-        self.addTab(self.contour_tab, "Contour Plot")
+        self.addTab(self.contour_tab, "Contour")
 
         # create list of PSM status widgets, used in update_errors
         self.psm_status_widgets = [

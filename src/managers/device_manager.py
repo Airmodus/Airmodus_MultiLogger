@@ -52,11 +52,8 @@ class DeviceManager(QObject):
 
             connection = device_widget.connection
 
-            # Format port based on OS
-            if self.osx_mode:
-                port = str(device_config.com_port)
-            else:
-                port = "COM" + str(device_config.com_port)
+            # Get port directly - pyserial accepts just the number on Windows
+            port = device_config.com_port
 
             # Check if currently connected
             was_connected = hasattr(connection, 'connection') and connection.connection.is_open
@@ -100,7 +97,6 @@ class DeviceManager(QObject):
                     if device_widget.supports_idn_inquiry():
                         if dev_id not in self.data_holder.idn_inquiry_devices:
                             self.data_holder.idn_inquiry_devices.append(dev_id)
-                            print(f"[DEBUG IDN] Device manager: Added device {dev_id} to IDN inquiry list")
 
                     # Device-specific connection setup
                     device_widget.on_connection_established()
@@ -215,15 +211,22 @@ class DeviceManager(QObject):
             widget = self.data_holder.device_widgets.get(device_config.device_id)
             if widget and hasattr(widget, 'is_connected') and widget.is_connected:
                 # Get port for this device
-                if self.osx_mode:
-                    port = str(device_config.com_port)
-                else:
-                    port = "COM" + str(device_config.com_port)
+                port = device_config.com_port
 
                 # Mark this port as connected if it matches the discovered port
                 if port and port != 'Select port...' and port == port_info['port']:
                     port_statuses[port_info['port']] = 'connected'
+                    # Update device info from config (scanner can't probe busy ports)
+                    port_info_dict[port_info['port']]['device_type'] = device_config.device_type_name
+                    if device_config.serial_number:
+                        port_info_dict[port_info['port']]['serial_number'] = device_config.serial_number
                     break
+
+        # Update cache progressively so dialog can show real-time updates
+        self._port_info_cache[port_info['port']] = {
+            **port_info_dict[port_info['port']],
+            'status': port_statuses.get(port_info['port'], 'unknown')
+        }
 
         # Emit signal for UI updates (PortSelectionDialog will get fresh data when opened)
         self.port_discovered.emit(port_info)
@@ -261,14 +264,16 @@ class DeviceManager(QObject):
             widget = self.data_holder.device_widgets.get(device_config.device_id)
             if widget and hasattr(widget, 'is_connected') and widget.is_connected:
                 # Get port for this device
-                if self.osx_mode:
-                    port = str(device_config.com_port)
-                else:
-                    port = "COM" + str(device_config.com_port)
+                port = device_config.com_port
 
                 # Mark this port as connected in status dictionary
                 if port and port != 'Select port...' and port in port_statuses:
                     port_statuses[port] = 'connected'
+                    # Update device info from config (scanner can't probe busy ports)
+                    if port in port_info_dict:
+                        port_info_dict[port]['device_type'] = device_config.device_type_name
+                        if device_config.serial_number:
+                            port_info_dict[port]['serial_number'] = device_config.serial_number
 
         # Cache combined port info with status for dialogs
         self._port_info_cache = {}
@@ -357,10 +362,7 @@ class DeviceManager(QObject):
         # Find and disconnect any devices using this port
         for device_config in self.config.devices:
             # Get port for this device
-            if self.osx_mode:
-                device_port = str(device_config.com_port)
-            else:
-                device_port = "COM" + str(device_config.com_port)
+            device_port = device_config.com_port
 
             widget = self.data_holder.device_widgets.get(device_config.device_id)
             if not widget:
@@ -410,7 +412,6 @@ class DeviceManager(QObject):
                     # IDN/firmware inquiry
                     if widget.supports_idn_inquiry():
                         if device_config.device_id in self.data_holder.idn_inquiry_devices:
-                            print(f"[DEBUG IDN] Device manager: Sending *IDN? query to device {device_config.device_id} on port {device_config.com_port}")
                             self._idn_inquiry(widget.connection.connection)
                         elif widget.supports_firmware_inquiry():
                             firmware_version = device_config.extra_params.get('firmware_version', '')

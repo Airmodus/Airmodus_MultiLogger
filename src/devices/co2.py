@@ -13,7 +13,7 @@ class CO2Widget(SimpleDevice):
 
         # Create plot widget
         self.plot_tab = SinglePlot(device_type=CO2_SENSOR)
-        self.addTab(self.plot_tab, "CO2 plot")
+        self.addTab(self.plot_tab, "Plot")
 
         # Use default plot configuration (auto-plots first value from current_data)
         self.plot_config = DefaultSinglePlotConfig(self)

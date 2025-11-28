@@ -11,7 +11,7 @@ class RHTPWidget(SimpleDevice):
         super().__init__(device_config, *args, **kwargs)
         # create plot widget for RHTP
         self.plot_tab = TriplePlot(device_type=RHTP)
-        self.addTab(self.plot_tab, "RHTP plot")
+        self.addTab(self.plot_tab, "Plot")
 
         # Plot configuration (composition over inheritance)
         self.plot_config = RHTPPlotConfig(self)

@@ -205,6 +205,39 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
             # Add as the last tab
             self.addTab(self._device_settings_tab, "Device")
 
+    def _get_unique_short_id(self, serial_number, data_holder):
+        """
+        Get a unique short identifier for this device.
+
+        Computes unique IDs across all connected devices to avoid collisions.
+        Uses first 4 chars, adding more until unique.
+
+        Args:
+            serial_number: Full serial number string
+            data_holder: DataHolder with device_widgets for collision detection
+
+        Returns:
+            Unique short identifier string
+        """
+        from utils import compute_unique_short_ids
+
+        if not serial_number:
+            return ""
+
+        # Build dict of all device serial numbers
+        serial_numbers = {}
+        for dev_id, widget in data_holder.device_widgets.items():
+            if hasattr(widget, 'device_config') and widget.device_config.serial_number:
+                serial_numbers[dev_id] = widget.device_config.serial_number
+
+        # Ensure current device is included
+        serial_numbers[self.dev_id] = serial_number
+
+        # Compute unique IDs for all
+        unique_ids = compute_unique_short_ids(serial_numbers)
+
+        return unique_ids.get(self.dev_id, serial_number[:4] if len(serial_number) >= 4 else serial_number)
+
     def _update_device_settings_display(self):
         """Update the device settings display from config."""
         # Update COM port
@@ -781,21 +814,18 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
             elif parsed['type'] == 'info' and parsed['command'] == '*IDN':
                 # Handle device identification
                 serial_number = parsed['data']
-                print(f"[DEBUG IDN] Device {self.dev_id}: Received IDN response, serial: {serial_number}, type: {self.dev_type}")
                 if self.device_config.serial_number != serial_number:
                     self.device_config.serial_number = serial_number
                     # Trigger config change callback if available
                     if hasattr(self, 'on_config_changed') and self.on_config_changed:
                         self.on_config_changed()
 
-                # Auto-populate device nickname for Airmodus devices
-                from device_patterns import DeviceIdentifier
+                # Auto-populate device nickname with device type + unique short identifier
                 current_nickname = self.device_config.device_nickname
                 if not current_nickname:  # Only set if empty (preserve user overrides)
-                    display_name = DeviceIdentifier.extract_display_name(serial_number, self.dev_type)
-                    if display_name:
-                        print(f"[DEBUG IDN] Auto-setting nickname to: {display_name}")
-                        self.device_config.device_nickname = display_name
+                    short_id = self._get_unique_short_id(serial_number, data_holder)
+                    if short_id:
+                        self.device_config.device_nickname = f"{self.device_config.device_type_name} {short_id}"
                         if hasattr(self, 'on_config_changed') and self.on_config_changed:
                             self.on_config_changed()
 

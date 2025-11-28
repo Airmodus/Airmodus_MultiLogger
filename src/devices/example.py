@@ -13,7 +13,7 @@ class ExampleDeviceWidget(SimpleDevice):
 
         # Create plot widget
         self.plot_tab = SinglePlot(device_type=EXAMPLE_DEVICE)
-        self.addTab(self.plot_tab, "Example device plot")
+        self.addTab(self.plot_tab, "Plot")
 
         # Use example plot configuration (generates random test data)
         self.plot_config = ExampleDevicePlotConfig(self)

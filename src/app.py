@@ -275,6 +275,11 @@ class MainWindow(QMainWindow):
         self.device_tabs.setCurrentIndex(index)
         self._update_close_button_visibility()
 
+        # Reset device's internal tab to show Plot tab (index 0) when switching devices
+        device_widget = self.device_tabs.widget(index)
+        if device_widget and hasattr(device_widget, 'setCurrentIndex'):
+            device_widget.setCurrentIndex(0)
+
     def _create_error_indicator_icon(self, color="#F57C00"):
         """Create a small colored dot icon for tab error indicators.
 
@@ -539,9 +544,26 @@ class MainWindow(QMainWindow):
 
         selected_port = dialog.get_selected_port()
         device_type_name = dialog.get_selected_type()
+        serial_number = dialog.get_selected_serial_number()
 
         if not selected_port or not device_type_name:
             return  # Invalid selection
+
+        # Generate nickname with device type + unique short ID if serial number is available
+        device_nickname = ""
+        if serial_number:
+            from utils import compute_unique_short_ids
+
+            # Build dict of all existing device serial numbers + new one
+            serial_numbers = {-1: serial_number}  # -1 as temp key for new device
+            for dev_cfg in self.config.devices:
+                if dev_cfg.serial_number:
+                    serial_numbers[dev_cfg.device_id] = dev_cfg.serial_number
+
+            unique_ids = compute_unique_short_ids(serial_numbers)
+            short_id = unique_ids.get(-1, "")
+            if short_id:
+                device_nickname = f"{device_type_name} {short_id}"
 
         # Convert device type name to device ID
         name_to_id = {name: dev_id for dev_id, name in self.data_holder.device_names.items()}
@@ -563,8 +585,8 @@ class MainWindow(QMainWindow):
             device_type=device_type,
             device_type_name=device_type_name,
             com_port=selected_port,
-            serial_number="",
-            device_nickname="",
+            serial_number=serial_number,
+            device_nickname=device_nickname,
             plot_to_main=True,
             settings=create_device_settings(device_type),
             extra_params={}
@@ -741,6 +763,14 @@ class MainWindow(QMainWindow):
             # Load new format directly
             self.config = AppConfig.from_dict(data)
 
+        # Update config references in all managers since we replaced self.config
+        if hasattr(self, 'device_manager'):
+            self.device_manager.config = self.config
+        if hasattr(self, 'data_logger'):
+            self.data_logger.config = self.config
+        if hasattr(self, 'plot_manager'):
+            self.plot_manager.config = self.config
+
         # Load database connection string
         if 'database_connection_string' in data:
             conn_string = data['database_connection_string']
@@ -793,6 +823,10 @@ class MainWindow(QMainWindow):
 
             # Update tab name
             self.rename_tab(device_config.device_id)
+
+            # Update device settings display (nickname field, etc.)
+            if hasattr(widget, '_update_device_settings_display'):
+                widget._update_device_settings_display()
 
             # Update status bar device name if status bar exists
             if hasattr(self, 'status_bar') and device_config.device_id in self.status_bar.device_widgets:
@@ -852,9 +886,13 @@ class MainWindow(QMainWindow):
 
         # Add widget to GUI
         self.device_tabs.addWidget(widget)
-        tab_name = device_config.device_nickname or device_config.device_type_name
-        if device_config.serial_number:
+        # Tab name: prefer nickname, fallback to "Type Serial", or just "Type"
+        if device_config.device_nickname:
+            tab_name = device_config.device_nickname
+        elif device_config.serial_number:
             tab_name = f"{device_config.device_type_name} {device_config.serial_number}"
+        else:
+            tab_name = device_config.device_type_name
         tab_index = self.device_tab_bar.addTab(tab_name)
         self._add_close_button_to_tab(tab_index)
         self._update_close_button_visibility()

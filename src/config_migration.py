@@ -76,12 +76,20 @@ def params_dict_to_app_config(params_dict: Dict[str, Any]) -> AppConfig:
         if 'DB averaging interval' in device_params:
             extra_params['db_averaging_interval'] = device_params['DB averaging interval']
 
+        # Get COM port and convert old integer format to string format
+        # Old configs stored port as int (e.g., 5), new format uses string (e.g., "COM5")
+        raw_port = device_params.get('COM port', '')
+        if isinstance(raw_port, int) and raw_port > 0:
+            com_port = f"COM{raw_port}"
+        else:
+            com_port = raw_port
+
         # Create device config
         device_config = DeviceConfig(
             device_id=device_params.get('DevID', 0),
             device_type=device_type,
             device_type_name=device_type_name,
-            com_port=device_params.get('COM port', ''),
+            com_port=com_port,
             serial_number=device_params.get('Serial number', ''),
             device_nickname=device_params.get('Device nickname', ''),
             plot_to_main=device_params.get('Plot to main', True),

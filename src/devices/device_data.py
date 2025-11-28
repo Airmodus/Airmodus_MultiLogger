@@ -562,6 +562,12 @@ class DeviceConfig:
                       if k not in ('settings', 'settings_type')}
         config_data['settings'] = settings_obj
 
+        # Convert old integer COM port format to string format (Windows)
+        # Old configs stored port as int (e.g., 5), new format uses string (e.g., "COM5")
+        raw_port = config_data.get('com_port', '')
+        if isinstance(raw_port, int) and raw_port > 0:
+            config_data['com_port'] = f"COM{raw_port}"
+
         return cls(**config_data)
 
 

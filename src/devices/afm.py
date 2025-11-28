@@ -11,7 +11,7 @@ class AFMWidget(SimpleDevice):
         super().__init__(device_config, *args, **kwargs)
         # create plot widget for AFM
         self.plot_tab = AFMPlot()
-        self.addTab(self.plot_tab, "AFM plot")
+        self.addTab(self.plot_tab, "Plot")
 
         # Plot configuration (composition over inheritance)
         self.plot_config = AFMPlotConfig(self)

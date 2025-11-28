@@ -30,6 +30,9 @@ class CPCWidget(ComplexDevice):
         self.ten_hz_data = full(10, nan)  # 10 Hz logging data buffer
         self.pulse_analysis_index = None  # None = not in analysis mode, 0-6 = threshold index
 
+        # create plot widget (first tab)
+        self.plot_tab = SinglePlot(device_type=CPC)
+        self.addTab(self.plot_tab, "Plot")
         # create set tab widget for cpc settings
         self.set_tab = CPCSetTab()
         self.addTab(self.set_tab, "Set")
@@ -39,12 +42,9 @@ class CPCWidget(ComplexDevice):
         # create database/ACTRIS tab for database settings and status
         self.database_tab = CPCDatabaseTab(device_config)
         self.addTab(self.database_tab, "ACTRIS")
-        # create plot widget for Concentration
-        self.plot_tab = SinglePlot(device_type=CPC)
-        self.addTab(self.plot_tab, "Concentration")
         # create pulse quality widget for CPC pulse quality monitoring
         self.pulse_quality = PulseQuality()
-        self.addTab(self.pulse_quality, "Pulse quality")
+        self.addTab(self.pulse_quality, "Pulse")
 
         # create list of widget references for updating gui with cpc system status
         self.cpc_status_widgets = [

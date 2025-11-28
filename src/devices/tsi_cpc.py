@@ -11,7 +11,7 @@ class TSIWidget(SimpleDevice):
         super().__init__(device_config, *args, **kwargs)
         # create plot widget for TSI CPC (uses CPC plot type)
         self.plot_tab = SinglePlot(device_type=CPC)
-        self.addTab(self.plot_tab, "TSI CPC plot")
+        self.addTab(self.plot_tab, "Plot")
 
         # Plot configuration (composition over inheritance)
         self.plot_config = TSICPCPlotConfig(self)

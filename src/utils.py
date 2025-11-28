@@ -130,8 +130,6 @@ def parse_idn_response(message):
     Returns:
         dict: Standardized info response with serial number
     """
-    print(f"[DEBUG IDN] Parsing: Raw message: {repr(message)}")
-
     # Strip any newlines and carriage returns first
     clean_message = message.strip('\n').strip('\r').strip()
 
@@ -146,7 +144,6 @@ def parse_idn_response(message):
         # Fallback to old logic
         serial_number = clean_message.split(" ", 1)[1].strip() if " " in clean_message else ""
 
-    print(f"[DEBUG IDN] Parsing: Extracted serial number: {serial_number}")
     return {
         'type': 'info',
         'command': '*IDN',
@@ -199,9 +196,109 @@ def create_error_response(message, command, error):
     }
 
 
+def get_short_id(serial_number):
+    """
+    Extract a short identifier from serial number.
+
+    For Airmodus CPC with nicknames (e.g., "301* Jerry"), extracts the nickname.
+    For other devices, returns first 4 characters.
+
+    Args:
+        serial_number: Full serial number string
+
+    Returns:
+        Short identifier string (e.g., "Jerry" or "1234")
+    """
+    import re
+
+    if not serial_number:
+        return ""
+
+    # Check for Airmodus A30/A20 CPC with nickname (e.g., "301* Jerry")
+    match = re.match(r'^(?:301|235)[\*\s]\s*(.+)', serial_number)
+    if match:
+        return match.group(1).strip()
+
+    # For other devices, return first 4 characters
+    if len(serial_number) >= 4:
+        return serial_number[:4]
+
+    return serial_number
+
+
+def compute_unique_short_ids(serial_numbers):
+    """
+    Compute unique short IDs for a collection of serial numbers.
+
+    Starts with first 4 chars, adds more until each ID is unique.
+
+    Args:
+        serial_numbers: dict mapping key -> serial_number (e.g., port -> serial or device_id -> serial)
+
+    Returns:
+        dict: Mapping of key -> unique short_id
+    """
+    import re
+
+    short_ids = {}
+    needs_resolution = {}  # key -> serial for non-nickname serials
+
+    # First pass: extract nicknames or collect serials needing resolution
+    for key, serial in serial_numbers.items():
+        if not serial:
+            short_ids[key] = ""
+            continue
+
+        # Check for Airmodus CPC with nickname
+        match = re.match(r'^(?:301|235)[\*\s]\s*(.+)', serial)
+        if match:
+            short_ids[key] = match.group(1).strip()
+        else:
+            needs_resolution[key] = serial
+
+    # Second pass: resolve collisions by adding characters
+    if needs_resolution:
+        chars = 4
+        pending = dict(needs_resolution)
+
+        while pending and chars <= 50:
+            # Compute current short IDs
+            current = {key: serial[:chars] if len(serial) >= chars else serial
+                       for key, serial in pending.items()}
+
+            # Group by short ID to find collisions
+            id_to_keys = {}
+            for key, short in current.items():
+                id_to_keys.setdefault(short, []).append(key)
+
+            # Assign unique ones, keep collisions for next round
+            new_pending = {}
+            for short, keys in id_to_keys.items():
+                if len(keys) == 1:
+                    short_ids[keys[0]] = short
+                else:
+                    # Check if we've used full serial
+                    for key in keys:
+                        serial = pending[key]
+                        if len(serial) <= chars:
+                            short_ids[key] = serial
+                        else:
+                            new_pending[key] = serial
+
+            pending = new_pending
+            chars += 1
+
+        # Safety: assign any remaining
+        for key, serial in pending.items():
+            short_ids[key] = serial
+
+    return short_ids
+
+
 __all__ = [
     'compile_cpc_settings', 'compile_psm_settings',
     '_manage_plot_array', '_roll_pulse_array', 'psm_update', 'psm_flow_send', 'cpc_flow_send',
     'ten_hz_clicked', 'command_entered',
-    'parse_idn_response', 'create_data_response', 'create_error_response'
+    'parse_idn_response', 'create_data_response', 'create_error_response',
+    'get_short_id', 'compute_unique_short_ids'
 ]

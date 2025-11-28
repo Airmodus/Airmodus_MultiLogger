@@ -15,15 +15,15 @@ class eDiluterWidget(ComplexDevice):
     def __init__(self, device_config, *args, **kwargs):
         super().__init__(device_config, *args, **kwargs)
         self.current_mode = None # used for storing current mode
+        # create plot widget (first tab)
+        self.plot_tab = SinglePlot(device_type=EDILUTER)
+        self.addTab(self.plot_tab, "Plot")
         # create set tab for eDiluter
         self.set_tab = eDiluterSetTab()
         self.addTab(self.set_tab, "Set")
         # create status tab for eDiluter
         self.status_tab = eDiluterStatusTab()
         self.addTab(self.status_tab, "Status")
-        # create plot widget for eDiluter
-        self.plot_tab = SinglePlot(device_type=EDILUTER)
-        self.addTab(self.plot_tab, "eDiluter plot")
         # create dictionary with mode names and corresponding widgets
         self.mode_dict = {"INIT": self.set_tab.init, "WARMUP": self.set_tab.warmup,
                           "STANDBY": self.set_tab.standby, "MEASUREMENT": self.set_tab.measurement}

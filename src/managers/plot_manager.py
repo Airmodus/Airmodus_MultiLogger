@@ -81,12 +81,12 @@ class PlotManager:
                 if is_connected or is_example:
                     # Check if device is in special mode (e.g., CPC pulse analysis)
                     if hasattr(device_widget, 'plot_config'):
-                        if device_widget.plot_config.should_skip_normal_plotting(dev_id, device_config, self.data_holder):
+                        if device_widget.plot_config.should_skip_normal_plotting(dev_id, self.data_holder):
                             try:
                                 # Handle special mode data collection
                                 device_widget.plot_config.handle_special_mode(
                                     dev_id, self.data_holder.time_counter,
-                                    self.data_holder.plot_data, device_config, self.data_holder
+                                    self.data_holder.plot_data, self.data_holder
                                 )
                             except PulseAnalysisError as e:
                                 print(traceback.format_exc())

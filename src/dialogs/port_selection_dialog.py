@@ -75,6 +75,23 @@ class PortSelectionDialog(QDialog):
             traceback.print_exc()
             return {}
 
+    def _compute_short_ids(self):
+        """
+        Compute unique short identifiers for all ports.
+
+        Returns:
+            dict: Mapping of port -> short_id
+        """
+        from utils import compute_unique_short_ids
+
+        # Build serial_numbers dict from port_info
+        serial_numbers = {
+            port: info.get('serial_number', '')
+            for port, info in self.port_info.items()
+        }
+
+        return compute_unique_short_ids(serial_numbers)
+
     def _filter_ports(self, all_ports):
         """
         Filter ports based on device type.
@@ -126,7 +143,7 @@ class PortSelectionDialog(QDialog):
         # Port table
         self.port_table = QTableWidget()
         self.port_table.setColumnCount(4)
-        self.port_table.setHorizontalHeaderLabels(["Port", "Device Type", "Serial Number", "Status"])
+        self.port_table.setHorizontalHeaderLabels(["Port", "Device Type", "ID", "Status"])
         self.port_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.port_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.port_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -157,7 +174,7 @@ class PortSelectionDialog(QDialog):
 
         self.setLayout(layout)
 
-    def _add_port_row(self, port, port_data):
+    def _add_port_row(self, port, port_data, short_id):
         """Add a new row for the given port."""
         # Insert new row at the end
         row = self.port_table.rowCount()
@@ -176,11 +193,11 @@ class PortSelectionDialog(QDialog):
         type_item = QTableWidgetItem(device_type)
         self.port_table.setItem(row, 1, type_item)
 
-        # Serial Number
-        serial = port_data.get('serial_number', '-')
-        if serial and len(serial) > 15:
-            serial = serial[:12] + "..."
-        serial_item = QTableWidgetItem(serial)
+        # Serial Number - show unique short identifier
+        serial = port_data.get('serial_number', '')
+        serial_item = QTableWidgetItem(short_id if short_id else '-')
+        if serial and short_id != serial:
+            serial_item.setToolTip(f"Full serial: {serial}")
         self.port_table.setItem(row, 2, serial_item)
 
         # Status
@@ -208,7 +225,7 @@ class PortSelectionDialog(QDialog):
             if idx > row:
                 self._port_to_row[p] = idx - 1
 
-    def _update_port_row(self, row, port, port_data):
+    def _update_port_row(self, row, port, port_data, short_id):
         """Update an existing row only if data has changed."""
         changed = False
 
@@ -219,13 +236,14 @@ class PortSelectionDialog(QDialog):
             type_item.setText(device_type)
             changed = True
 
-        # Check and update Serial Number
-        serial = port_data.get('serial_number', '-')
-        if serial and len(serial) > 15:
-            serial = serial[:12] + "..."
+        # Check and update Serial Number - show unique short identifier
+        serial = port_data.get('serial_number', '')
+        display_serial = short_id if short_id else '-'
         serial_item = self.port_table.item(row, 2)
-        if serial_item and serial_item.text() != serial:
-            serial_item.setText(serial)
+        if serial_item and serial_item.text() != display_serial:
+            serial_item.setText(display_serial)
+            if serial and short_id != serial:
+                serial_item.setToolTip(f"Full serial: {serial}")
             changed = True
 
         # Check and update Status
@@ -318,6 +336,9 @@ class PortSelectionDialog(QDialog):
             self.port_table.setRowCount(0)
             self._port_to_row.clear()
 
+        # Compute unique short IDs for all ports
+        short_ids = self._compute_short_ids()
+
         # Build sets of current vs new ports
         current_ports = set(self._port_to_row.keys())
         new_ports = set(self.port_info.keys())
@@ -330,13 +351,13 @@ class PortSelectionDialog(QDialog):
         # Add new ports
         ports_to_add = new_ports - current_ports
         for port in ports_to_add:
-            self._add_port_row(port, self.port_info[port])
+            self._add_port_row(port, self.port_info[port], short_ids.get(port, ''))
 
         # Update existing ports (only if data changed)
         ports_to_update = current_ports & new_ports
         for port in ports_to_update:
             row = self._port_to_row[port]
-            self._update_port_row(row, port, self.port_info[port])
+            self._update_port_row(row, port, self.port_info[port], short_ids.get(port, ''))
 
     def _is_showing_no_ports_message(self):
         """Check if the table is currently showing the 'no ports' message."""
@@ -467,3 +488,9 @@ class PortSelectionDialog(QDialog):
     def get_selected_type(self):
         """Return selected device type."""
         return self.selected_type
+
+    def get_selected_serial_number(self):
+        """Return serial number of the selected port (if detected)."""
+        if self.selected_port and self.selected_port in self.port_info:
+            return self.port_info[self.selected_port].get('serial_number', '')
+        return ''

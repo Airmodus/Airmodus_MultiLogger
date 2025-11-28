@@ -12,7 +12,7 @@ class ElectrometerWidget(SimpleDevice):
         super().__init__(device_config, *args, **kwargs)
         # create plot widget for Electrometer
         self.plot_tab = ElectrometerPlot()
-        self.addTab(self.plot_tab, "Electrometer plot")
+        self.addTab(self.plot_tab, "Plot")
 
         # Plot configuration (composition over inheritance)
         self.plot_config = ElectrometerPlotConfig(self)
