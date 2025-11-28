@@ -293,7 +293,7 @@ class PSMWidget(ComplexDevice):
         # Clear extra data buffer after 60 seconds of consecutive buffering
         if self.dev_id in data_holder.extra_data and self._extra_data_counter >= 60:
             del data_holder.extra_data[self.dev_id]
-            logging.info("PSM %s extra data buffer cleared", device_param.child('Serial number').value())
+            logging.info("PSM %s extra data buffer cleared", self.device_config.serial_number)
 
         # Initialize from extra_data buffer
         was_present = self.dev_id in data_holder.extra_data
@@ -346,16 +346,19 @@ class PSMWidget(ComplexDevice):
             elif parsed['type'] == 'info' and parsed['command'] == '*IDN':
                 # Handle device identification
                 serial_number = parsed['data']
-                if device_param.child('Serial number').value() != serial_number:
-                    device_param.child('Serial number').setValue(serial_number)
+                if self.device_config.serial_number != serial_number:
+                    self.device_config.serial_number = serial_number
+                    if hasattr(self, 'on_config_changed') and self.on_config_changed:
+                        self.on_config_changed()
                 if self.dev_id in data_holder.idn_inquiry_devices:
                     data_holder.idn_inquiry_devices.remove(self.dev_id)
 
             elif parsed['type'] == 'firmware':
                 # Update firmware version
                 firmware_version = parsed['data']
-                if device_param.child('Firmware version').value() != firmware_version:
-                    device_param.child('Firmware version').setValue(firmware_version)
+                current_fw = self.device_config.extra_params.get('firmware_version', '')
+                if current_fw != firmware_version:
+                    self.device_config.extra_params['firmware_version'] = firmware_version
 
             # Show messages in command widget if requested
             if parsed.get('show_in_command_widget', False):
@@ -710,14 +713,14 @@ class PSMWidget(ComplexDevice):
         """PSM supports 10 Hz mode."""
         return True
 
-    def on_connection_established(self, device_param):
+    def on_connection_established(self):
         """
         Reset PSM state on connection.
 
         Clears firmware version and dilution parameters so they are re-fetched.
         """
         # Clear firmware version
-        device_param.child('Firmware version').setValue("")
+        self.device_config.extra_params['firmware_version'] = ""
 
         # Clear dilution parameters in device settings
         if self.settings:

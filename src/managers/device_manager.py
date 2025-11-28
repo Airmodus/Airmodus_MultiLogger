@@ -103,7 +103,7 @@ class DeviceManager(QObject):
                             print(f"[DEBUG IDN] Device manager: Added device {dev_id} to IDN inquiry list")
 
                     # Device-specific connection setup
-                    device_widget.on_connection_established(device_config)
+                    device_widget.on_connection_established()
 
                     # Update UI styling if device has command widget
                     if device_widget.has_command_widget():
@@ -117,7 +117,7 @@ class DeviceManager(QObject):
                     logging.info(f"[SERIAL DISCONNECT] DevID={dev_id} Port={port}")
 
                     # Device-specific cleanup
-                    device_widget.on_disconnection(device_config)
+                    device_widget.on_disconnection()
 
                     # Update UI styling if device has command widget
                     if device_widget.has_command_widget():
@@ -380,7 +380,7 @@ class DeviceManager(QObject):
                 widget.is_connected = False
 
                 # Update UI for device-specific handling
-                widget.on_disconnection(device_config)
+                widget.on_disconnection()
 
                 # Update UI styling if device has command widget
                 if widget.has_command_widget():

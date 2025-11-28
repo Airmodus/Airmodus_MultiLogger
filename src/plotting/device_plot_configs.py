@@ -51,7 +51,7 @@ class BasePlotConfig:
         """
         return {}  # Default: no rolling buffers
 
-    def get_plot_values(self, dev_id, time_counter, plot_data, device_param, data_holder=None):
+    def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
         """
         Extract and store plottable values from device data.
 
@@ -62,13 +62,12 @@ class BasePlotConfig:
             dev_id: Device ID
             time_counter: Current time index
             plot_data: Plot data dictionary
-            device_param: Device parameter from parameter tree
             data_holder: DataHolder instance (for accessing other devices)
         """
         raise NotImplementedError("Subclasses must implement get_plot_values")
 
     def update_main_plot(self, dev_id, time_counter, x_time_list, plot_data,
-                        curve, device_param, plot_to_main_value):
+                        curve, plot_to_main_value):
         """
         Update main plot curve with data.
 
@@ -78,7 +77,6 @@ class BasePlotConfig:
             x_time_list: X-axis time data
             plot_data: Plot data dictionary
             curve: PlotCurveItem to update
-            device_param: Device parameter from parameter tree
             plot_to_main_value: Value of "Plot to main" parameter
         """
         # Default behavior: plot the primary key if enabled
@@ -154,7 +152,7 @@ class BasePlotConfig:
         """
         return ''  # Default: primary key
 
-    def should_skip_normal_plotting(self, dev_id, device_param, data_holder):
+    def should_skip_normal_plotting(self, dev_id, data_holder):
         """
         Check if device is in a special mode that skips normal plotting.
 
@@ -163,7 +161,6 @@ class BasePlotConfig:
 
         Args:
             dev_id: Device ID
-            device_param: Device parameter from parameter tree
             data_holder: DataHolder instance
 
         Returns:
@@ -171,7 +168,7 @@ class BasePlotConfig:
         """
         return False  # Default: always plot normally
 
-    def handle_special_mode(self, dev_id, time_counter, plot_data, device_param, data_holder):
+    def handle_special_mode(self, dev_id, time_counter, plot_data, data_holder):
         """
         Handle data collection during special modes.
 
@@ -182,7 +179,6 @@ class BasePlotConfig:
             dev_id: Device ID
             time_counter: Current time index
             plot_data: Plot data dictionary
-            device_param: Device parameter from parameter tree
             data_holder: DataHolder instance
         """
         pass  # Default: no special mode handling
@@ -253,7 +249,7 @@ class BasePlotConfig:
 class EDiluterPlotConfig(BasePlotConfig):
     """Plot configuration for eDiluter."""
 
-    def get_plot_values(self, dev_id, time_counter, plot_data, device_param, data_holder=None):
+    def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
         """Store temp1 value."""
         ediluter_data = self.device.current_data
         plot_data[str(dev_id)][time_counter] = ediluter_data.temp1
@@ -270,7 +266,7 @@ class CPCPlotConfig(BasePlotConfig):
         """CPC has 24-hour rolling buffers for pulse analysis."""
         return {':pd': 86400, ':pr': 86400}
 
-    def get_plot_values(self, dev_id, time_counter, plot_data, device_param, data_holder=None):
+    def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
         """
         Store CPC concentration values and pulse quality data.
 
@@ -287,19 +283,18 @@ class CPCPlotConfig(BasePlotConfig):
 
         # Check if this CPC is connected to any PSM
         psm_connection = False
-        if data_holder:
-            params = data_holder.params if hasattr(data_holder, 'params') else None
-            if params:
-                for psm_param in params.child('Device settings').children():
-                    psm_type = psm_param.child('Device type').value()
-                    if psm_type in [PSM, PSM2] and psm_param.child('Connected').value():
-                        if psm_param.child('Connected CPC').value() == dev_id:
-                            # Plot PSM concentration instead of CPC
-                            psm_id = psm_param.child('DevID').value()
-                            psm_data = data_holder.get_device_data(psm_id)
+        if data_holder and hasattr(data_holder, 'device_widgets'):
+            for widget in data_holder.device_widgets.values():
+                if widget.device_config.device_type in [PSM, PSM2]:
+                    connected_cpc = widget.device_config.extra_params.get('connected_cpc', 'None')
+                    if connected_cpc == dev_id:
+                        # Plot PSM concentration instead of CPC
+                        psm_id = widget.device_config.device_id
+                        psm_data = data_holder.get_device_data(psm_id)
+                        if psm_data:
                             plot_data[str(dev_id)][time_counter] = psm_data.concentration_psm
                             psm_connection = True
-                            break
+                        break
 
         # If not connected to PSM, plot CPC concentration
         if not psm_connection:
@@ -311,9 +306,9 @@ class CPCPlotConfig(BasePlotConfig):
         plot_data[str(dev_id)+':raw'][time_counter] = cpc_data.concentration
 
         # Update pulse duration and pulse ratio for rolling buffers
-        self._update_pulse_quality(dev_id, time_counter, plot_data, device_param)
+        self._update_pulse_quality(dev_id, time_counter, plot_data)
 
-    def _update_pulse_quality(self, dev_id, time_counter, plot_data, device_param):
+    def _update_pulse_quality(self, dev_id, time_counter, plot_data):
         """Calculate and store pulse duration and pulse ratio."""
         try:
             cpc_data = self.device.current_data
@@ -404,14 +399,14 @@ class CPCPlotConfig(BasePlotConfig):
         except Exception as e:
             logging.error(traceback.format_exc())
 
-    def should_skip_normal_plotting(self, dev_id, device_param, data_holder):
+    def should_skip_normal_plotting(self, dev_id, data_holder):
         """Check if CPC is in pulse analysis mode."""
         if hasattr(self.device, 'pulse_analysis_index'):
             return (self.device.pulse_analysis_index is not None and
                     self.device.pulse_analysis_index >= 0)
         return False
 
-    def handle_special_mode(self, dev_id, time_counter, plot_data, device_param, data_holder):
+    def handle_special_mode(self, dev_id, time_counter, plot_data, data_holder):
         """Handle CPC pulse analysis mode data collection."""
         try:
             # Get device data
@@ -454,22 +449,21 @@ class TSICPCPlotConfig(BasePlotConfig):
         """TSI CPC uses CPC viewbox."""
         return CPC
 
-    def get_plot_values(self, dev_id, time_counter, plot_data, device_param, data_holder=None):
+    def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
         """Store TSI CPC concentration (same as CPC but no pulse quality)."""
         # Check for PSM connection (same logic as CPC)
         psm_connection = False
-        if data_holder:
-            params = data_holder.params if hasattr(data_holder, 'params') else None
-            if params:
-                for psm_param in params.child('Device settings').children():
-                    psm_type = psm_param.child('Device type').value()
-                    if psm_type in [PSM, PSM2] and psm_param.child('Connected').value():
-                        if psm_param.child('Connected CPC').value() == dev_id:
-                            psm_id = psm_param.child('DevID').value()
-                            psm_data = data_holder.get_device_data(psm_id)
+        if data_holder and hasattr(data_holder, 'device_widgets'):
+            for widget in data_holder.device_widgets.values():
+                if widget.device_config.device_type in [PSM, PSM2]:
+                    connected_cpc = widget.device_config.extra_params.get('connected_cpc', 'None')
+                    if connected_cpc == dev_id:
+                        psm_id = widget.device_config.device_id
+                        psm_data = data_holder.get_device_data(psm_id)
+                        if psm_data:
                             plot_data[str(dev_id)][time_counter] = psm_data.concentration_psm
                             psm_connection = True
-                            break
+                        break
 
         if not psm_connection:
             cpc_data = self.device.current_data
@@ -500,7 +494,7 @@ class TSICPCPlotConfig(BasePlotConfig):
 class PSMPlotConfig(BasePlotConfig):
     """Plot configuration for PSM."""
 
-    def get_plot_values(self, dev_id, time_counter, plot_data, device_param, data_holder=None):
+    def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
         """Store PSM saturator flow."""
         psm_data = self.device.current_data
         plot_data[str(dev_id)][time_counter] = psm_data.saturator_flow
@@ -597,7 +591,7 @@ class PSMPlotConfig(BasePlotConfig):
         psm_data.concentration_psm = round(concentration_from_psm, 2)
 
         # Copy CPC data to PSM data if Airmodus CPC
-        if cpc_device.child('Device type').value() == CPC:
+        if cpc_widget.device_config.device_type == CPC:
             psm_data.cpc_concentration = cpc_data.concentration
             psm_data.cpc_dilution_correction = round(dilution_correction_factor, 3)
             psm_data.cpc_temp_sat = cpc_data.temp_saturator
@@ -613,7 +607,7 @@ class PSMPlotConfig(BasePlotConfig):
             psm_data.cpc_total_errors = cpc_data.total_errors
             psm_data.cpc_status_hex = cpc_data.status_hex
         # If TSI CPC
-        elif cpc_device.child('Device type').value() == TSI_CPC:
+        elif cpc_widget.device_config.device_type == TSI_CPC:
             psm_data.cpc_concentration = cpc_data.concentration
             psm_data.cpc_dilution_correction = round(dilution_correction_factor, 3)
 
@@ -625,7 +619,7 @@ class ElectrometerPlotConfig(BasePlotConfig):
         """Electrometer has 3 voltage channels."""
         return [':1', ':2', ':3']
 
-    def get_plot_values(self, dev_id, time_counter, plot_data, device_param, data_holder=None):
+    def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
         """Store all 3 voltage values."""
         elec_data = self.device.current_data
         plot_data[str(dev_id)+':1'][time_counter] = elec_data.voltage1
@@ -678,7 +672,7 @@ class RHTPPlotConfig(BasePlotConfig):
         """RHTP has RH, T, and P."""
         return [':rh', ':t', ':p']
 
-    def get_plot_values(self, dev_id, time_counter, plot_data, device_param, data_holder=None):
+    def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
         """Store RH, T, P values."""
         rhtp_data = self.device.current_data
         plot_data[str(dev_id)+':rh'][time_counter] = rhtp_data.humidity
@@ -693,7 +687,7 @@ class RHTPPlotConfig(BasePlotConfig):
         return mapping.get(selector_value, '')
 
     def update_main_plot(self, dev_id, time_counter, x_time_list, plot_data,
-                        curve, device_param, plot_to_main_value):
+                        curve, plot_to_main_value):
         """Update main plot based on selector."""
         if not plot_to_main_value:
             curve.setData(x=[], y=[])
@@ -768,7 +762,7 @@ class AFMPlotConfig(BasePlotConfig):
         """AFM has flow, standard flow, RH, T, P."""
         return [':f', ':sf', ':rh', ':t', ':p']
 
-    def get_plot_values(self, dev_id, time_counter, plot_data, device_param, data_holder=None):
+    def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
         """Store all AFM values."""
         afm_data = self.device.current_data
         plot_data[str(dev_id)+':f'][time_counter] = afm_data.flow
@@ -785,7 +779,7 @@ class AFMPlotConfig(BasePlotConfig):
         return mapping.get(selector_value, '')
 
     def update_main_plot(self, dev_id, time_counter, x_time_list, plot_data,
-                        curve, device_param, plot_to_main_value):
+                        curve, plot_to_main_value):
         """Update main plot based on selector."""
         if not plot_to_main_value:
             curve.setData(x=[], y=[])
@@ -863,7 +857,7 @@ class AFMPlotConfig(BasePlotConfig):
 class ExampleDevicePlotConfig(BasePlotConfig):
     """Plot configuration for example/test device."""
 
-    def get_plot_values(self, dev_id, time_counter, plot_data, device_param, data_holder=None):
+    def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
         """Generate random test value for example device."""
         import random
         random_value = round(random.random() * 100, 2)  # 0-100

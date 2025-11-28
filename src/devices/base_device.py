@@ -497,7 +497,7 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         """
         return False
 
-    def on_connection_established(self, device_param):
+    def on_connection_established(self):
         """
         Called when device connection is established.
 
@@ -505,22 +505,16 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         - Clearing firmware version
         - Resetting dilution parameters
         - Initializing device state
-
-        Args:
-            device_param: Parameter tree reference for this device
         """
         pass
 
-    def on_disconnection(self, device_param):
+    def on_disconnection(self):
         """
         Called when device disconnects.
 
         Override to perform device-specific cleanup like:
         - Showing disconnection message
         - Resetting state
-
-        Args:
-            device_param: Parameter tree reference for this device
         """
         pass
 
@@ -788,17 +782,22 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
                 # Handle device identification
                 serial_number = parsed['data']
                 print(f"[DEBUG IDN] Device {self.dev_id}: Received IDN response, serial: {serial_number}, type: {self.dev_type}")
-                if device_param.child('Serial number').value() != serial_number:
-                    device_param.child('Serial number').setValue(serial_number)
+                if self.device_config.serial_number != serial_number:
+                    self.device_config.serial_number = serial_number
+                    # Trigger config change callback if available
+                    if hasattr(self, 'on_config_changed') and self.on_config_changed:
+                        self.on_config_changed()
 
                 # Auto-populate device nickname for Airmodus devices
                 from device_patterns import DeviceIdentifier
-                current_nickname = device_param.child('Device nickname').value()
+                current_nickname = self.device_config.device_nickname
                 if not current_nickname:  # Only set if empty (preserve user overrides)
                     display_name = DeviceIdentifier.extract_display_name(serial_number, self.dev_type)
                     if display_name:
                         print(f"[DEBUG IDN] Auto-setting nickname to: {display_name}")
-                        device_param.child('Device nickname').setValue(display_name)
+                        self.device_config.device_nickname = display_name
+                        if hasattr(self, 'on_config_changed') and self.on_config_changed:
+                            self.on_config_changed()
 
                 if self.dev_id in data_holder.idn_inquiry_devices:
                     data_holder.idn_inquiry_devices.remove(self.dev_id)
@@ -969,7 +968,7 @@ class ComplexDevice(BaseDevice):
         """Complex devices have command widgets."""
         return True
 
-    def on_disconnection(self, device_param):
+    def on_disconnection(self):
         """Show disconnection message in command widget."""
         if self.set_tab and hasattr(self.set_tab, 'command_widget'):
             self.set_tab.command_widget.update_text_box("Device disconnected.")
@@ -995,7 +994,7 @@ class DefaultSinglePlotConfig:
         """No rolling buffers by default."""
         return {}
 
-    def get_plot_values(self, dev_id, time_counter, plot_data, device_param, data_holder=None):
+    def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
         """Extract first value from device's current_data."""
         if self.device.current_data and hasattr(self.device.current_data, 'to_array'):
             data_array = self.device.current_data.to_array()
@@ -1003,7 +1002,7 @@ class DefaultSinglePlotConfig:
                 plot_data[str(dev_id)][time_counter] = data_array[0]
 
     def update_main_plot(self, dev_id, time_counter, x_time_list, plot_data,
-                        curve, device_param, plot_to_main_value):
+                        curve, plot_to_main_value):
         """Update main plot with single value."""
         if plot_to_main_value:
             curve.setData(

@@ -71,6 +71,9 @@ class MainWindow(QMainWindow):
         self.cpc_dict = {'None': 'None'}
         self.rhtp_dict = {'None': 'None'}
 
+        # Track active confirmation popup to prevent stacking
+        self._active_popup = None
+
         # Extracted inits
         self.data_holder = DataHolder()
         self.data_holder.error_icon = QIcon(resource_path + "/icons/error.png")
@@ -357,11 +360,24 @@ class MainWindow(QMainWindow):
         close_button.setToolTip("Remove device")
         close_button.setCursor(QCursor(Qt.PointingHandCursor))
 
-        # Connect to show confirmation popup (not emit tabCloseRequested directly)
-        close_button.clicked.connect(lambda checked=False, idx=tab_index: self._show_close_confirmation(idx))
+        # Connect to show confirmation popup - find current index dynamically
+        # (indices shift when tabs are removed, so we can't capture index at creation time)
+        close_button.clicked.connect(lambda checked=False, btn=close_button: self._show_close_confirmation_for_button(btn))
 
         # Add button to right side of tab
         self.device_tab_bar.setTabButton(tab_index, QTabBar.RightSide, close_button)
+
+    def _show_close_confirmation_for_button(self, button):
+        """
+        Find the tab index for the given close button and show confirmation.
+
+        Args:
+            button: The close button that was clicked
+        """
+        for i in range(self.device_tab_bar.count()):
+            if self.device_tab_bar.tabButton(i, QTabBar.RightSide) == button:
+                self._show_close_confirmation(i)
+                return
 
     def _show_close_confirmation(self, index):
         """
@@ -374,6 +390,14 @@ class MainWindow(QMainWindow):
         if index == 0:
             return
 
+        # Close any existing popup before showing a new one
+        if self._active_popup is not None:
+            try:
+                self._active_popup.close()
+            except RuntimeError:
+                pass  # Popup was already deleted
+            self._active_popup = None
+
         # Get device name for confirmation message
         device_name = self.device_tab_bar.tabText(index)
 
@@ -381,6 +405,9 @@ class MainWindow(QMainWindow):
         popup = TabConfirmationPopup(device_name, self)
         popup.confirmed.connect(lambda: self._remove_device_at_index(index))
         popup.show_below_tab(self.device_tab_bar, index)
+
+        # Track this popup so we can close it if another is opened
+        self._active_popup = popup
 
     def _remove_device_at_index(self, index):
         """
@@ -757,6 +784,30 @@ class MainWindow(QMainWindow):
         # Set device ID and store connection in widget
         widget.dev_id = device_config.device_id
         widget.connection = connection
+
+        # Connect config change callback for nickname and other settings
+        def on_device_config_changed():
+            """Handle device config changes (nickname, main plot value, etc.)."""
+            # Save configuration
+            self.save_configuration(self.config_file_path)
+
+            # Update tab name
+            self.rename_tab(device_config.device_id)
+
+            # Update status bar device name if status bar exists
+            if hasattr(self, 'status_bar') and device_config.device_id in self.status_bar.device_widgets:
+                status_widget = self.status_bar.device_widgets[device_config.device_id]
+                # Update device name from nickname or serial number
+                if device_config.device_nickname:
+                    status_widget.device_name = device_config.device_nickname
+                elif device_config.serial_number:
+                    status_widget.device_name = f"{device_config.device_type_name} {device_config.serial_number}"
+                else:
+                    status_widget.device_name = device_config.device_type_name
+                # Refresh the status display
+                self.status_bar.update_device_status(device_config.device_id)
+
+        widget.on_config_changed = on_device_config_changed
 
         # Set up device-specific connections using device registry
         setup_device_connections(device_config.device_type, widget, device_config, connection, self)

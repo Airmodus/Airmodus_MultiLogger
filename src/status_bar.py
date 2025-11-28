@@ -27,12 +27,19 @@ class DeviceStatusWidget(QLabel):
 
     Format: [●] Device Name: Current Value
     Color: Green=OK, Yellow=Warning, Red=Error/Disconnected
+
+    Supports dynamic sizing - shrinks when space is limited.
+    Priority devices (disconnected/error) get more space.
     """
 
     def __init__(self, dev_id, device_name, parent=None):
         super().__init__(parent)
         self.dev_id = dev_id
         self.device_name = device_name
+        self.is_priority = True  # Start as priority (disconnected)
+        self._current_value = ""
+        self._connected = False
+        self._has_error = False
 
         # Timer for keeping tooltip visible
         self._tooltip_timer = QTimer(self)
@@ -43,14 +50,14 @@ class DeviceStatusWidget(QLabel):
         self.setCursor(QCursor(Qt.PointingHandCursor))
         self.setAttribute(Qt.WA_Hover, True)  # Enable hover event tracking for rich text
         self.setTextInteractionFlags(Qt.LinksAccessibleByMouse)  # Enable mouse interaction
-        self.setStyleSheet("padding: 2px 8px; border-radius: 3px;")
+        self.setStyleSheet("padding: 2px 4px; border-radius: 3px;")
 
-        # Calculate minimum width to prevent jittering
-        # Use typical long value like "12345.6 #/cc" to calculate width
-        font_metrics = QFontMetrics(self.font())
-        typical_text = f"● {device_name}: 12345.6 #/cc"
-        min_width = font_metrics.horizontalAdvance(typical_text) + 20  # +20 for padding
-        self.setMinimumWidth(min_width)
+        # Use size policy that allows shrinking
+        from PyQt5.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+        # Set a small minimum width - just enough for icon
+        self.setMinimumWidth(30)
 
         # Initialize with disconnected state
         self.update_status(connected=False, value="", has_error=False)
@@ -65,6 +72,14 @@ class DeviceStatusWidget(QLabel):
             has_error: Does device have an error
             error_msg: Error message for tooltip
         """
+        # Store state for dynamic resizing
+        self._connected = connected
+        self._has_error = has_error
+        self._current_value = value
+
+        # Track priority status (disconnected or error = priority)
+        self.is_priority = not connected or has_error
+
         # Determine icon, colors, and text
         if not connected:
             icon = "⚠"
@@ -94,7 +109,7 @@ class DeviceStatusWidget(QLabel):
         self.setText(display_text)
 
         # Set background color and styling
-        self.setStyleSheet(f"padding: 2px 8px; border-radius: 3px; background-color: {bg_color};")
+        self.setStyleSheet(f"padding: 2px 4px; border-radius: 3px; background-color: {bg_color};")
 
         # Build tooltip
         tooltip_lines = [
@@ -192,6 +207,9 @@ class MultiLoggerStatusBar(QStatusBar):
 
     Layout:
     [Device1] [Device2] [Device3] | [Saving] | [Errors] | [Time]
+
+    Device widgets dynamically resize to fit available space.
+    Priority devices (disconnected/error) get more space.
     """
 
     def __init__(self, data_holder, config, parent=None):
@@ -202,6 +220,9 @@ class MultiLoggerStatusBar(QStatusBar):
         self.device_separators = {}  # dev_id -> VerticalSeparator (separator after this device)
         self.main_window = None  # Set by MainWindow after creation
 
+        # Width reserved for permanent widgets (saving, errors, time)
+        self._permanent_width = 250
+
         # Set fixed height
         self.setFixedHeight(30)
 
@@ -210,8 +231,7 @@ class MultiLoggerStatusBar(QStatusBar):
         self.device_container.setStyleSheet("background-color: #FFFFFF;")  # White background
         self.device_layout = QHBoxLayout(self.device_container)
         self.device_layout.setContentsMargins(0, 0, 0, 0)
-        self.device_layout.setSpacing(5)
-        self.device_layout.addStretch()  # Push devices to the left
+        self.device_layout.setSpacing(2)  # Reduced spacing
 
         self.addWidget(self.device_container, 1)  # Stretch factor 1
 
@@ -300,11 +320,13 @@ class MultiLoggerStatusBar(QStatusBar):
         if len(self.device_widgets) > 1:
             separator = VerticalSeparator(self)
             self.device_separators[dev_id] = separator
-            # Insert separator before the stretch
-            self.device_layout.insertWidget(self.device_layout.count() - 1, separator)
+            self.device_layout.addWidget(separator)
 
-        # Add device widget to layout (before the stretch)
-        self.device_layout.insertWidget(self.device_layout.count() - 1, device_widget)
+        # Add device widget to layout
+        self.device_layout.addWidget(device_widget)
+
+        # Recalculate sizes
+        self._update_device_sizes()
 
     def remove_device_status(self, dev_id):
         """Remove a device from the status bar."""
@@ -323,6 +345,9 @@ class MultiLoggerStatusBar(QStatusBar):
             self.device_layout.removeWidget(separator)
             separator.deleteLater()
             del self.device_separators[dev_id]
+
+        # Recalculate sizes
+        self._update_device_sizes()
 
     def update_device_status(self, dev_id):
         """
@@ -388,6 +413,8 @@ class MultiLoggerStatusBar(QStatusBar):
         """Update status for all devices."""
         for dev_id in list(self.device_widgets.keys()):
             self.update_device_status(dev_id)
+        # Recalculate sizes after updating all (priority may have changed)
+        self._update_device_sizes()
 
     def update_global_status(self):
         """Update global status (saving, errors, time)."""
@@ -470,3 +497,80 @@ class MultiLoggerStatusBar(QStatusBar):
                 device_tab_bar.setCurrentIndex(i)
                 device_tabs.setCurrentIndex(i)
                 return
+
+    def resizeEvent(self, event):
+        """Handle resize to redistribute device widget space."""
+        super().resizeEvent(event)
+        self._update_device_sizes()
+
+    def _update_device_sizes(self):
+        """
+        Dynamically update device widget sizes based on available space.
+
+        Priority devices (disconnected/error) get more space.
+        Normal devices shrink to fit.
+        """
+        if not self.device_widgets:
+            return
+
+        # Calculate available width for devices
+        total_width = self.width()
+        available_width = total_width - self._permanent_width - 20  # 20 for margins
+
+        # Count separators
+        separator_count = len(self.device_separators)
+        separator_space = separator_count * 3  # 1px width + 2px spacing
+
+        # Available for device widgets
+        device_space = available_width - separator_space
+
+        if device_space < 50:
+            device_space = 50  # Minimum
+
+        # Count priority and normal devices
+        priority_devices = []
+        normal_devices = []
+
+        for dev_id, widget in self.device_widgets.items():
+            if widget.is_priority:
+                priority_devices.append(widget)
+            else:
+                normal_devices.append(widget)
+
+        num_priority = len(priority_devices)
+        num_normal = len(normal_devices)
+        total_devices = num_priority + num_normal
+
+        if total_devices == 0:
+            return
+
+        # Calculate widths based on priority
+        # Priority devices get ~60% more space than normal
+        if num_priority > 0 and num_normal > 0:
+            # Weighted distribution
+            # Let priority = 1.6 * normal weight
+            # total_weight = num_priority * 1.6 + num_normal * 1.0
+            total_weight = num_priority * 1.6 + num_normal * 1.0
+            normal_width = int(device_space / total_weight)
+            priority_width = int(normal_width * 1.6)
+        elif num_priority > 0:
+            # All priority
+            priority_width = device_space // num_priority
+            normal_width = 0
+        else:
+            # All normal
+            normal_width = device_space // num_normal
+            priority_width = 0
+
+        # Set constraints
+        # Priority: min 100, max 200
+        # Normal: min 60, max 150
+        priority_width = max(80, min(priority_width, 200))
+        normal_width = max(50, min(normal_width, 150))
+
+        # Apply sizes
+        for widget in priority_devices:
+            widget.setMaximumWidth(priority_width)
+
+        for widget in normal_devices:
+            widget.setMaximumWidth(normal_width)

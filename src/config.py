@@ -20,7 +20,6 @@ from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, Q
     QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QSizePolicy,
     QFileDialog, QComboBox, QGraphicsRectItem, QMessageBox)
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
-from pyqtgraph.parametertree import Parameter, ParameterTree, parameterTypes
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
 version_number = "0.10.9"

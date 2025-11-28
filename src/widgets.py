@@ -1,4 +1,4 @@
-from PyQt5.QtGui import QPalette, QIntValidator, QDoubleValidator
+from PyQt5.QtGui import QPalette, QIntValidator, QDoubleValidator, QCursor
 from PyQt5.QtCore import Qt, pyqtSignal, QLocale, QTimer, QSize
 from PyQt5.QtWidgets import (QLabel, QWidget, QVBoxLayout, QLineEdit, QPushButton,
                              QSpinBox, QDoubleSpinBox, QTextEdit, QHBoxLayout,
@@ -344,30 +344,42 @@ class TabConfirmationPopup(QWidget):
         from PyQt5.QtWidgets import QTabBar, QApplication
         from PyQt5.QtCore import QPoint
 
-        # Get the close button for positioning
-        close_button = tab_bar.tabButton(tab_index, QTabBar.RightSide)
+        # Process pending events to ensure geometry is up-to-date after tab deletions
+        QApplication.processEvents()
 
-        # Try multiple positioning strategies in order of preference
-        if close_button and close_button.isVisible():
-            # Strategy 1: Position relative to close button using geometry
-            button_geometry = close_button.geometry()
-            button_global_pos = close_button.parentWidget().mapToGlobal(button_geometry.topLeft())
-
-            popup_x = button_global_pos.x() + button_geometry.width() - self.width()
-            popup_y = button_global_pos.y() + button_geometry.height() + 2
+        # Validate tab index is still valid
+        if tab_index < 0 or tab_index >= tab_bar.count():
+            # Tab no longer exists, position at cursor as fallback
+            cursor_pos = QCursor.pos()
+            popup_x = cursor_pos.x() - self.width() // 2
+            popup_y = cursor_pos.y() + 10
         else:
-            # Strategy 2: Use tab rectangle
-            tab_rect = tab_bar.tabRect(tab_index)
+            # Get the close button for positioning
+            close_button = tab_bar.tabButton(tab_index, QTabBar.RightSide)
 
-            if not tab_rect.isNull() and not tab_rect.isEmpty():
-                global_pos = tab_bar.mapToGlobal(tab_rect.bottomRight())
-                popup_x = global_pos.x() - self.width()
-                popup_y = global_pos.y() + 2
+            # Try multiple positioning strategies in order of preference
+            if close_button and close_button.isVisible():
+                # Strategy 1: Use mapToGlobal directly on the close button
+                # This gives us the button's actual screen position
+                button_global_pos = close_button.mapToGlobal(QPoint(0, 0))
+                button_width = close_button.width()
+                button_height = close_button.height()
+
+                popup_x = button_global_pos.x() + button_width - self.width()
+                popup_y = button_global_pos.y() + button_height + 2
             else:
-                # Strategy 3: Fallback to safe position below tab bar center
-                tab_bar_global = tab_bar.mapToGlobal(QPoint(0, 0))
-                popup_x = tab_bar_global.x() + (tab_bar.width() // 2) - (self.width() // 2)
-                popup_y = tab_bar_global.y() + tab_bar.height() + 5
+                # Strategy 2: Use tab rectangle
+                tab_rect = tab_bar.tabRect(tab_index)
+
+                if not tab_rect.isNull() and not tab_rect.isEmpty():
+                    global_pos = tab_bar.mapToGlobal(tab_rect.bottomRight())
+                    popup_x = global_pos.x() - self.width()
+                    popup_y = global_pos.y() + 2
+                else:
+                    # Strategy 3: Fallback to safe position below tab bar center
+                    tab_bar_global = tab_bar.mapToGlobal(QPoint(0, 0))
+                    popup_x = tab_bar_global.x() + (tab_bar.width() // 2) - (self.width() // 2)
+                    popup_y = tab_bar_global.y() + tab_bar.height() + 5
 
         # Ensure popup is within screen bounds
         screen = QApplication.desktop().screenGeometry()

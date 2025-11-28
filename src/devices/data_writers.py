@@ -25,12 +25,12 @@ class CPCDataWriter(BaseDataWriter):
         """Return CPC .par file header."""
         return 'YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau,Command input'
 
-    def should_write_par(self, device_param, data_holder):
+    def should_write_par(self, data_holder):
         """Check if .par file should be written (when par_updates flag is set)."""
         dev_id = self.device.dev_id
         return data_holder.par_updates.get(dev_id, 0) == 1
 
-    def get_par_data(self, device_param, data_holder, timestamp_str):
+    def get_par_data(self, data_holder, timestamp_str):
         """Return CPC settings data for .par file."""
         dev_id = self.device.dev_id
         settings = self.device.settings
@@ -49,11 +49,11 @@ class CPCDataWriter(BaseDataWriter):
 
         return data_str
 
-    def has_special_files(self, device_param):
+    def has_special_files(self):
         """Check if 10Hz logging is enabled."""
-        return device_param.child('10 hz').value()
+        return self.device.device_config.extra_params.get('10_hz', False)
 
-    def write_special_files(self, device_param, data_holder, timestamp_str, filenames_dict):
+    def write_special_files(self, data_holder, timestamp_str, filenames_dict):
         """Write 10Hz data file for CPC."""
         dev_id = self.device.dev_id
 
@@ -100,7 +100,7 @@ class PSMDataWriter(BaseDataWriter):
             # PSM 1.0 includes CO flow
             return 'YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input'
 
-    def should_write_par(self, device_param, data_holder):
+    def should_write_par(self, data_holder):
         """
         Check if .par file should be written.
 
@@ -125,14 +125,14 @@ class PSMDataWriter(BaseDataWriter):
             return True
 
         # Check connected CPC par_updates
-        cpc_id = device_param.child('Connected CPC').value()
+        cpc_id = self.device.device_config.extra_params.get('connected_cpc', 'None')
         if cpc_id != 'None':
             if cpc_id in data_holder.par_updates and data_holder.par_updates[cpc_id] == 1:
                 return True
 
         return False
 
-    def get_par_data(self, device_param, data_holder, timestamp_str):
+    def get_par_data(self, data_holder, timestamp_str):
         """Return PSM settings data for .par file."""
         dev_id = self.device.dev_id
         settings = self.device.settings
@@ -145,19 +145,14 @@ class PSMDataWriter(BaseDataWriter):
         data_str = ','.join(str(val) for val in settings_array)
 
         # Add connected CPC settings if applicable
-        cpc_id = device_param.child('Connected CPC').value()
+        cpc_id = self.device.device_config.extra_params.get('connected_cpc', 'None')
         if cpc_id != 'None':
-            # Find CPC device parameter in params
-            cpc_device = None
-            params = device_param.parent()  # Get Device settings parent
-            for dev in params.children():
-                if dev.child('DevID').value() == cpc_id:
-                    cpc_device = dev
-                    break
+            # Find CPC device widget in device_widgets
+            cpc_widget = data_holder.device_widgets.get(cpc_id)
 
-            # If CPC is connected and is Airmodus CPC, write settings
-            if cpc_device and cpc_device.child('Connected').value() and cpc_device.child('Device type').value() == CPC:
-                cpc_idn = cpc_device.child('Serial number').value()
+            # If CPC widget exists and is Airmodus CPC, write settings
+            if cpc_widget and cpc_widget.device_config.device_type == CPC:
+                cpc_idn = cpc_widget.device_config.serial_number
                 cpc_settings = data_holder.get_device_settings(cpc_id)
 
                 if cpc_settings:

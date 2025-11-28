@@ -100,7 +100,6 @@ class PlotManager:
                         dev_id,
                         self.data_holder.time_counter,
                         self.data_holder.plot_data,
-                        device_config,
                         self.data_holder
                     )
 
@@ -135,7 +134,6 @@ class PlotManager:
                     self.data_holder.x_time_list,
                     self.data_holder.plot_data,
                     self.data_holder.curve_dict[dev_id],
-                    device_config,
                     plot_to_main_value
                 )
 

@@ -81,8 +81,7 @@ def setup_cpc_connections(widget, device_config, connection, app):
 
     # Command input
     widget.set_tab.command_widget.command_input.returnPressed.connect(
-        lambda: command_entered(device_id, device_param, app.data_holder.device_widgets,
-                               app.data_holder.latest_command))
+        lambda: command_entered(device_id, app.data_holder.device_widgets, app.config))
 
     # Set points
     widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(
@@ -110,7 +109,7 @@ def setup_cpc_connections(widget, device_config, connection, app):
     widget.pulse_quality.average_time_select.currentIndexChanged.connect(
         lambda: app.plot_manager.pulse_quality_update(device_id))
     widget.pulse_quality.start_analysis.clicked.connect(
-        lambda: app.pulse_analysis_start(device_id, device_config))
+        lambda: app.data_logger.pulse_analysis_start(device_id, device_config))
 
 
 def setup_psm_connections(widget, device_config, connection, app):
@@ -128,7 +127,7 @@ def setup_psm_connections(widget, device_config, connection, app):
     widget.measure_tab.fixed.clicked.connect(
         lambda: connection.send_set(widget.measure_tab.compile_fixed()))
     widget.measure_tab.ten_hz.clicked.connect(
-        lambda: ten_hz_clicked(device_config, widget))
+        lambda: ten_hz_clicked(widget, app.config))
 
     # Temperature setpoints
     temps = [
@@ -152,19 +151,19 @@ def setup_psm_connections(widget, device_config, connection, app):
 
     # CPC inlet flow
     widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(
-        lambda value: psm_flow_send(device_config, value))
+        lambda value: psm_flow_send(widget, value))
     widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
     widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(
-        lambda: psm_flow_send(device_config, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
+        lambda: psm_flow_send(widget, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
     widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
 
     # CPC sample flow
     widget.set_tab.set_cpc_sample_flow.value_spinbox.stepChanged.connect(
-        lambda value: cpc_flow_send(device_config, value))
+        lambda value: cpc_flow_send(widget, value, app.data_holder.device_widgets))
     widget.set_tab.set_cpc_sample_flow.value_input.returnPressed.connect(
-        lambda: cpc_flow_send(device_config, float(widget.set_tab.set_cpc_sample_flow.value_input.text())))
+        lambda: cpc_flow_send(widget, float(widget.set_tab.set_cpc_sample_flow.value_input.text()), app.data_holder.device_widgets))
 
     # CO flow (PSM Retrofit only) - Save to extra_params
     from config import PSM
@@ -180,8 +179,7 @@ def setup_psm_connections(widget, device_config, connection, app):
 
     # Command input
     widget.set_tab.command_widget.command_input.returnPressed.connect(
-        lambda: command_entered(device_id, device_config, app.data_holder.device_widgets,
-                               app.data_holder.latest_command))
+        lambda: command_entered(device_id, app.data_holder.device_widgets, app.config))
     widget.set_tab.command_widget.command_input.returnPressed.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
 
@@ -208,6 +206,7 @@ def setup_psm_connections(widget, device_config, connection, app):
 
 def setup_ediluter_connections(widget, device_config, connection, app):
     """Set up eDiluter-specific connections."""
+    from utils import command_entered
     device_id = device_config.device_id
 
     # Mode buttons
@@ -232,8 +231,7 @@ def setup_ediluter_connections(widget, device_config, connection, app):
 
     # Command input
     widget.set_tab.command_widget.command_input.returnPressed.connect(
-        lambda: app.command_entered(device_id, device_config, app.data_holder.device_widgets,
-                                    app.data_holder.latest_command))
+        lambda: command_entered(device_id, app.data_holder.device_widgets, app.config))
 
 
 def setup_tsi_cpc_connections(widget, device_config, connection, app):

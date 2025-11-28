@@ -81,7 +81,7 @@ class BaseDataWriter(ABC):
         """
         return None  # Most devices don't have .par files
 
-    def get_dat_data(self, device_param, data_holder, timestamp_str):
+    def get_dat_data(self, data_holder, timestamp_str):
         """
         Return the data string to write to .dat file.
 
@@ -89,7 +89,6 @@ class BaseDataWriter(ABC):
         Override for custom formatting.
 
         Args:
-            device_param: The device parameter from parameter tree
             data_holder: The DataHolder instance
             timestamp_str: Formatted timestamp string
 
@@ -99,14 +98,13 @@ class BaseDataWriter(ABC):
         data_array = self.device.current_data.to_array()
         return ','.join(str(val) for val in data_array)
 
-    def should_write_dat(self, device_param, data_holder):
+    def should_write_dat(self, data_holder):
         """
         Check if .dat file should be written this cycle.
 
         Most devices always write. Override for conditional writing.
 
         Args:
-            device_param: The device parameter from parameter tree
             data_holder: The DataHolder instance
 
         Returns:
@@ -114,14 +112,13 @@ class BaseDataWriter(ABC):
         """
         return True  # Default: always write
 
-    def should_write_par(self, device_param, data_holder):
+    def should_write_par(self, data_holder):
         """
         Check if .par file should be written this cycle.
 
         Typically checks par_updates flag in data_holder.
 
         Args:
-            device_param: The device parameter from parameter tree
             data_holder: The DataHolder instance
 
         Returns:
@@ -129,14 +126,13 @@ class BaseDataWriter(ABC):
         """
         return False  # Default: no .par file
 
-    def get_par_data(self, device_param, data_holder, timestamp_str):
+    def get_par_data(self, data_holder, timestamp_str):
         """
         Return the data string to write to .par file.
 
         Typically uses the device's settings.to_array().
 
         Args:
-            device_param: The device parameter from parameter tree
             data_holder: The DataHolder instance
             timestamp_str: Formatted timestamp string
 
@@ -146,21 +142,18 @@ class BaseDataWriter(ABC):
         """
         return None  # Default: no .par file
 
-    def has_special_files(self, device_param):
+    def has_special_files(self):
         """
         Check if device needs special file handling.
 
         For example, CPC with 10Hz logging enabled.
-
-        Args:
-            device_param: The device parameter from parameter tree
 
         Returns:
             bool: True if special files need to be written
         """
         return False  # Default: no special files
 
-    def write_special_files(self, device_param, data_holder, timestamp_str, filenames_dict):
+    def write_special_files(self, data_holder, timestamp_str, filenames_dict):
         """
         Write any special files (override in subclasses).
 
@@ -168,7 +161,6 @@ class BaseDataWriter(ABC):
         The subclass is responsible for all file creation and writing.
 
         Args:
-            device_param: The device parameter from parameter tree
             data_holder: The DataHolder instance
             timestamp_str: Formatted timestamp string
             filenames_dict: Dictionary to store special filenames
