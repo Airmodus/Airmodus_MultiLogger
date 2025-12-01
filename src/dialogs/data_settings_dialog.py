@@ -197,13 +197,10 @@ class DataSettingsDialog(QDialog):
             plot_settings.autoscale_y = self.autoscale_y_checkbox.isChecked()
 
             # Emit signals to notify components
+            # Note: save_ini() is already connected to these signals, so saving happens automatically
             if self.main_window:
                 self.main_window.data_settings_changed.emit(data_settings)
                 self.main_window.plot_settings_changed.emit(plot_settings)
-
-            # Save configuration
-            if self.main_window:
-                self.main_window.save_configuration()
 
             # Close dialog
             super().accept()

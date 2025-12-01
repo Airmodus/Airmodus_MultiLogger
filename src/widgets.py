@@ -595,13 +595,15 @@ class BrowserStyleTabBar(QWidget):
         scrolling_needed = scrollbar.maximum() > 0
 
         if scrolling_needed:
-            # Show/enable buttons based on scroll position
+            # Always show both buttons when scrolling is needed (prevents flicker)
+            self._left_scroll_btn.setVisible(True)
+            self._right_scroll_btn.setVisible(True)
+
+            # Enable/disable buttons based on scroll position
             can_scroll_left = scrollbar.value() > scrollbar.minimum()
             can_scroll_right = scrollbar.value() < scrollbar.maximum()
 
-            self._left_scroll_btn.setVisible(can_scroll_left)
             self._left_scroll_btn.setEnabled(can_scroll_left)
-            self._right_scroll_btn.setVisible(can_scroll_right)
             self._right_scroll_btn.setEnabled(can_scroll_right)
         else:
             self._left_scroll_btn.setVisible(False)
