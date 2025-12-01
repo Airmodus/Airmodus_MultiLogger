@@ -13,33 +13,29 @@ class DataLogger:
 
     def on_data_settings_changed(self, data_settings):
         """Called when data settings change (connected to signal from app.py)."""
+        # Check if saving was just toggled off - reset filenames so new files are created next time
+        was_saving = self.data_settings.save_data
+        now_saving = data_settings.save_data
+
         self.data_settings = data_settings
+
         # Update file path if changed
         if data_settings.file_path != self.data_holder.file_path:
             self.filepath_changed(data_settings.file_path)
 
+        # Reset filenames when saving is toggled off (ensures fresh files when re-enabled)
+        if was_saving and not now_saving:
+            self.reset_all_filenames()
+            self.data_holder.last_write_timestamp = None
+            self.data_holder.most_recent_filename = ""
+
     def _is_device_in_pulse_analysis(self, dev_id):
         """Check if device is in pulse analysis mode."""
-        device_widget = self.data_holder.get_device(dev_id)
+        device_widget = self.data_holder.device_widgets.get(dev_id)
         if device_widget and hasattr(device_widget, 'pulse_analysis_index'):
             # 0-6 = analyzing, -1 = ending, None = not analyzing
             return device_widget.pulse_analysis_index is not None and device_widget.pulse_analysis_index >= 0
         return False
-
-    def save_changed(self):
-        """Triggered when saving is toggled on/off."""
-        # if saving is toggled on
-        if self.data_settings.save_data:
-            # store start day
-            self.data_holder.start_day = dt.now().strftime("%m%d")
-            # get file path
-            self.data_holder.file_path = self.data_settings.file_path
-        # if saving is toggled off, reset filename dictionaries
-        else:
-            self.reset_all_filenames()
-            # reset timestamp and filename tracking
-            self.data_holder.last_write_timestamp = None
-            self.data_holder.most_recent_filename = ""
 
     def filepath_changed(self, new_path):
         """Set file path and reset filename dictionaries."""
@@ -65,7 +61,7 @@ class DataLogger:
         self.data_holder.par_updates = {}
 
     def compare_day(self):
-        """Compare current day to file start day (self.start_day defined in save_changed)."""
+        """Compare current day to file start day and reset files at midnight if needed."""
         # check if saving is on
         if self.data_settings.save_data:
             # check if new file should be started at midnight
@@ -178,7 +174,7 @@ class DataLogger:
                 elif self._is_device_in_pulse_analysis(device_config.device_id):
                     pass
                 else:
-                    device_widget = self.data_holder.get_device(device_config.device_id)
+                    device_widget = self.data_holder.device_widgets.get(device_config.device_id)
                     if not device_widget:
                         continue
 
@@ -283,7 +279,7 @@ class DataLogger:
         # write data to pulse analysis file if pulse analysis is on
         for device_config in self.config.devices:
             dev_id = device_config.device_id
-            device_widget = self.data_holder.get_device(dev_id)
+            device_widget = self.data_holder.device_widgets.get(dev_id)
             if device_widget and hasattr(device_widget, 'pulse_analysis_index'):
                 if device_widget.pulse_analysis_index is not None: # when index is None, analysis has reached its end
                     try:

@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 class CPCDataAverager:
     """Handles data averaging for CPC+RHTP measurements over configurable intervals."""
 
+    # Maximum buffer size to prevent unbounded growth if writes fail
+    # Set to 2x the longest interval (3 hours = 10800 seconds) as safety margin
+    MAX_BUFFER_SIZE = 21600
+
     def __init__(self, dev_id: int, interval_minutes: int):
         """
         Initialize averager for a specific device.
@@ -49,6 +53,14 @@ class CPCDataAverager:
         """
         if self.interval_start is None:
             self.interval_start = self._get_interval_start(timestamp)
+
+        # Safety check: if buffer is way too old (2x interval), something went wrong - reset
+        if self.interval_start is not None:
+            elapsed = (timestamp - self.interval_start).total_seconds()
+            if elapsed > self.interval_seconds * 2:
+                logger.warning(f"Buffer for device {self.dev_id} exceeded 2x interval ({elapsed:.0f}s > {self.interval_seconds * 2}s), forcing reset")
+                self.reset_buffers()
+                self.interval_start = self._get_interval_start(timestamp)
 
         self.cpc_buffer.append((timestamp, cpc_data))
         if rhtp_data is not None:

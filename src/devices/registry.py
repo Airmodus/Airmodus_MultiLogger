@@ -73,11 +73,11 @@ def setup_cpc_connections(widget, device_config, connection, app):
 
     # Set tab buttons
     widget.set_tab.drain.clicked.connect(
-        lambda: connection.send_set(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
+        lambda: connection.send_message(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
     widget.set_tab.autofill.clicked.connect(
-        lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
+        lambda: connection.send_message(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
     widget.set_tab.water_removal.clicked.connect(
-        lambda: connection.send_set(":SET:WREM " + str(int(widget.set_tab.water_removal.isChecked()))))
+        lambda: connection.send_message(":SET:WREM " + str(int(widget.set_tab.water_removal.isChecked()))))
 
     # Command input
     widget.set_tab.command_widget.command_input.returnPressed.connect(
@@ -121,11 +121,11 @@ def setup_psm_connections(widget, device_config, connection, app):
 
     # Measure tab buttons
     widget.measure_tab.scan.clicked.connect(
-        lambda: connection.send_set(widget.measure_tab.compile_scan()))
+        lambda: connection.send_message(widget.measure_tab.compile_scan()))
     widget.measure_tab.step.clicked.connect(
-        lambda: connection.send_set(widget.measure_tab.compile_step()))
+        lambda: connection.send_message(widget.measure_tab.compile_step()))
     widget.measure_tab.fixed.clicked.connect(
-        lambda: connection.send_set(widget.measure_tab.compile_fixed()))
+        lambda: connection.send_message(widget.measure_tab.compile_fixed()))
     widget.measure_tab.ten_hz.clicked.connect(
         lambda: ten_hz_clicked(widget, app.config))
 
@@ -185,11 +185,11 @@ def setup_psm_connections(widget, device_config, connection, app):
 
     # Liquid operations
     widget.set_tab.autofill.clicked.connect(
-        lambda: connection.send_set(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
+        lambda: connection.send_message(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
     widget.set_tab.drain.clicked.connect(
-        lambda: connection.send_set(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
+        lambda: connection.send_message(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
     widget.set_tab.drying.clicked.connect(
-        lambda: connection.send_set(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
+        lambda: connection.send_message(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
 
     # Wire up connected CPC device reference
     def update_connected_cpc():
@@ -211,23 +211,23 @@ def setup_ediluter_connections(widget, device_config, connection, app):
 
     # Mode buttons
     widget.set_tab.init.clicked.connect(
-        lambda: connection.send_set("do set app.measurement.state INIT"))
+        lambda: connection.send_message("do set app.measurement.state INIT"))
     widget.set_tab.warmup.clicked.connect(
-        lambda: connection.send_set("do set app.measurement.state WARMUP"))
+        lambda: connection.send_message("do set app.measurement.state WARMUP"))
     widget.set_tab.standby.clicked.connect(
-        lambda: connection.send_set("do set app.measurement.state STANDBY"))
+        lambda: connection.send_message("do set app.measurement.state STANDBY"))
     widget.set_tab.measurement.clicked.connect(
-        lambda: connection.send_set("do set app.measurement.state MEASUREMENT"))
+        lambda: connection.send_message("do set app.measurement.state MEASUREMENT"))
 
     # Dilution factor buttons
     widget.set_tab.df_1.prev_button.clicked.connect(
-        lambda: connection.send_set("do set dilution.1st.prev true"))
+        lambda: connection.send_message("do set dilution.1st.prev true"))
     widget.set_tab.df_1.next_button.clicked.connect(
-        lambda: connection.send_set("do set dilution.1st.next true"))
+        lambda: connection.send_message("do set dilution.1st.next true"))
     widget.set_tab.df_2.prev_button.clicked.connect(
-        lambda: connection.send_set("do set dilution.2nd.prev true"))
+        lambda: connection.send_message("do set dilution.2nd.prev true"))
     widget.set_tab.df_2.next_button.clicked.connect(
-        lambda: connection.send_set("do set dilution.2nd.next true"))
+        lambda: connection.send_message("do set dilution.2nd.next true"))
 
     # Command input
     widget.set_tab.command_widget.command_input.returnPressed.connect(

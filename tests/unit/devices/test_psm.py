@@ -32,21 +32,31 @@ from fixtures.mock_serial_data import MockPSMResponses
 # ============================================================================
 
 @pytest.fixture
-def psm_retrofit_widget(qapp, mock_device_parameter):
+def psm_retrofit_widget(qapp, mock_psm_config):
     """Create PSM Retrofit widget for testing."""
-    widget = PSMWidget(mock_device_parameter, device_type=PSM)
-    widget.dev_id = 1
-    widget.device_parameter = mock_device_parameter
+    widget = PSMWidget(mock_psm_config)
+    # Mock GUI methods that are called during parsing
+    widget.update_values = Mock()
+    widget.update_settings = Mock()
+    widget.measure_tab.change_mode_color = Mock()
+    widget.measure_tab.scan.change_color = Mock()
+    widget.measure_tab.step.change_color = Mock()
+    widget.measure_tab.fixed.change_color = Mock()
     yield widget
     widget.deleteLater()
 
 
 @pytest.fixture
-def psm2_widget(qapp, mock_device_parameter):
+def psm2_widget(qapp, mock_psm2_config):
     """Create PSM 2.0 widget for testing."""
-    widget = PSMWidget(mock_device_parameter, device_type=PSM2)
-    widget.dev_id = 2
-    widget.device_parameter = mock_device_parameter
+    widget = PSMWidget(mock_psm2_config)
+    # Mock GUI methods that are called during parsing
+    widget.update_values = Mock()
+    widget.update_settings = Mock()
+    widget.measure_tab.change_mode_color = Mock()
+    widget.measure_tab.scan.change_color = Mock()
+    widget.measure_tab.step.change_color = Mock()
+    widget.measure_tab.fixed.change_color = Mock()
     yield widget
     widget.deleteLater()
 

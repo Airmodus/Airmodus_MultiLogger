@@ -34,36 +34,7 @@ from config import CPC, PSM, PSM2
 # Fixtures
 # ============================================================================
 
-@pytest.fixture
-def mock_device_parameter():
-    """Mock parameter object for device initialization."""
-    param = Mock()
-    param.name.return_value = "Test Device"
-
-    def child_side_effect(name):
-        child = Mock()
-        if name == '10 hz':
-            child.value.return_value = False
-        elif name == 'Database enabled':
-            child.value.return_value = False
-        elif name == 'DB averaging interval':
-            child.value.return_value = '1 min'
-        elif name == 'Linked RHTP':
-            child.value.return_value = None
-        else:
-            child.value.return_value = None
-        child.setValue = Mock()
-        return child
-
-    param.child = Mock(side_effect=child_side_effect)
-
-    # Mock parent for CPC database tab
-    parent_mock = Mock()
-    parent_mock.rhtp_dict = {}  # Empty dict for RHTP devices
-    parent_mock.cpc_dict = {}   # Empty dict for CPC devices
-    param.parent.return_value = parent_mock
-
-    return param
+# Note: Uses mock_cpc_config, mock_psm_config, mock_psm2_config from conftest.py
 
 
 @pytest.fixture
@@ -85,10 +56,10 @@ def mock_serial_connection():
 class TestCPCConnectionFlow:
     """Test CPC device connection flow using simulate_device_connection."""
 
-    def test_cpc_connection_sequence(self, qapp, mock_device_parameter):
+    def test_cpc_connection_sequence(self, qapp, mock_cpc_config):
         """Test complete CPC connection sequence: IDN → Firmware → Data."""
         # Create CPC widget
-        cpc = CPCWidget(mock_device_parameter)
+        cpc = CPCWidget(mock_cpc_config)
 
         # Create mock connection with simulated response sequence
         mock_conn = Mock()
@@ -121,9 +92,9 @@ class TestCPCConnectionFlow:
         assert len(data4) == 1
         assert data4[0]['type'] == 'data'
 
-    def test_cpc_command_sequence_after_connection(self, qapp, mock_device_parameter, mock_serial_connection):
+    def test_cpc_command_sequence_after_connection(self, qapp, mock_cpc_config, mock_serial_connection):
         """Test that CPC sends correct command sequence after connection."""
-        cpc = CPCWidget(mock_device_parameter)
+        cpc = CPCWidget(mock_cpc_config)
 
         # Get command sequence for normal mode
         sequence = cpc.get_read_command_sequence(ten_hz=False)
@@ -146,10 +117,10 @@ class TestCPCConnectionFlow:
 class TestPSMConnectionFlow:
     """Test PSM device connection flow using simulate_device_connection."""
 
-    def test_psm_retrofit_connection_sequence(self, qapp, mock_device_parameter):
+    def test_psm_retrofit_connection_sequence(self, qapp, mock_psm_config):
         """Test complete PSM Retrofit connection sequence."""
         # Create PSM widget
-        psm = PSMWidget(mock_device_parameter, device_type=PSM)
+        psm = PSMWidget(mock_psm_config)
 
         # Create mock connection with simulated response sequence
         mock_conn = Mock()
@@ -173,9 +144,9 @@ class TestPSMConnectionFlow:
         assert len(data3) == 1
         # PSM data parsing happens here
 
-    def test_psm2_connection_sequence(self, qapp, mock_device_parameter):
+    def test_psm2_connection_sequence(self, qapp, mock_psm2_config):
         """Test complete PSM 2.0 connection sequence."""
-        psm = PSMWidget(mock_device_parameter, device_type=PSM2)
+        psm = PSMWidget(mock_psm2_config)
 
         mock_conn = Mock()
         sequence = simulate_device_connection("PSM2")
@@ -187,9 +158,9 @@ class TestPSMConnectionFlow:
         assert len(data1) == 1
         assert 'PSM 2.0' in data1[0]['data']
 
-    def test_psm_settings_fetch_on_connection(self, qapp, mock_device_parameter, mock_serial_connection):
+    def test_psm_settings_fetch_on_connection(self, qapp, mock_psm_config, mock_serial_connection):
         """Test that PSM fetches settings on initial connection."""
-        psm = PSMWidget(mock_device_parameter, device_type=PSM)
+        psm = PSMWidget(mock_psm_config)
 
         # Verify needs_settings_fetch is True initially
         assert psm.needs_settings_fetch is True
@@ -211,15 +182,11 @@ class TestPSMConnectionFlow:
 class TestMultipleDeviceConnections:
     """Test connecting multiple devices simultaneously."""
 
-    def test_cpc_and_psm_connection(self, qapp, mock_device_parameter):
+    def test_cpc_and_psm_connection(self, qapp, mock_cpc_config, mock_psm_config):
         """Test connecting both CPC and PSM (common configuration)."""
         # Create both devices
-        cpc = CPCWidget(mock_device_parameter)
-        psm = PSMWidget(mock_device_parameter, device_type=PSM)
-
-        # Assign device IDs (like in real app)
-        cpc.dev_id = 0
-        psm.dev_id = 1
+        cpc = CPCWidget(mock_cpc_config)
+        psm = PSMWidget(mock_psm_config)
 
         # Create separate mock connections
         mock_conn_cpc = Mock()
@@ -250,9 +217,9 @@ class TestMultipleDeviceConnections:
 class TestConnectionErrorHandling:
     """Test error handling during connection sequence."""
 
-    def test_connection_with_partial_idn(self, qapp, mock_device_parameter):
+    def test_connection_with_partial_idn(self, qapp, mock_cpc_config):
         """Test handling of incomplete IDN response."""
-        cpc = CPCWidget(mock_device_parameter)
+        cpc = CPCWidget(mock_cpc_config)
 
         # Create sequence with partial IDN
         mock_conn = Mock()
@@ -264,9 +231,9 @@ class TestConnectionErrorHandling:
         # Will be stored in partial_data buffer
         assert isinstance(data, list)
 
-    def test_connection_with_no_response(self, qapp, mock_device_parameter):
+    def test_connection_with_no_response(self, qapp, mock_cpc_config):
         """Test handling when device doesn't respond."""
-        cpc = CPCWidget(mock_device_parameter)
+        cpc = CPCWidget(mock_cpc_config)
 
         mock_conn = Mock()
         mock_conn.connection = Mock()
@@ -283,10 +250,9 @@ class TestConnectionErrorHandling:
 class TestRealWorldSequences:
     """Test sequences that match real device behavior."""
 
-    def test_cpc_with_settings_query(self, qapp, mock_device_parameter):
+    def test_cpc_with_settings_query(self, qapp, mock_cpc_config):
         """Test CPC connection with settings query (full sequence)."""
-        cpc = CPCWidget(mock_device_parameter)
-        cpc.dev_id = 0
+        cpc = CPCWidget(mock_cpc_config)
 
         # Create realistic sequence: IDN, DATA, PRNT, PALL
         responses = MockSerialSequence([
@@ -314,10 +280,9 @@ class TestRealWorldSequences:
         assert results[2]['command'] == ':SYST:PRNT'
         assert results[3]['command'] == ':SYST:PALL'
 
-    def test_psm_with_dilution_params(self, qapp, mock_device_parameter):
+    def test_psm_with_dilution_params(self, qapp, mock_psm_config):
         """Test PSM connection with dilution parameter query."""
-        psm = PSMWidget(mock_device_parameter, device_type=PSM)
-        psm.dev_id = 1
+        psm = PSMWidget(mock_psm_config)
 
         # Create realistic sequence: IDN, DATA, PRNT, VCMP
         responses = MockSerialSequence([

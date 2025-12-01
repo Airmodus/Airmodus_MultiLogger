@@ -28,8 +28,8 @@ class DeviceIdentifier:
     # Only the patterns we actually need for our devices
     # Based on real device examples from production
     PATTERNS = {
-        'PSM 2.0': [r'^8\d{8,10}$'],  # 8211445616 (10 digits starting with 8)
-        'PSM Retrofit': [r'^9\d{6,7}$'],  # 9142501 (7-8 digits starting with 9)
+        'PSM 2.0': [r'^9\d{6,7}$'],  # 9142501 (7-8 digits starting with 9)
+        'PSM Retrofit': [r'^8\d{8,10}$'],  # 8211445616 (10 digits starting with 8)
         'CPC': [
             r'^Z812',  # Z812001104 (starts with Z812)
             r'^2\d{9}$',  # 2812001104 (10 digits starting with 2)
@@ -100,7 +100,8 @@ class DeviceIdentifier:
             "301* Jerry" -> "Airmodus CPC Jerry"
             "235* Peggy" -> "Airmodus CPC Peggy"
             "2300001" -> "Airmodus RHTP [..001]"
-            "8211445616" -> "Airmodus PSM 2.0 [..616]"
+            "9142501" -> "Airmodus PSM 2.0 [..501]"
+            "8211445616" -> "Airmodus PSM Retrofit [..616]"
             "Z812001104" -> "Airmodus CPC [..104]"
             "unknown123" -> "" (empty, show raw serial instead)
 

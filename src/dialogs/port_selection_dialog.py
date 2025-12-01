@@ -494,3 +494,17 @@ class PortSelectionDialog(QDialog):
         if self.selected_port and self.selected_port in self.port_info:
             return self.port_info[self.selected_port].get('serial_number', '')
         return ''
+
+    def showEvent(self, event):
+        """Enable fast port scanning when dialog is shown."""
+        super().showEvent(event)
+        # Switch to fast polling (2s) for responsive UI updates
+        if self.device_manager and hasattr(self.device_manager, 'port_scanner'):
+            self.device_manager.port_scanner.set_fast_mode(True)
+
+    def done(self, result):
+        """Disable fast port scanning when dialog is closed."""
+        # Switch back to slow polling (10s) for background detection
+        if self.device_manager and hasattr(self.device_manager, 'port_scanner'):
+            self.device_manager.port_scanner.set_fast_mode(False)
+        super().done(result)

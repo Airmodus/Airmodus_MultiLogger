@@ -196,36 +196,6 @@ def create_error_response(message, command, error):
     }
 
 
-def get_short_id(serial_number):
-    """
-    Extract a short identifier from serial number.
-
-    For Airmodus CPC with nicknames (e.g., "301* Jerry"), extracts the nickname.
-    For other devices, returns first 4 characters.
-
-    Args:
-        serial_number: Full serial number string
-
-    Returns:
-        Short identifier string (e.g., "Jerry" or "1234")
-    """
-    import re
-
-    if not serial_number:
-        return ""
-
-    # Check for Airmodus A30/A20 CPC with nickname (e.g., "301* Jerry")
-    match = re.match(r'^(?:301|235)[\*\s]\s*(.+)', serial_number)
-    if match:
-        return match.group(1).strip()
-
-    # For other devices, return first 4 characters
-    if len(serial_number) >= 4:
-        return serial_number[:4]
-
-    return serial_number
-
-
 def compute_unique_short_ids(serial_numbers):
     """
     Compute unique short IDs for a collection of serial numbers.
@@ -300,5 +270,5 @@ __all__ = [
     '_manage_plot_array', '_roll_pulse_array', 'psm_update', 'psm_flow_send', 'cpc_flow_send',
     'ten_hz_clicked', 'command_entered',
     'parse_idn_response', 'create_data_response', 'create_error_response',
-    'get_short_id', 'compute_unique_short_ids'
+    'compute_unique_short_ids'
 ]

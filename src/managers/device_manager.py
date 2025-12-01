@@ -15,6 +15,9 @@ from utils import (
 )
 from .port_scanner import PortScannerManager, PortInfo
 
+# Timeout for port scan recovery (if scan is stuck longer than this, reset and allow new scan)
+SCAN_TIMEOUT_SECONDS = 30
+
 class DeviceManager(QObject):
     # Signals for port scanning events
     port_scan_started = pyqtSignal()
@@ -34,6 +37,7 @@ class DeviceManager(QObject):
         # Initialize port scanner manager
         self.port_scanner = PortScannerManager()
         self._scanning = False
+        self._scan_start_time = None  # Track when scan started for timeout recovery
         self._com_port_list = []  # Cache current port list
         self._port_info_cache = {}  # Cache port info for dialogs  
 
@@ -45,7 +49,7 @@ class DeviceManager(QObject):
 
         for device_config in self.config.devices:
             dev_id = device_config.device_id
-            device_widget = self.data_holder.get_device(dev_id)
+            device_widget = self.data_holder.device_widgets.get(dev_id)
 
             if not device_widget:
                 continue  # Skip if widget not found
@@ -67,24 +71,28 @@ class DeviceManager(QObject):
 
             connected = False
 
-            # Try to establish or verify connection
-            try:
-                if hasattr(connection, 'connection') and connection.connection.is_open:
-                    connected = True
-                else:
-                    connection.connect()
-                    if connection.connection.is_open:
-                        connected = True
-            except AttributeError:
+            # Only try to connect if port is in the available port list
+            # This prevents false "connected" status when port doesn't exist
+            if port and port in com_port_list:
+                # Check if already connected
                 try:
-                    connection.set_port(port)
-                    connection.connect()
-                    if connection.connection.is_open:
+                    if hasattr(connection, 'connection') and connection.connection.is_open:
                         connected = True
                 except Exception:
                     pass
-            except Exception:
-                pass
+
+                # If not connected, check if connection attempt is in progress
+                if not connected:
+                    if hasattr(connection, 'is_connecting') and connection.is_connecting():
+                        # Connection attempt in progress, wait for next cycle
+                        pass
+                    else:
+                        # Start async connection attempt (non-blocking)
+                        # Set port first if needed
+                        if connection.serial_port != port:
+                            connection.set_port(port)
+                        # Start background connection - next cycle will detect success
+                        connection.connect_async()
 
             # Handle connection state changes
             if device_widget:
@@ -136,18 +144,49 @@ class DeviceManager(QObject):
         This method now uses threaded scanning to prevent UI blocking.
         Port discovery results are delivered via signals.
         """
+        # Check if scanning is stuck (timeout recovery)
         if self._scanning:
-            logging.debug("Port scan already in progress, skipping")
-            return self._com_port_list
+            if self._scan_start_time is not None:
+                elapsed = time() - self._scan_start_time
+                if elapsed > SCAN_TIMEOUT_SECONDS:
+                    logging.warning(f"Port scan timeout after {elapsed:.1f}s, resetting scanner")
+                    self._scanning = False
+                    self._scan_start_time = None
+                    # Stop any hung scanner thread
+                    try:
+                        self.port_scanner.stop_all()
+                    except Exception as e:
+                        logging.error(f"Error stopping scanner: {e}")
+                    # Clean up stale port descriptions to prevent memory accumulation
+                    current_ports = {p.device for p in list_ports.comports()}
+                    stale_ports = [p for p in self.data_holder.com_descriptions if p not in current_ports]
+                    for port in stale_ports:
+                        self.data_holder.com_descriptions.pop(port, None)
+                    # Also clean up port info cache
+                    stale_cache_ports = [p for p in self._port_info_cache if p not in current_ports]
+                    for port in stale_cache_ports:
+                        self._port_info_cache.pop(port, None)
+                else:
+                    logging.debug("Port scan already in progress, skipping")
+                    return self._com_port_list
+            else:
+                logging.debug("Port scan already in progress, skipping")
+                return self._com_port_list
 
         self._scanning = True
+        self._scan_start_time = time()
         self.port_scan_started.emit()
 
-        # Start asynchronous port scan
-        self.port_scanner.start_single_scan(
-            callback_discovered=self._on_port_discovered,
-            callback_complete=self._on_scan_complete
-        )
+        # Start asynchronous port scan with error handling
+        try:
+            self.port_scanner.start_single_scan(
+                callback_discovered=self._on_port_discovered,
+                callback_complete=self._on_scan_complete
+            )
+        except Exception as e:
+            logging.error(f"Failed to start port scan: {e}")
+            self._scanning = False
+            self._scan_start_time = None
 
         # Return cached port list (will be updated asynchronously)
         return self._com_port_list
@@ -242,6 +281,7 @@ class DeviceManager(QObject):
             all_ports: List of all discovered port dictionaries
         """
         self._scanning = False
+        self._scan_start_time = None
 
         # Update cached port list with all discovered ports
         self._com_port_list = [p['port'] for p in all_ports]
@@ -468,7 +508,7 @@ class DeviceManager(QObject):
         # go through devices
         for device_config in self.config.devices:
             try:
-                device_widget = self.data_holder.get_device(device_config.device_id)
+                device_widget = self.data_holder.device_widgets.get(device_config.device_id)
 
                 # Delegate 10 Hz validation to device
                 if device_widget and device_widget.supports_10hz_mode():

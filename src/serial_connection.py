@@ -1,12 +1,15 @@
 from PyQt5.QtCore import QTimer
 from serial import Serial
 import logging
+import threading
 
 class SerialDeviceConnection():
     def __init__(self):
         self.serial_port = "NaN"
         self.timeout = 0.2
         self.baud_rate = 115200
+        self._connecting = False  # Flag to prevent duplicate connection attempts
+        self._connection_thread = None
         
     def set_port(self, serial_port):
         self.serial_port = serial_port
@@ -22,7 +25,41 @@ class SerialDeviceConnection():
             pass
         self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout) #, rtscts=True)
         print("Connected to %s" % self.serial_port)
-    
+
+    def connect_async(self, callback=None):
+        """
+        Attempt connection in background thread (non-blocking).
+
+        Args:
+            callback: Optional callback(success: bool) called when done
+        """
+        if self._connecting:
+            return  # Already attempting connection
+
+        self._connecting = True
+
+        def _connect_worker():
+            success = False
+            try:
+                self.connect()  # Existing blocking connect
+                success = hasattr(self, 'connection') and self.connection.is_open
+            except Exception as e:
+                logging.debug(f"[SERIAL CONNECT ASYNC] Failed to connect to {self.serial_port}: {e}")
+            finally:
+                self._connecting = False
+                if callback:
+                    try:
+                        callback(success)
+                    except Exception as e:
+                        logging.error(f"[SERIAL CONNECT ASYNC] Callback error: {e}")
+
+        self._connection_thread = threading.Thread(target=_connect_worker, daemon=True)
+        self._connection_thread.start()
+
+    def is_connecting(self):
+        """Return True if connection attempt is in progress."""
+        return self._connecting
+
     # close serial connection
     def close(self):
         # if connection exist, it is closed
@@ -33,19 +70,9 @@ class SerialDeviceConnection():
         except Exception:
             pass  # Connection already closed or doesn't exist
     
-    # close old connection and open new connection
-    def change_port(self, serial_port):
-        # close current connection
-        self.close()
-        # set new port
-        self.set_port(serial_port)
-        try:
-            # connect to new port
-            self.connect()
-        except Exception as e:
-            print("change_port:", e)
-    
     def send_message(self, message):
+        if message is None:
+            return
         # add line termination and convert to bytes
         message_str = str(message)
         message_bytes = bytes((message_str + '\r\n'), 'utf-8')
@@ -91,15 +118,6 @@ class SerialDeviceConnection():
     
     # --- CPC & PSM set/command functions ---
 
-    # send set message
-    def send_set(self, message):
-        if message == None:
-            # if message is None, do nothing
-            return
-        else:
-            # send message
-            self.send_message(message)
-    
     # add value to set message
     def send_set_val(self, value, message, **kwargs):
         if isinstance(value, float): # if value is float, round to 2 or x decimals
@@ -108,7 +126,6 @@ class SerialDeviceConnection():
             else: # otherwise, round to 2 decimals
                 value = round(value, 2)
         message = message + str(value) # add value to message
-        #print("send_set_val -", message) # print message for debugging
-        self.send_set(message) # send message using send_message()
+        self.send_message(message)
 
 __all__ = ['SerialDeviceConnection']

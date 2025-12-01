@@ -55,6 +55,7 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         self.name = device_config.device_type_name
         self.dev_id = device_config.device_id
         self.dev_type = device_config.device_type
+        self.device_type = device_config.device_type  # Alias for backwards compatibility
         self.plot_tab = None  # Should be set by subclass
 
         # Runtime connection state (set by DeviceManager)
@@ -1066,6 +1067,28 @@ class DefaultSinglePlotConfig:
     def get_start_time_key(self):
         """Use primary key for start time detection."""
         return ''
+
+    def should_skip_normal_plotting(self, dev_id, data_holder):
+        """
+        Check if device is in a special mode that skips normal plotting.
+
+        Default: always plot normally.
+        """
+        return False
+
+    def get_main_axis_config(self, plot_to_main_value):
+        """
+        Get axis configuration for main plot.
+
+        Returns:
+            dict or None: Axis config or None if axis should be hidden
+        """
+        if plot_to_main_value:
+            return {
+                'viewbox_type': self.get_viewbox_type(),
+                'show': True
+            }
+        return None
 
 
 __all__ = ['BaseDevice', 'SimpleDevice', 'ComplexDevice', 'DefaultSinglePlotConfig']

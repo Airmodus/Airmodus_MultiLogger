@@ -62,6 +62,11 @@ class DeviceStatusWidget(QLabel):
         # Initialize with disconnected state
         self.update_status(connected=False, value="", has_error=False)
 
+    def __del__(self):
+        """Clean up timer on destruction to prevent resource leaks."""
+        if hasattr(self, '_tooltip_timer'):
+            self._tooltip_timer.stop()
+
     def update_status(self, connected=False, value="", has_error=False, error_msg=""):
         """
         Update the device status display.
@@ -175,6 +180,11 @@ class PersistentTooltipLabel(QLabel):
         self._tooltip_timer = QTimer(self)
         self._tooltip_timer.timeout.connect(self._refresh_tooltip)
         self._last_tooltip_pos = None
+
+    def __del__(self):
+        """Clean up timer on destruction to prevent resource leaks."""
+        if hasattr(self, '_tooltip_timer'):
+            self._tooltip_timer.stop()
 
     def event(self, event):
         """Handle custom tooltip behavior for persistent display."""

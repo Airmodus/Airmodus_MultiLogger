@@ -23,14 +23,14 @@ class TestDeviceIdentification:
     """Test device type identification from serial numbers."""
 
     def test_psm_20_identification(self):
-        """Test PSM 2.0 pattern matching."""
-        assert DeviceIdentifier.identify_device(serial_number="8211445616") == "PSM 2.0"
-        assert DeviceIdentifier.identify_device(serial_number="8123456789") == "PSM 2.0"
+        """Test PSM 2.0 pattern matching (serials starting with 9)."""
+        assert DeviceIdentifier.identify_device(serial_number="9142501") == "PSM 2.0"
+        assert DeviceIdentifier.identify_device(serial_number="9123456") == "PSM 2.0"
 
     def test_psm_retrofit_identification(self):
-        """Test PSM Retrofit pattern matching."""
-        assert DeviceIdentifier.identify_device(serial_number="9142501") == "PSM Retrofit"
-        assert DeviceIdentifier.identify_device(serial_number="9123456") == "PSM Retrofit"
+        """Test PSM Retrofit pattern matching (serials starting with 8)."""
+        assert DeviceIdentifier.identify_device(serial_number="8211445616") == "PSM Retrofit"
+        assert DeviceIdentifier.identify_device(serial_number="8123456789") == "PSM Retrofit"
 
     def test_cpc_identification(self):
         """Test CPC pattern matching."""
@@ -95,14 +95,14 @@ class TestDisplayNameExtraction:
         assert result == "Airmodus RHTP [..001]"
 
     def test_psm_20_with_suffix(self):
-        """Test PSM 2.0 shows last 3 digits."""
-        result = DeviceIdentifier.extract_display_name("8211445616", "PSM 2.0")
-        assert result == "Airmodus PSM 2.0 [..616]"
+        """Test PSM 2.0 shows last 3 digits (serials starting with 9)."""
+        result = DeviceIdentifier.extract_display_name("9142501", "PSM 2.0")
+        assert result == "Airmodus PSM 2.0 [..501]"
 
     def test_psm_retrofit_with_suffix(self):
-        """Test PSM Retrofit shows last 3 digits."""
-        result = DeviceIdentifier.extract_display_name("9142501", "PSM Retrofit")
-        assert result == "Airmodus PSM Retrofit [..501]"
+        """Test PSM Retrofit shows last 3 digits (serials starting with 8)."""
+        result = DeviceIdentifier.extract_display_name("8211445616", "PSM Retrofit")
+        assert result == "Airmodus PSM Retrofit [..616]"
 
     def test_cpc_z_serial_with_suffix(self):
         """Test CPC with Z-prefix serial shows last 3 digits."""
@@ -135,8 +135,8 @@ class TestDisplayNameExtraction:
         result = DeviceIdentifier.extract_display_name("301* Jerry")
         assert result == "Airmodus CPC Jerry"
 
-        result = DeviceIdentifier.extract_display_name("8211445616")
-        assert result == "Airmodus PSM 2.0 [..616]"
+        result = DeviceIdentifier.extract_display_name("9142501")
+        assert result == "Airmodus PSM 2.0 [..501]"
 
     def test_nickname_extraction_with_extra_spaces(self):
         """Test nickname extraction handles extra spaces."""
@@ -203,8 +203,8 @@ class TestIntegerDeviceTypes:
 
     def test_psm_retrofit_with_integer_type(self):
         """Test PSM Retrofit with integer device type constant (2)."""
-        result = DeviceIdentifier.extract_display_name("9142501", 2)
-        assert result == "Airmodus PSM Retrofit [..501]"
+        result = DeviceIdentifier.extract_display_name("8211445616", 2)
+        assert result == "Airmodus PSM Retrofit [..616]"
 
     def test_rhtp_with_integer_type(self):
         """Test RHTP with integer device type constant (5)."""
@@ -213,8 +213,8 @@ class TestIntegerDeviceTypes:
 
     def test_psm2_with_integer_type(self):
         """Test PSM 2.0 with integer device type constant (7)."""
-        result = DeviceIdentifier.extract_display_name("8211445616", 7)
-        assert result == "Airmodus PSM 2.0 [..616]"
+        result = DeviceIdentifier.extract_display_name("9142501", 7)
+        assert result == "Airmodus PSM 2.0 [..501]"
 
     def test_electrometer_with_integer_type(self):
         """Test Electrometer with integer device type constant (3)."""

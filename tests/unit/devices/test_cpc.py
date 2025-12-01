@@ -30,10 +30,9 @@ from fixtures.mock_serial_data import MockCPCResponses
 # ============================================================================
 
 @pytest.fixture
-def cpc_widget(qapp, mock_device_parameter):
+def cpc_widget(qapp, mock_cpc_config):
     """Create CPCWidget for testing."""
-    widget = CPCWidget(mock_device_parameter)
-    widget.dev_id = 1
+    widget = CPCWidget(mock_cpc_config)
     yield widget
     widget.deleteLater()
 
@@ -204,7 +203,7 @@ class TestCPCDataWriter:
         cpc_widget.current_data.dead_time = 0.12
         cpc_widget.current_data.temp_saturator = 40.5
 
-        data_str = cpc_widget.data_writer.get_dat_data(None, None, None)
+        data_str = cpc_widget.data_writer.get_dat_data(None, "2025-01-01 12:00:00")
 
         assert '1234.5' in data_str
         assert '0.12' in data_str

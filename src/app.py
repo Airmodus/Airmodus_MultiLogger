@@ -1035,17 +1035,6 @@ class MainWindow(QMainWindow):
             else:
                 widget.plot_tab.plot.enableAutoRange()
 
-    # update device tab name when serial number changes
-    def rename_device(self, device_id: int):
-        """Update tab name based on device type and serial number."""
-        # Find device config
-        device_config = next((d for d in self.config.devices if d.device_id == device_id), None)
-        if not device_config:
-            return
-
-        # Update tab name
-        self.rename_tab(device_id)
-
     # update device tab name according to nickname or serial number
     def rename_tab(self, device_id: int):
         """Update tab name for a device based on nickname or serial number."""
@@ -1074,12 +1063,43 @@ class MainWindow(QMainWindow):
             self.device_tab_bar.setTabText(tab_index, device_name)
 
     def closeEvent(self, event):
-        """Handle application close event - cleanup database connections."""
+        """Handle application close event - cleanup all resources."""
+        logging.info("Application closing, cleaning up resources...")
+
+        # Stop timer service first (stops data acquisition loop)
+        if hasattr(self, 'timer_service'):
+            try:
+                self.timer_service.stop()
+                logging.info("Timer service stopped")
+            except Exception as e:
+                logging.error(f"Error stopping timer service: {e}")
+
+        # Stop port scanner threads
+        if hasattr(self, 'device_manager') and hasattr(self.device_manager, 'port_scanner'):
+            try:
+                self.device_manager.port_scanner.stop_all()
+                logging.info("Port scanner stopped")
+            except Exception as e:
+                logging.error(f"Error stopping port scanner: {e}")
+
+        # Close all device serial connections
+        for dev_id, widget in self.data_holder.device_widgets.items():
+            if hasattr(widget, 'connection'):
+                try:
+                    widget.connection.close()
+                    logging.debug(f"Closed serial connection for device {dev_id}")
+                except Exception as e:
+                    logging.debug(f"Error closing device {dev_id} connection: {e}")
+
         # Disconnect from database if connected
         if hasattr(self, 'database_manager') and self.database_manager.connected:
-            self.database_manager.disconnect()
+            try:
+                self.database_manager.disconnect()
+                logging.info("Database disconnected")
+            except Exception as e:
+                logging.error(f"Error disconnecting database: {e}")
 
-        # Accept the close event
+        logging.info("Cleanup complete, accepting close event")
         event.accept()
 
 

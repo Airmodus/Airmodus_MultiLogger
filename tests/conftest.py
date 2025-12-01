@@ -80,8 +80,34 @@ def mock_device_connection(mock_serial_connection):
 
 
 # ============================================================================
-# Mock Parameter Tree Fixtures
+# Mock Device Config Fixtures
 # ============================================================================
+
+def create_mock_device_config(device_type, device_type_name, device_id, **extra_params):
+    """
+    Create a mock DeviceConfig object for testing.
+
+    Args:
+        device_type: Device type constant (e.g., CPC, PSM, RHTP)
+        device_type_name: Device type name string (e.g., "CPC", "PSM Retrofit")
+        device_id: Device ID integer
+        **extra_params: Additional parameters to add to extra_params dict
+
+    Returns:
+        Mock object configured as a DeviceConfig
+    """
+    config = Mock()
+    config.device_type = device_type
+    config.device_type_name = device_type_name
+    config.device_id = device_id
+    config.com_port = "COM3"
+    config.serial_number = f"TEST{device_id:03d}"
+    config.device_nickname = ""
+    config.plot_to_main = True
+    config.settings = Mock()
+    config.extra_params = extra_params
+    return config
+
 
 @pytest.fixture
 def mock_device_parameter():
@@ -89,6 +115,8 @@ def mock_device_parameter():
     Mock Parameter object (from pyqtgraph.parametertree).
 
     Used for device initialization without real parameter tree.
+    NOTE: This is a legacy fixture. Prefer using device-specific config fixtures
+    like mock_cpc_config, mock_rhtp_config, etc.
     """
     param = Mock()
     param.name.return_value = "Test Device"
@@ -128,6 +156,70 @@ def mock_device_parameter():
     param.parent.return_value = parent_mock
 
     return param
+
+
+# Device-specific config fixtures
+from config import CPC, PSM, PSM2, RHTP, CO2_SENSOR, AFM, ELECTROMETER, TSI_CPC, EXAMPLE_DEVICE, EDILUTER
+
+
+@pytest.fixture
+def mock_cpc_config():
+    """Mock DeviceConfig for CPC device."""
+    return create_mock_device_config(CPC, "CPC", 0)
+
+
+@pytest.fixture
+def mock_psm_config():
+    """Mock DeviceConfig for PSM Retrofit device."""
+    return create_mock_device_config(PSM, "PSM Retrofit", 1)
+
+
+@pytest.fixture
+def mock_psm2_config():
+    """Mock DeviceConfig for PSM 2.0 device."""
+    return create_mock_device_config(PSM2, "PSM 2.0", 2)
+
+
+@pytest.fixture
+def mock_rhtp_config():
+    """Mock DeviceConfig for RHTP device."""
+    return create_mock_device_config(RHTP, "RHTP", 3)
+
+
+@pytest.fixture
+def mock_co2_config():
+    """Mock DeviceConfig for CO2 sensor device."""
+    return create_mock_device_config(CO2_SENSOR, "CO2 sensor", 4)
+
+
+@pytest.fixture
+def mock_afm_config():
+    """Mock DeviceConfig for AFM device."""
+    return create_mock_device_config(AFM, "AFM", 5)
+
+
+@pytest.fixture
+def mock_electrometer_config():
+    """Mock DeviceConfig for Electrometer device."""
+    return create_mock_device_config(ELECTROMETER, "Electrometer", 6)
+
+
+@pytest.fixture
+def mock_tsi_cpc_config():
+    """Mock DeviceConfig for TSI CPC device."""
+    return create_mock_device_config(TSI_CPC, "TSI CPC", 7)
+
+
+@pytest.fixture
+def mock_example_config():
+    """Mock DeviceConfig for Example device."""
+    return create_mock_device_config(EXAMPLE_DEVICE, "Example device", 8)
+
+
+@pytest.fixture
+def mock_ediluter_config():
+    """Mock DeviceConfig for eDiluter device."""
+    return create_mock_device_config(EDILUTER, "eDiluter", 9)
 
 
 @pytest.fixture

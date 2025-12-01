@@ -13,6 +13,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt5.QtCore import QThread, pyqtSignal, QMutex, QMutexLocker
 import platform
 
+# Polling interval constants for adaptive scanning
+POLL_INTERVAL_SLOW = 10.0  # When port selection dialog is closed
+POLL_INTERVAL_FAST = 2.0   # When port selection dialog is open
+
 
 class PortInfo:
     """Data class for port information."""
@@ -64,13 +68,15 @@ class PortScannerThread(QThread):
     port_removed = pyqtSignal(str)  # port (for monitoring)
 
     def __init__(self, continuous_monitoring: bool = False,
-                 max_workers: int = 5, parent=None):
+                 max_workers: int = 5, poll_interval: float = POLL_INTERVAL_SLOW,
+                 parent=None):
         """
         Initialize the port scanner thread.
 
         Args:
             continuous_monitoring: If True, continuously monitor for port changes
             max_workers: Maximum number of concurrent port queries
+            poll_interval: Interval between port scans in seconds
             parent: Parent QObject
         """
         super().__init__(parent)
@@ -82,17 +88,36 @@ class PortScannerThread(QThread):
         self._port_info_cache = {}  # Cache port information
         self.inquiry_timeout = 0.8  # Timeout for IDN queries
         self.connection_timeout = 0.2  # Timeout for opening serial connections
+        self._poll_interval = poll_interval  # Dynamic polling interval
 
     def stop(self):
-        """Request the thread to stop."""
+        """Request the thread to stop and clear caches."""
         with QMutexLocker(self._mutex):
             self._stop_requested = True
         self.wait()  # Wait for thread to finish
+        # Clear caches to prevent memory leaks
+        self._port_info_cache.clear()
+        self._known_ports.clear()
 
     def is_stop_requested(self) -> bool:
         """Check if stop has been requested."""
         with QMutexLocker(self._mutex):
             return self._stop_requested
+
+    def set_poll_interval(self, interval: float):
+        """
+        Set the polling interval dynamically (thread-safe).
+
+        Args:
+            interval: New polling interval in seconds
+        """
+        with QMutexLocker(self._mutex):
+            self._poll_interval = interval
+
+    def get_poll_interval(self) -> float:
+        """Get the current polling interval (thread-safe)."""
+        with QMutexLocker(self._mutex):
+            return self._poll_interval
 
     def run(self):
         """Main thread execution - performs port scanning."""
@@ -437,10 +462,11 @@ class PortScannerThread(QThread):
 
     def _run_continuous_monitoring(self):
         """Run continuous monitoring for port changes (hot-plug detection)."""
-        poll_interval = 2.0  # Check every 2 seconds
-
         while not self.is_stop_requested():
             try:
+                # Get current polling interval (can change dynamically)
+                poll_interval = self.get_poll_interval()
+
                 # Get current ports
                 current_ports = {p.device: p for p in serial.tools.list_ports.comports()}
                 current_port_names = set(current_ports.keys())
@@ -466,15 +492,16 @@ class PortScannerThread(QThread):
                 # Update known ports
                 self._known_ports = current_port_names
 
-                # Sleep with interruptible wait
-                for _ in range(int(poll_interval * 10)):
+                # Sleep with interruptible wait (check interval frequently to respond to changes)
+                sleep_steps = int(poll_interval * 10)
+                for _ in range(sleep_steps):
                     if self.is_stop_requested():
                         break
                     time.sleep(0.1)
 
             except Exception as e:
                 self.error_occurred.emit(f"Monitoring error: {str(e)}")
-                time.sleep(poll_interval)
+                time.sleep(self.get_poll_interval())
 
 
 class PortScannerManager:
@@ -533,6 +560,18 @@ class PortScannerManager:
             self.scanner_thread.stop()
         if self.monitoring_thread:
             self.monitoring_thread.stop()
+
+    def set_fast_mode(self, enabled: bool):
+        """
+        Set the port scanning speed mode.
+
+        Args:
+            enabled: If True, use fast polling (2s) for responsive UI.
+                     If False, use slow polling (10s) for background detection.
+        """
+        interval = POLL_INTERVAL_FAST if enabled else POLL_INTERVAL_SLOW
+        if self.monitoring_thread and self.monitoring_thread.isRunning():
+            self.monitoring_thread.set_poll_interval(interval)
 
     def get_port_info(self) -> dict:
         """

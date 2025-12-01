@@ -36,55 +36,49 @@ from config import RHTP, CO2_SENSOR, AFM, ELECTROMETER, TSI_CPC, EXAMPLE_DEVICE
 # ============================================================================
 
 @pytest.fixture
-def rhtp_widget(qapp, mock_device_parameter):
+def rhtp_widget(qapp, mock_rhtp_config):
     """Create RHTPWidget for testing."""
-    widget = RHTPWidget(mock_device_parameter)
-    widget.dev_id = 1
+    widget = RHTPWidget(mock_rhtp_config)
     yield widget
     widget.deleteLater()
 
 
 @pytest.fixture
-def co2_widget(qapp, mock_device_parameter):
+def co2_widget(qapp, mock_co2_config):
     """Create CO2Widget for testing."""
-    widget = CO2Widget(mock_device_parameter)
-    widget.dev_id = 2
+    widget = CO2Widget(mock_co2_config)
     yield widget
     widget.deleteLater()
 
 
 @pytest.fixture
-def afm_widget(qapp, mock_device_parameter):
+def afm_widget(qapp, mock_afm_config):
     """Create AFMWidget for testing."""
-    widget = AFMWidget(mock_device_parameter)
-    widget.dev_id = 3
+    widget = AFMWidget(mock_afm_config)
     yield widget
     widget.deleteLater()
 
 
 @pytest.fixture
-def electrometer_widget(qapp, mock_device_parameter):
+def electrometer_widget(qapp, mock_electrometer_config):
     """Create ElectrometerWidget for testing."""
-    widget = ElectrometerWidget(mock_device_parameter)
-    widget.dev_id = 4
+    widget = ElectrometerWidget(mock_electrometer_config)
     yield widget
     widget.deleteLater()
 
 
 @pytest.fixture
-def tsi_cpc_widget(qapp, mock_device_parameter):
+def tsi_cpc_widget(qapp, mock_tsi_cpc_config):
     """Create TSIWidget for testing."""
-    widget = TSIWidget(mock_device_parameter)
-    widget.dev_id = 5
+    widget = TSIWidget(mock_tsi_cpc_config)
     yield widget
     widget.deleteLater()
 
 
 @pytest.fixture
-def example_widget(qapp, mock_device_parameter):
+def example_widget(qapp, mock_example_config):
     """Create ExampleDeviceWidget for testing."""
-    widget = ExampleDeviceWidget(mock_device_parameter)
-    widget.dev_id = 6
+    widget = ExampleDeviceWidget(mock_example_config)
     yield widget
     widget.deleteLater()
 

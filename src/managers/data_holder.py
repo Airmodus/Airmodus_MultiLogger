@@ -96,18 +96,6 @@ class DataHolder:
         for k in to_remove:
             self.plot_data.pop(k, None)
 
-    def get_device(self, dev_id):
-        """
-        Get device widget by device ID.
-
-        Args:
-            dev_id: Device ID (integer)
-
-        Returns:
-            Device widget instance or None if not found
-        """
-        return self.device_widgets.get(dev_id)
-
     def get_device_data(self, dev_id):
         """
         Get typed current_data dataclass from device.

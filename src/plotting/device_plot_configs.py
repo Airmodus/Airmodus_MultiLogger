@@ -525,7 +525,7 @@ class PSMPlotConfig(BasePlotConfig):
             return
 
         # Check if connected CPC is doing pulse analysis
-        cpc_widget = data_holder.get_device(cpc_id)
+        cpc_widget = data_holder.device_widgets.get(cpc_id)
         if cpc_widget and hasattr(cpc_widget, 'pulse_analysis_index'):
             if cpc_widget.pulse_analysis_index is not None and cpc_widget.pulse_analysis_index >= 0:
                 return  # CPC is in pulse analysis mode, don't use its data

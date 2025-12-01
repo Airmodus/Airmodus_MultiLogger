@@ -88,8 +88,8 @@ class TestComPortWidget:
             # Simulate port selection
             widget._on_port_selected('COM3')
 
-            # Should extract number and set in text field
-            assert widget.line_edit.text() == "3"
+            # Should use full COM port string on all platforms
+            assert widget.line_edit.text() == "COM3"
 
     def test_dropdown_selection_macos(self, qapp, qtbot):
         """Test dropdown selection on macOS."""
@@ -148,10 +148,10 @@ class TestComPortParameter:
         assert param.name() == 'COM port'
 
     def test_parameter_default_type_windows(self, qapp):
-        """Test default type on Windows."""
+        """Test default type on Windows (now uses string for cross-platform compatibility)."""
         with patch('platform.system', return_value='Windows'):
             param = ComPortParameter(name='COM port')
-            assert param.opts['type'] == 'int'
+            assert param.opts['type'] == 'str'
 
     def test_parameter_default_type_macos(self, qapp):
         """Test default type on macOS."""

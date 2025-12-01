@@ -30,10 +30,9 @@ from fixtures.mock_serial_data import MockEDiluterResponses
 # ============================================================================
 
 @pytest.fixture
-def ediluter_widget(qapp, mock_device_parameter):
+def ediluter_widget(qapp, mock_ediluter_config):
     """Create eDiluterWidget for testing."""
-    widget = eDiluterWidget(mock_device_parameter)
-    widget.dev_id = 1
+    widget = eDiluterWidget(mock_ediluter_config)
     yield widget
     widget.deleteLater()
 
@@ -184,7 +183,7 @@ class TestEDiluterDataWriter:
         ediluter_widget.current_data.temp1 = 25.5
         ediluter_widget.current_data.df_total = 15.7
 
-        data_str = ediluter_widget.data_writer.get_dat_data(None, None, None)
+        data_str = ediluter_widget.data_writer.get_dat_data(None, "2025-01-01 12:00:00")
 
         assert 'OK' in data_str
         assert '1013.2' in data_str
