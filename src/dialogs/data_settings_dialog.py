@@ -228,8 +228,8 @@ class DataSettingsDialog(QDialog):
                     status_parts.append("Last write: Not yet written")
 
                 # Add file path
-                if hasattr(self.data_holder, 'file_path') and self.data_holder.file_path:
-                    status_parts.append(f"Path: {self.data_holder.file_path}")
+                if self.config.data_settings.file_path:
+                    status_parts.append(f"Path: {self.config.data_settings.file_path}")
 
                 # Add most recent filename
                 if hasattr(self.data_holder, 'most_recent_filename') and self.data_holder.most_recent_filename:

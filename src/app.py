@@ -768,8 +768,11 @@ class MainWindow(QMainWindow):
             self.device_manager.config = self.config
         if hasattr(self, 'data_logger'):
             self.data_logger.config = self.config
+            self.data_logger._last_file_path = self.config.data_settings.file_path
         if hasattr(self, 'plot_manager'):
             self.plot_manager.config = self.config
+        if hasattr(self, 'status_bar'):
+            self.status_bar.config = self.config
 
         # Load database connection string
         if 'database_connection_string' in data:

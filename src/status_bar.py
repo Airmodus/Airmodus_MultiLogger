@@ -447,8 +447,8 @@ class MultiLoggerStatusBar(QStatusBar):
                 tooltip_parts.append(f"<br><br><b>Last write:</b> {last_write_str}")
 
             # Add file path
-            if self.data_holder.file_path:
-                tooltip_parts.append(f"<br><b>Path:</b> {self.data_holder.file_path}")
+            if self.config.data_settings.file_path:
+                tooltip_parts.append(f"<br><b>Path:</b> {self.config.data_settings.file_path}")
 
             # Add most recent filename
             if self.data_holder.most_recent_filename:

@@ -82,10 +82,15 @@ class BasePlotConfig:
         # Default behavior: plot the primary key if enabled
         if plot_to_main_value:
             key = self.get_main_plot_key(plot_to_main_value)
-            curve.setData(
-                x=x_time_list[:time_counter+1],
-                y=plot_data[str(dev_id)+key][:time_counter+1]
-            )
+            plot_key = str(dev_id) + key
+            # Only plot if key exists in plot_data
+            if plot_key in plot_data:
+                curve.setData(
+                    x=x_time_list[:time_counter+1],
+                    y=plot_data[plot_key][:time_counter+1]
+                )
+            else:
+                curve.setData(x=[], y=[])
         else:
             curve.setData(x=[], y=[])
 
@@ -111,12 +116,16 @@ class BasePlotConfig:
         Get the plot data key for main plot.
 
         Args:
-            selector_value: Value from "Plot to main" dropdown (if applicable)
+            selector_value: Value from "Plot to main" dropdown
+                           - True/False for single-value devices
+                           - Key string (e.g., ':rh') for multi-value devices
 
         Returns:
             str: Plot key suffix (e.g., '' or ':rh')
         """
-        return ''  # Default: first key
+        if selector_value is True:
+            return ''  # Single-value device
+        return selector_value if selector_value else ''
 
     def get_viewbox_type(self):
         """
@@ -679,30 +688,6 @@ class RHTPPlotConfig(BasePlotConfig):
         plot_data[str(dev_id)+':t'][time_counter] = rhtp_data.temperature
         plot_data[str(dev_id)+':p'][time_counter] = rhtp_data.pressure
 
-    def get_main_plot_key(self, selector_value=None):
-        """Map selector dropdown to plot key."""
-        if not selector_value:
-            return ''  # Empty - don't plot
-        mapping = {'RH': ':rh', 'T': ':t', 'P': ':p'}
-        return mapping.get(selector_value, '')
-
-    def update_main_plot(self, dev_id, time_counter, x_time_list, plot_data,
-                        curve, plot_to_main_value):
-        """Update main plot based on selector."""
-        if not plot_to_main_value:
-            curve.setData(x=[], y=[])
-            return
-
-        key = self.get_main_plot_key(plot_to_main_value)
-        if key:
-            curve.setData(
-                x=x_time_list[:time_counter+1],
-                y=plot_data[str(dev_id)+key][:time_counter+1]
-            )
-        else:
-            # Invalid/unmapped selector - clear curve
-            curve.setData(x=[], y=[])
-
     def update_individual_plots(self, dev_id, time_counter, x_time_list, plot_data):
         """Update RHTP plot with all 3 values."""
         if hasattr(self.device, 'plot_tab') and self.device.plot_tab:
@@ -734,15 +719,15 @@ class RHTPPlotConfig(BasePlotConfig):
         """
         Get axis configuration for RHTP main plot.
 
-        Label changes based on selector: RH, T, or P.
+        Label changes based on selector: :rh, :t, or :p.
         """
         if not plot_to_main_value:
             return None
 
         axis_configs = {
-            'RH': {'label': 'RHTP RH', 'units': '%', 'color': 'w'},
-            'T': {'label': 'RHTP T', 'units': '°C', 'color': 'w'},
-            'P': {'label': 'RHTP P', 'units': 'Pa', 'color': 'w'},
+            ':rh': {'label': 'RHTP RH', 'units': '%', 'color': 'w'},
+            ':t': {'label': 'RHTP T', 'units': '°C', 'color': 'w'},
+            ':p': {'label': 'RHTP P', 'units': 'Pa', 'color': 'w'},
         }
 
         config = axis_configs.get(plot_to_main_value)
@@ -770,30 +755,6 @@ class AFMPlotConfig(BasePlotConfig):
         plot_data[str(dev_id)+':rh'][time_counter] = afm_data.humidity
         plot_data[str(dev_id)+':t'][time_counter] = afm_data.temperature
         plot_data[str(dev_id)+':p'][time_counter] = afm_data.pressure
-
-    def get_main_plot_key(self, selector_value=None):
-        """Map selector dropdown to plot key."""
-        if not selector_value:
-            return ''  # Empty - don't plot
-        mapping = {'Flow': ':f', 'Standard flow': ':sf'}
-        return mapping.get(selector_value, '')
-
-    def update_main_plot(self, dev_id, time_counter, x_time_list, plot_data,
-                        curve, plot_to_main_value):
-        """Update main plot based on selector."""
-        if not plot_to_main_value:
-            curve.setData(x=[], y=[])
-            return
-
-        key = self.get_main_plot_key(plot_to_main_value)
-        if key:
-            curve.setData(
-                x=x_time_list[:time_counter+1],
-                y=plot_data[str(dev_id)+key][:time_counter+1]
-            )
-        else:
-            # Invalid/unmapped selector - clear curve
-            curve.setData(x=[], y=[])
 
     def update_individual_plots(self, dev_id, time_counter, x_time_list, plot_data):
         """Update AFM plot with all 5 values."""
@@ -834,14 +795,14 @@ class AFMPlotConfig(BasePlotConfig):
         """
         Get axis configuration for AFM main plot.
 
-        Label changes based on selector: Flow or Standard flow.
+        Label changes based on selector: :f or :sf.
         """
         if not plot_to_main_value:
             return None
 
         axis_configs = {
-            'Flow': {'label': 'AFM flow', 'units': 'lpm', 'color': 'w'},
-            'Standard flow': {'label': 'AFM standard flow', 'units': 'slpm', 'color': 'w'},
+            ':f': {'label': 'AFM flow', 'units': 'lpm', 'color': 'w'},
+            ':sf': {'label': 'AFM standard flow', 'units': 'slpm', 'color': 'w'},
         }
 
         config = axis_configs.get(plot_to_main_value)

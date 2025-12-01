@@ -1,5 +1,6 @@
 from PyQt5.QtCore import QTimer
 from serial import Serial
+from serial.serialutil import PortNotOpenError
 import logging
 import threading
 
@@ -10,6 +11,7 @@ class SerialDeviceConnection():
         self.baud_rate = 115200
         self._connecting = False  # Flag to prevent duplicate connection attempts
         self._connection_thread = None
+        self._pending_timers = []  # Track pending message timers for cancellation
         
     def set_port(self, serial_port):
         self.serial_port = serial_port
@@ -62,6 +64,8 @@ class SerialDeviceConnection():
 
     # close serial connection
     def close(self):
+        # Cancel all pending message timers first
+        self._cancel_pending_timers()
         # if connection exist, it is closed
         try:
             # Try to close with the port that was last used (needed if the port has been changed)
@@ -69,6 +73,12 @@ class SerialDeviceConnection():
             #print("Connection closed")
         except Exception:
             pass  # Connection already closed or doesn't exist
+
+    def _cancel_pending_timers(self):
+        """Cancel all pending delayed message timers."""
+        for timer in self._pending_timers:
+            timer.stop()
+        self._pending_timers.clear()
     
     def send_message(self, message):
         if message is None:
@@ -79,15 +89,29 @@ class SerialDeviceConnection():
         try:
             # log before sending
             logging.debug(f"[SERIAL TX] Port={self.serial_port} Data={message_str}")
-            # send message if connection exists
+            # send message if connection exists and is open
+            if not hasattr(self, 'connection') or not self.connection.is_open:
+                logging.debug(f"[SERIAL TX SKIP] Port closed - Port={self.serial_port} Data={message_str}")
+                return
             self.connection.write(message_bytes)
-        except AttributeError:
-            # log and print message if connection does not exist
-            logging.warning(f"[SERIAL TX FAIL] No connection - Port={self.serial_port} Data={message_str}")
-            print("send_message - no connection, message -", message_bytes)
+        except (AttributeError, PortNotOpenError):
+            # log message if connection does not exist or port was closed
+            logging.debug(f"[SERIAL TX SKIP] Port not available - Port={self.serial_port} Data={message_str}")
     
     def send_delayed_message(self, message, delay):
-        QTimer.singleShot(delay, lambda: self.send_message(message))
+        """Send a message after a delay, with cancellation support."""
+        timer = QTimer()
+        timer.setSingleShot(True)
+
+        def on_timeout():
+            self.send_message(message)
+            # Clean up: remove this timer from pending list
+            if timer in self._pending_timers:
+                self._pending_timers.remove(timer)
+
+        timer.timeout.connect(on_timeout)
+        self._pending_timers.append(timer)
+        timer.start(delay)
 
     def send_multiple_messages(self, device_widget, ten_hz=False):
         """
@@ -114,7 +138,7 @@ class SerialDeviceConnection():
     def send_pulse_analysis_messages(self, threshold):
         # send required messages for pulse analysis
         self.send_message(":SET:OPC:THRS " + str(threshold))
-        QTimer.singleShot(150, lambda: self.send_message(":MEAS:ALL"))
+        self.send_delayed_message(":MEAS:ALL", 150)
     
     # --- CPC & PSM set/command functions ---
 

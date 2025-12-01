@@ -9,22 +9,17 @@ class DataLogger:
     def __init__(self, data_holder, config):
         self.data_holder = data_holder
         self.config = config
-        self.data_settings = config.data_settings  # For quick access
+        self._last_file_path = ""  # Track last written path for change detection
 
     def on_data_settings_changed(self, data_settings):
         """Called when data settings change (connected to signal from app.py)."""
-        # Check if saving was just toggled off - reset filenames so new files are created next time
-        was_saving = self.data_settings.save_data
-        now_saving = data_settings.save_data
+        # Reset filenames if path changed
+        if data_settings.file_path != self._last_file_path:
+            self._last_file_path = data_settings.file_path
+            self.reset_all_filenames()
 
-        self.data_settings = data_settings
-
-        # Update file path if changed
-        if data_settings.file_path != self.data_holder.file_path:
-            self.filepath_changed(data_settings.file_path)
-
-        # Reset filenames when saving is toggled off (ensures fresh files when re-enabled)
-        if was_saving and not now_saving:
+        # Reset state when saving is off
+        if not data_settings.save_data:
             self.reset_all_filenames()
             self.data_holder.last_write_timestamp = None
             self.data_holder.most_recent_filename = ""
@@ -36,11 +31,6 @@ class DataLogger:
             # 0-6 = analyzing, -1 = ending, None = not analyzing
             return device_widget.pulse_analysis_index is not None and device_widget.pulse_analysis_index >= 0
         return False
-
-    def filepath_changed(self, new_path):
-        """Set file path and reset filename dictionaries."""
-        self.data_holder.file_path = new_path
-        self.reset_all_filenames()
 
     def reset_device_filenames(self, dev_id):
         """Remove specific device from filename dictionaries, results in new files being created."""
@@ -63,9 +53,9 @@ class DataLogger:
     def compare_day(self):
         """Compare current day to file start day and reset files at midnight if needed."""
         # check if saving is on
-        if self.data_settings.save_data:
+        if self.config.data_settings.save_data:
             # check if new file should be started at midnight
-            if self.data_settings.generate_daily_files:
+            if self.config.data_settings.generate_daily_files:
                 current_day = dt.fromtimestamp(self.data_holder.current_time).strftime("%m%d")
                 if current_day != self.data_holder.start_day:
                     self.reset_all_filenames() # start new file if day has changed
@@ -96,7 +86,7 @@ class DataLogger:
             device_nickname = '_' + device_nickname
 
         # get file tag from data settings
-        file_tag = self.data_settings.file_tag
+        file_tag = self.config.data_settings.file_tag
         if file_tag != "":
             file_tag = '_' + file_tag
 
@@ -107,7 +97,7 @@ class DataLogger:
             filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + file_tag + '.' + file_extension
 
         # create empty file
-        with open(self.data_holder.file_path + filename, "w", encoding='UTF-8'):
+        with open(self.config.data_settings.file_path + filename, "w", encoding='UTF-8'):
             pass
 
         # Track most recent filename (store just the filename without path separator for display)
@@ -139,7 +129,7 @@ class DataLogger:
             device_nickname = '_' + device_nickname
 
         # get file tag from data settings
-        file_tag = self.data_settings.file_tag
+        file_tag = self.config.data_settings.file_tag
         if file_tag != "":
             file_tag = '_' + file_tag
 
@@ -150,7 +140,7 @@ class DataLogger:
             filename = '\\' + timestamp_file + serial_number + '_' + device_type_name + device_nickname + '_10hz' + file_tag + '.csv'
 
         # create file and write header
-        with open(self.data_holder.file_path + filename, "w", encoding='UTF-8') as file:
+        with open(self.config.data_settings.file_path + filename, "w", encoding='UTF-8') as file:
             file.write('YYYY.MM.DD hh:mm:ss,Concentration 1 (#/cc),Concentration 2 (#/cc),Concentration 3 (#/cc),Concentration 4 (#/cc),Concentration 5 (#/cc),Concentration 6 (#/cc),Concentration 7 (#/cc),Concentration 8 (#/cc),Concentration 9 (#/cc),Concentration 10 (#/cc)')
 
         # Track most recent filename (store just the filename without path separator for display)
@@ -161,7 +151,12 @@ class DataLogger:
     def write_data(self):
         """Write data to file(s)."""
         # if saving is on
-        if self.data_settings.save_data:
+        if self.config.data_settings.save_data:
+            # Validate file path before attempting to save
+            if not self.config.data_settings.file_path:
+                self.data_holder.saving_status = 0
+                return
+
             # create timestamp from data_holder.current_time
             timestamp = dt.fromtimestamp(self.data_holder.current_time)
             timeStampStr = str(timestamp.strftime("%Y.%m.%d %H:%M:%S"))
@@ -206,13 +201,13 @@ class DataLogger:
                                     self.data_holder.par_updates[dev_id] = 1  # set .par update flag
 
                             # Check if device needs special files (e.g., 10Hz logging)
-                            if data_writer.has_special_files(device_config):
+                            if data_writer.has_special_files():
                                 if dev_id not in self.data_holder.ten_hz_filenames:
                                     filename = self._create_10hz_file(device_config, timestamp)
                                     self.data_holder.ten_hz_filenames[dev_id] = filename
 
                             # Write .dat file
-                            filename = self.data_holder.file_path + self.data_holder.dat_filenames[dev_id]
+                            filename = self.config.data_settings.file_path + self.data_holder.dat_filenames[dev_id]
 
                             # Check if header exists
                             with open(filename, 'r', encoding='UTF-8') as file:
@@ -230,16 +225,16 @@ class DataLogger:
                                 file.write("\n")
                                 file.write(timeStampStr + ',')
                                 # Get data from data_writer
-                                write_data = data_writer.get_dat_data(device_config, self.data_holder, timeStampStr)
+                                write_data = data_writer.get_dat_data(self.data_holder, timeStampStr)
                                 file.write(write_data)
 
                             # Update last write timestamp after successful write
                             self.data_holder.last_write_timestamp = self.data_holder.current_time
 
                             # Write .par file if device has one and should be updated
-                            if 'par' in data_writer.get_file_types() and data_writer.should_write_par(device_config, self.data_holder):
+                            if 'par' in data_writer.get_file_types() and data_writer.should_write_par(self.data_holder):
                                 # Get filename from dictionary and add path to front
-                                filename = self.data_holder.file_path + self.data_holder.par_filenames[dev_id]
+                                filename = self.config.data_settings.file_path + self.data_holder.par_filenames[dev_id]
 
                                 # Check if header exists
                                 with open(filename, 'r', encoding='UTF-8') as file:
@@ -256,7 +251,7 @@ class DataLogger:
                                     # Write settings data
                                     file.write("\n")
                                     file.write(timeStampStr + ',')
-                                    write_data = data_writer.get_par_data(device_config, self.data_holder, timeStampStr)
+                                    write_data = data_writer.get_par_data(self.data_holder, timeStampStr)
                                     if write_data:
                                         file.write(write_data)
 
@@ -265,8 +260,8 @@ class DataLogger:
                                     self.data_holder.par_updates[dev_id] = 0
 
                             # Write special files if device needs them (e.g., 10Hz)
-                            if data_writer.has_special_files(device_config):
-                                data_writer.write_special_files(device_config, self.data_holder, timeStampStr,
+                            if data_writer.has_special_files():
+                                data_writer.write_special_files(self.config.data_settings.file_path, timeStampStr,
                                                                self.data_holder.ten_hz_filenames)
                         # if saving fails, set saving status to 0
                         except Exception as e:
@@ -375,7 +370,7 @@ class DataLogger:
             self.data_holder.device_widgets[device_id].pulse_quality.clear_analysis_points()
 
             # create file and store threshold value
-            filepath = self.data_settings.file_path
+            filepath = self.config.data_settings.file_path
             # timestamp
             timestamp = dt.fromtimestamp(self.data_holder.current_time)
             timestamp_file = str(timestamp.strftime("%Y%m%d_%H%M%S"))

@@ -153,7 +153,7 @@ class BaseDataWriter(ABC):
         """
         return False  # Default: no special files
 
-    def write_special_files(self, data_holder, timestamp_str, filenames_dict):
+    def write_special_files(self, file_path, timestamp_str, filenames_dict):
         """
         Write any special files (override in subclasses).
 
@@ -161,7 +161,7 @@ class BaseDataWriter(ABC):
         The subclass is responsible for all file creation and writing.
 
         Args:
-            data_holder: The DataHolder instance
+            file_path: The directory path for saving files
             timestamp_str: Formatted timestamp string
             filenames_dict: Dictionary to store special filenames
         """

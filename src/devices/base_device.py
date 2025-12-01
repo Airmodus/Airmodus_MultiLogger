@@ -153,11 +153,16 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
             for key, label in plot_value_labels.items():
                 self.main_plot_dropdown.addItem(label, key)
 
-            # Set current value from config
-            current_value = self.device_config.extra_params.get('main_plot_value', '')
+            # Set current value from config (plot_to_main stores the key for multi-value devices)
+            current_value = self.device_config.plot_to_main
+            # If plot_to_main is True (default) or not a valid key, select first option
             index = self.main_plot_dropdown.findData(current_value)
             if index >= 0:
                 self.main_plot_dropdown.setCurrentIndex(index)
+            else:
+                # Default to first option and update config
+                self.main_plot_dropdown.setCurrentIndex(0)
+                self.device_config.plot_to_main = self.main_plot_dropdown.itemData(0)
 
             # Calculate proper width for dropdown to show full text
             max_width = 0
@@ -177,7 +182,8 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
             # Connect change signal
             def update_main_plot_value(index):
                 selected_key = self.main_plot_dropdown.itemData(index)
-                self.device_config.extra_params['main_plot_value'] = selected_key
+                # Store to plot_to_main (used by plot manager) for multi-value devices
+                self.device_config.plot_to_main = selected_key
                 # Trigger config save
                 if hasattr(self, 'on_config_changed'):
                     self.on_config_changed()

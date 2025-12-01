@@ -26,9 +26,18 @@ class CPCDataWriter(BaseDataWriter):
         return 'YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau,Command input'
 
     def should_write_par(self, data_holder):
-        """Check if .par file should be written (when par_updates flag is set)."""
+        """Check if .par file should be written."""
         dev_id = self.device.dev_id
-        return data_holder.par_updates.get(dev_id, 0) == 1
+
+        # Check device's par_updates flag
+        if data_holder.par_updates.get(dev_id, 0) == 1:
+            return True
+
+        # Check if device has latest_command
+        if hasattr(self.device, 'latest_command') and self.device.latest_command is not None:
+            return True
+
+        return False
 
     def get_par_data(self, data_holder, timestamp_str):
         """Return CPC settings data for .par file."""
@@ -53,7 +62,7 @@ class CPCDataWriter(BaseDataWriter):
         """Check if 10Hz logging is enabled."""
         return self.device.device_config.extra_params.get('10_hz', False)
 
-    def write_special_files(self, data_holder, timestamp_str, filenames_dict):
+    def write_special_files(self, file_path, timestamp_str, filenames_dict):
         """Write 10Hz data file for CPC."""
         dev_id = self.device.dev_id
 
@@ -65,7 +74,7 @@ class CPCDataWriter(BaseDataWriter):
         if dev_id not in filenames_dict:
             return
 
-        filename = data_holder.file_path + filenames_dict[dev_id]
+        filename = file_path + filenames_dict[dev_id]
 
         # Write 10Hz data
         with open(filename, 'a', newline='\n', encoding='UTF-8') as file:
