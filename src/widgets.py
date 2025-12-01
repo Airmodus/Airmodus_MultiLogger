@@ -3,7 +3,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QLocale, QTimer, QSize
 from PyQt5.QtWidgets import (QLabel, QWidget, QVBoxLayout, QLineEdit, QPushButton,
                              QSpinBox, QDoubleSpinBox, QTextEdit, QHBoxLayout,
                              QSizePolicy, QSplitter, QTabBar, QStyleFactory, QApplication,
-                             QToolButton)
+                             QToolButton, QScrollArea, QFrame)
 from datetime import datetime as dt
 import sys
 
@@ -372,7 +372,12 @@ class TabConfirmationPopup(QWidget):
                 tab_rect = tab_bar.tabRect(tab_index)
 
                 if not tab_rect.isNull() and not tab_rect.isEmpty():
-                    global_pos = tab_bar.mapToGlobal(tab_rect.bottomRight())
+                    # Use mapTabToGlobal if available (BrowserStyleTabBar wrapper)
+                    # Otherwise fall back to mapToGlobal (plain QTabBar)
+                    if hasattr(tab_bar, 'mapTabToGlobal'):
+                        global_pos = tab_bar.mapTabToGlobal(tab_index, tab_rect.bottomRight())
+                    else:
+                        global_pos = tab_bar.mapToGlobal(tab_rect.bottomRight())
                     popup_x = global_pos.x() - self.width()
                     popup_y = global_pos.y() + 2
                 else:
@@ -392,49 +397,74 @@ class TabConfirmationPopup(QWidget):
         self.activateWindow()  # Ensure popup gets focus
 
 
-class BrowserStyleTabBar(QTabBar):
-    """Custom tab bar with fixed-width tabs and horizontal scrolling.
+class _InnerTabBar(QTabBar):
+    """Inner tab bar used by BrowserStyleTabBar. Not for direct use."""
 
-    Features:
-    - Fixed width tabs (150-200px range based on text length)
-    - Horizontal scrolling with arrow buttons when tabs overflow
-    - Mouse wheel/touchpad scrolling support
-    - macOS compatibility (forces Fusion style for scroll buttons)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setExpanding(False)  # Don't stretch tabs - we control sizing
+        self.setUsesScrollButtons(False)  # Disable native scroll - we handle it
+        self.setMovable(False)
+        self.setElideMode(Qt.ElideRight)
+
+    def tabSizeHint(self, index):
+        """Return flexible width for tabs (150-200px based on text length)."""
+        size = QTabBar.tabSizeHint(self, index)
+        width = max(150, min(size.width(), 200))
+        return QSize(width, size.height())
+
+
+class BrowserStyleTabBar(QWidget):
+    """Custom scrollable tab bar widget using QScrollArea.
+
+    This bypasses Qt's native tab bar scrolling (which auto-scrolls to current tab)
+    by wrapping a QTabBar in a QScrollArea and handling scrolling ourselves.
+
+    Exposes QTabBar methods via delegation for compatibility.
     """
+
+    # Forward the currentChanged signal
+    currentChanged = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # Enable scrolling behavior
-        self.setExpanding(True)  # Stretch tabs to fill available width
-        self.setUsesScrollButtons(True)  # Show left/right arrow buttons
-        self.setMovable(False)  # Disable drag-and-drop reordering
-        self.setElideMode(Qt.ElideRight)  # Truncate long text with "..."
+        # Main layout
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # Prevent tab bar from requesting more space when tabs are added
-        # Use Minimum policy so it only uses the space it needs (scrollable)
-        size_policy = QSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-        size_policy.setHorizontalStretch(0)  # Don't compete for space
-        self.setSizePolicy(size_policy)
-
-        # Fix for macOS - force Fusion style to show scroll buttons
-        # macOS native style doesn't show scroll buttons by default
-        if sys.platform == 'darwin':
-            self.setStyle(QStyleFactory.create('Fusion'))
-
-        # Create custom scroll buttons overlaid on native ones
+        # Left scroll button
         self._left_scroll_btn = QToolButton(self)
-        self._right_scroll_btn = QToolButton(self)
-
-        # Set arrow icons
         self._left_scroll_btn.setArrowType(Qt.LeftArrow)
-        self._right_scroll_btn.setArrowType(Qt.RightArrow)
-
-        # Connect to scroll actions
         self._left_scroll_btn.clicked.connect(self._scroll_left)
-        self._right_scroll_btn.clicked.connect(self._scroll_right)
+        self._left_scroll_btn.setVisible(False)
+        self._left_scroll_btn.setFixedSize(40, 53)
+        layout.addWidget(self._left_scroll_btn)
 
-        # Style the custom buttons
+        # Scroll area to hold the tab bar
+        self._scroll_area = QScrollArea(self)
+        self._scroll_area.setWidgetResizable(False)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll_area.setFrameShape(QFrame.NoFrame)
+        self._scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        layout.addWidget(self._scroll_area, stretch=1)
+
+        # The actual tab bar inside the scroll area
+        self._tab_bar = _InnerTabBar()
+        self._tab_bar.currentChanged.connect(self.currentChanged.emit)
+        self._scroll_area.setWidget(self._tab_bar)
+
+        # Right scroll button
+        self._right_scroll_btn = QToolButton(self)
+        self._right_scroll_btn.setArrowType(Qt.RightArrow)
+        self._right_scroll_btn.clicked.connect(self._scroll_right)
+        self._right_scroll_btn.setVisible(False)
+        self._right_scroll_btn.setFixedSize(40, 53)
+        layout.addWidget(self._right_scroll_btn)
+
+        # Style the scroll buttons
         button_style = """
             QToolButton {
                 background-color: #3a3a3a;
@@ -457,147 +487,139 @@ class BrowserStyleTabBar(QTabBar):
         self._left_scroll_btn.setStyleSheet(button_style)
         self._right_scroll_btn.setStyleSheet(button_style)
 
-        # Set fixed size for buttons
-        self._left_scroll_btn.setFixedSize(40, 53)
-        self._right_scroll_btn.setFixedSize(40, 53)
-
-        # Initially hide buttons until we know scroll state
-        self._left_scroll_btn.setVisible(False)
-        self._right_scroll_btn.setVisible(False)
-
-        # Timer to update button states
+        # Timer to update scroll button visibility
         self._update_timer = QTimer(self)
         self._update_timer.timeout.connect(self._update_scroll_buttons)
-        self._update_timer.start(100)  # Check every 100ms
+        self._update_timer.start(100)
 
-    def sizeHint(self):
-        """Return a fixed size hint to prevent window expansion when adding tabs.
+        # Scroll step size in pixels
+        self._scroll_step = 150
 
-        Since tabs scroll horizontally, we don't need to request space for all tabs.
-        Just return a reasonable fixed width that allows the tab bar to wrap nicely.
+        # Set fixed height to match tab bar
+        self.setFixedHeight(53)
+
+    # === Delegate QTabBar methods to inner tab bar ===
+
+    def addTab(self, *args):
+        result = self._tab_bar.addTab(*args)
+        self._update_tab_bar_size()
+        self._update_scroll_buttons()
+        return result
+
+    def removeTab(self, index):
+        self._tab_bar.removeTab(index)
+        self._update_tab_bar_size()
+        self._update_scroll_buttons()
+
+    def count(self):
+        return self._tab_bar.count()
+
+    def currentIndex(self):
+        return self._tab_bar.currentIndex()
+
+    def setCurrentIndex(self, index):
+        self._tab_bar.setCurrentIndex(index)
+        # Note: We intentionally don't auto-scroll here - that's the fix!
+
+    def tabText(self, index):
+        return self._tab_bar.tabText(index)
+
+    def setTabText(self, index, text):
+        self._tab_bar.setTabText(index, text)
+        self._update_tab_bar_size()
+
+    def tabButton(self, index, position):
+        return self._tab_bar.tabButton(index, position)
+
+    def setTabButton(self, index, position, widget):
+        self._tab_bar.setTabButton(index, position, widget)
+
+    def tabIcon(self, index):
+        return self._tab_bar.tabIcon(index)
+
+    def setTabIcon(self, index, icon):
+        self._tab_bar.setTabIcon(index, icon)
+
+    def tabRect(self, index):
+        return self._tab_bar.tabRect(index)
+
+    def setStyleSheet(self, stylesheet):
+        # Apply to inner tab bar, not the wrapper
+        self._tab_bar.setStyleSheet(stylesheet)
+
+    def mapTabToGlobal(self, index, point):
+        """Map a point relative to a tab to global coordinates.
+
+        Use this instead of mapToGlobal when working with tabRect coordinates.
         """
-        # Return a fixed reasonable width instead of calculating from all tabs
-        # This prevents the window from expanding when more tabs are added
-        return QSize(400, super().sizeHint().height())
+        return self._tab_bar.mapToGlobal(point)
 
-    def minimumSizeHint(self):
-        """Return a truly fixed minimum size hint.
+    @property
+    def innerTabBar(self):
+        """Access the inner QTabBar for advanced operations."""
+        return self._tab_bar
 
-        This prevents Qt from calculating a larger minimum based on tab content.
-        The tab bar is scrollable, so it doesn't need space for all tabs.
-        """
-        # Use a fixed height of 53 (matches the custom scroll button height)
-        return QSize(200, 53)
+    # === Scroll handling ===
 
-    def tabSizeHint(self, index):
-        """Return flexible width for tabs (150-200px based on text length)."""
-        size = QTabBar.tabSizeHint(self, index)
+    def _update_tab_bar_size(self):
+        """Update the inner tab bar's size to fit all tabs."""
+        # Calculate total width needed
+        total_width = 0
+        for i in range(self._tab_bar.count()):
+            total_width += self._tab_bar.tabRect(i).width()
 
-        # Constrain width between 150px and 200px
-        # This allows shorter tab names to use less space
-        # while preventing very long names from making tabs too wide
-        width = max(150, min(size.width(), 200))
+        # Add some padding
+        total_width += 10
 
-        return QSize(width, size.height())
+        # Set the tab bar width
+        self._tab_bar.setFixedWidth(max(total_width, self._scroll_area.width()))
+        self._tab_bar.setFixedHeight(53)
 
     def _scroll_left(self):
-        """Scroll viewport to the left (show tabs on the left)."""
-        # Find native scroll buttons and click the left one
-        buttons = self.findChildren(QToolButton)
-        for btn in buttons:
-            if btn not in [self._left_scroll_btn, self._right_scroll_btn]:
-                if btn.arrowType() == Qt.LeftArrow:
-                    btn.click()
-                    break
+        """Scroll viewport to the left."""
+        scrollbar = self._scroll_area.horizontalScrollBar()
+        scrollbar.setValue(scrollbar.value() - self._scroll_step)
+        self._update_scroll_buttons()
 
     def _scroll_right(self):
-        """Scroll viewport to the right (show tabs on the right)."""
-        # Find native scroll buttons and click the right one
-        buttons = self.findChildren(QToolButton)
-        for btn in buttons:
-            if btn not in [self._left_scroll_btn, self._right_scroll_btn]:
-                if btn.arrowType() == Qt.RightArrow:
-                    btn.click()
-                    break
+        """Scroll viewport to the right."""
+        scrollbar = self._scroll_area.horizontalScrollBar()
+        scrollbar.setValue(scrollbar.value() + self._scroll_step)
+        self._update_scroll_buttons()
 
     def _update_scroll_buttons(self):
-        """Update visibility and enabled state of custom scroll buttons."""
-        # Calculate if scrolling is needed by checking if tabs overflow
-        tab_count = self.count()
-        if tab_count == 0:
-            self._left_scroll_btn.setVisible(False)
-            self._right_scroll_btn.setVisible(False)
-            return
+        """Update visibility and enabled state of scroll buttons."""
+        scrollbar = self._scroll_area.horizontalScrollBar()
 
-        # Calculate total width needed for all tabs
-        total_tabs_width = 0
-        for i in range(tab_count):
-            tab_rect = self.tabRect(i)
-            total_tabs_width += tab_rect.width()
-
-        # Check if tabs overflow the visible area
-        scrolling_needed = total_tabs_width > self.width()
+        # Check if scrolling is needed
+        scrolling_needed = scrollbar.maximum() > 0
 
         if scrolling_needed:
-            # Find native scroll buttons to check scroll position
-            native_buttons = []
-            for btn in self.findChildren(QToolButton):
-                if btn not in [self._left_scroll_btn, self._right_scroll_btn]:
-                    native_buttons.append(btn)
+            # Show/enable buttons based on scroll position
+            can_scroll_left = scrollbar.value() > scrollbar.minimum()
+            can_scroll_right = scrollbar.value() < scrollbar.maximum()
 
-            if len(native_buttons) >= 2:
-                left_native = native_buttons[0]
-                right_native = native_buttons[1]
-
-                # Show/enable custom buttons based on native button state
-                self._left_scroll_btn.setEnabled(left_native.isEnabled())
-                self._right_scroll_btn.setEnabled(right_native.isEnabled())
-                self._left_scroll_btn.setVisible(left_native.isEnabled())
-                self._right_scroll_btn.setVisible(right_native.isEnabled())
-            else:
-                # Scrolling needed but no native buttons yet, show both
-                self._left_scroll_btn.setVisible(True)
-                self._right_scroll_btn.setVisible(True)
-                self._left_scroll_btn.setEnabled(True)
-                self._right_scroll_btn.setEnabled(True)
+            self._left_scroll_btn.setVisible(can_scroll_left)
+            self._left_scroll_btn.setEnabled(can_scroll_left)
+            self._right_scroll_btn.setVisible(can_scroll_right)
+            self._right_scroll_btn.setEnabled(can_scroll_right)
         else:
-            # No scrolling needed, hide custom buttons
             self._left_scroll_btn.setVisible(False)
             self._right_scroll_btn.setVisible(False)
 
     def resizeEvent(self, event):
-        """Position scroll buttons on resize."""
+        """Handle resize - update tab bar size and scroll buttons."""
         super().resizeEvent(event)
-
-        # Position left button at the left edge
-        self._left_scroll_btn.move(0, (self.height() - 53) // 2)
-
-        # Position right button at the right edge
-        right_x = self.width() - self._right_scroll_btn.width()
-        self._right_scroll_btn.move(right_x, (self.height() - 53) // 2)
-
-        # Raise buttons to be on top
-        self._left_scroll_btn.raise_()
-        self._right_scroll_btn.raise_()
-
-        # Update scroll button visibility based on whether scrolling is needed
+        self._update_tab_bar_size()
         self._update_scroll_buttons()
 
     def wheelEvent(self, event):
-        """Enable mouse wheel/touchpad to scroll through tab bar horizontally.
-
-        Scrolls the viewport without changing the active tab.
-        Direction: scroll up = scroll right, scroll down = scroll left.
-        """
+        """Enable mouse wheel/touchpad to scroll through tabs."""
         delta = event.angleDelta().y()
 
-        # Use custom scroll buttons with enabled state checking
-        # Reverse direction: scroll up -> viewport moves right, scroll down -> viewport moves left
         if delta > 0 and self._right_scroll_btn.isEnabled():
-            # Scroll up = move viewport right (show tabs on the right)
             self._scroll_right()
         elif delta < 0 and self._left_scroll_btn.isEnabled():
-            # Scroll down = move viewport left (show tabs on the left)
             self._scroll_left()
 
         event.accept()
