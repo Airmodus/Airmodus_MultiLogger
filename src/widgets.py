@@ -504,8 +504,8 @@ class BrowserStyleTabBar(QWidget):
         # Scroll step size in pixels
         self._scroll_step = 150
 
-        # Height for the link overlay bracket area
-        self._overlay_height = 12
+        # Height for the link overlay bracket area (36px to allow stacked lines)
+        self._overlay_height = 36
 
         # Create link overlay for drawing connectors between linked tabs
         # Position it at the TOP of the tabs
