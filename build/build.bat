@@ -20,8 +20,13 @@ goto :main
 		echo Error: app.py not found.
 		goto :eof
 	)
-	:: get version number from app.py, store to !version_number! variable
-	for /f "tokens=3" %%a in ( 'findstr /c:"version_number = " ..\src\app.py' ) do (
+	:: check if config.py exists
+	if not exist ..\src\config.py (
+		echo Error: config.py not found.
+		goto :eof
+	)
+	:: get version number from config.py, store to !version_number! variable
+	for /f "tokens=3" %%a in ( 'findstr /c:"version_number = " ..\src\config.py' ) do (
 		set version_number=%%a
 		:: remove quotes around version number
 		set version_number=!version_number:~1,-1!
@@ -38,7 +43,7 @@ goto :eof
 :copy_files
 	:: copy relevant files to build folder
 	echo Copying relevant files to \!folder_name!\...
-	robocopy ..\src\ !folder_name! app.py style.css /ndl /njh /njs /np /ns /nc
+	robocopy ..\src !folder_name! /E /ndl /njh /njs /np /ns /nc
 	if %ERRORLEVEL% NEQ 1 goto :eof
 	robocopy ..\res !folder_name!\res /E /ndl /njh /njs /np /ns /nc
 	if %ERRORLEVEL% NEQ 1 goto :eof
@@ -70,7 +75,7 @@ goto :eof
 	echo.
 	:: navigate to build folder and run pyinstaller prompt
 	cd !folder_name!
-	call pyinstaller --name "Airmodus_MultiLogger_!version_number!" --onefile --windowed --add-data="style.css;." --add-data="res;res" app.py
+	call pyinstaller --name "Airmodus_MultiLogger_!version_number!" --onefile --windowed --add-data=".;." app.py
 	call conda deactivate
 	echo.
 	echo Executable built successfully.
