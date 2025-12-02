@@ -579,6 +579,11 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Get default extra_params from device class
+        from devices.registry import DEVICE_REGISTRY
+        device_class = DEVICE_REGISTRY[device_type].widget_class
+        extra_params = device_class.get_default_extra_params(device_type)
+
         # Create device configuration
         device_config = DeviceConfig(
             device_id=self._next_device_id,
@@ -589,24 +594,8 @@ class MainWindow(QMainWindow):
             device_nickname=device_nickname,
             plot_to_main=True,
             settings=create_device_settings(device_type),
-            extra_params={}
+            extra_params=extra_params
         )
-
-        # Add device-specific parameters
-        if device_type in [CPC, TSI_CPC]:
-            device_config.extra_params['10_hz'] = False
-            if device_type == CPC:
-                device_config.extra_params['database_enabled'] = False
-                device_config.extra_params['linked_rhtp'] = 'None'
-                device_config.extra_params['db_averaging_interval'] = '1 minute'
-
-        if device_type in [PSM, PSM2]:
-            device_config.extra_params['10_hz'] = False
-            device_config.extra_params['connected_cpc'] = 'None'
-            device_config.extra_params['calibration_file_path'] = ''
-            device_config.extra_params['firmware_version'] = ''
-            if device_type == PSM:
-                device_config.extra_params['co_flow'] = ''
 
         # Increment device ID counter
         self._next_device_id += 1
@@ -850,22 +839,7 @@ class MainWindow(QMainWindow):
         setup_device_connections(device_config.device_type, widget, device_config, connection, self)
 
         # Restore device-specific UI states from extra_params
-        if device_config.device_type in [PSM, PSM2]:
-            # Set app config for contour tab historical data loading
-            if hasattr(widget, 'set_app_config'):
-                widget.set_app_config(self.config)
-
-            # Restore 10 Hz button state
-            if '10_hz' in device_config.extra_params:
-                widget.measure_tab.ten_hz.change_color(int(device_config.extra_params['10_hz']))
-
-            # Restore CO flow (PSM Retrofit only)
-            if device_config.device_type == PSM and 'co_flow' in device_config.extra_params:
-                try:
-                    co_flow_val = float(device_config.extra_params['co_flow'])
-                    widget.set_tab.set_co_flow.value_spinbox.setValue(round(co_flow_val, 3))
-                except (ValueError, AttributeError):
-                    pass
+        widget.restore_ui_state(device_config, self.config)
 
         # Restore last viewed tab and connect signal to save tab changes
         saved_tab = device_config.extra_params.get('last_tab_index', 0)
@@ -875,20 +849,9 @@ class MainWindow(QMainWindow):
             lambda idx, dc=device_config: dc.extra_params.__setitem__('last_tab_index', idx)
         )
 
-        if device_config.device_type == CPC:
-            # Set app config for database tab RHTP dropdown
-            if hasattr(widget, 'set_app_config'):
-                widget.set_app_config(self.config)
-
         # Connect viewbox x-range change for autoscale
-        if device_config.device_type == ELECTROMETER:
-            for plot in widget.plot_tab.plots:
-                plot.getViewBox().sigXRangeChanged.connect(self.x_range_changed)
-        elif device_config.device_type in [RHTP, AFM]:
-            for viewbox in widget.plot_tab.viewboxes:
-                viewbox.sigXRangeChanged.connect(self.x_range_changed)
-        else:
-            widget.plot_tab.viewbox.sigXRangeChanged.connect(self.x_range_changed)
+        for viewbox in widget.get_viewboxes():
+            viewbox.sigXRangeChanged.connect(self.x_range_changed)
 
         # Register widget and initialize data structures
         self.data_holder.device_widgets[device_config.device_id] = widget
@@ -915,12 +878,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'status_bar'):
             self.status_bar.add_device_status(device_config.device_id, tab_name)
 
-        # Set main_window reference for CPC database tab
-        if device_config.device_type == CPC and hasattr(widget, 'database_tab'):
-            widget.database_tab.main_window = self
-            if hasattr(self.database_manager, 'connection_string_cached'):
-                widget.database_tab.connection_string_input.setText(self.database_manager.connection_string_cached)
-            widget.database_tab.update_global_connection_status()
+        # Set up main window references for devices that need them
+        widget.setup_main_window_references(self)
 
     def _restore_database_connections(self, conn_string):
         """Restore database connections for CPC devices."""

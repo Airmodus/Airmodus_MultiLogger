@@ -588,6 +588,127 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         """
         pass
 
+    # App Integration Methods
+    # These methods allow app.py to call generic methods instead of checking device types
+
+    @classmethod
+    def get_default_extra_params(cls, device_type: int) -> dict:
+        """
+        Return default extra_params for this device type.
+
+        Override in device subclasses to provide device-specific defaults.
+        This eliminates device-type conditionals in app.py during device creation.
+
+        Args:
+            device_type: Device type constant (CPC, PSM, etc.)
+
+        Returns:
+            dict: Default extra_params for this device type
+
+        Example:
+            CPC: {'10_hz': False, 'database_enabled': False, ...}
+            PSM: {'10_hz': False, 'connected_cpc': 'None', ...}
+            Others: {}
+        """
+        return {}
+
+    def get_viewboxes(self) -> list:
+        """
+        Return viewboxes for x-range signal connections.
+
+        Override in devices with non-standard viewbox structures.
+        This eliminates device-type conditionals for viewbox signal connections.
+
+        Returns:
+            list: List of viewbox objects for sigXRangeChanged connections
+
+        Default:
+            Returns [self.plot_tab.viewbox] if plot_tab has a viewbox attribute
+
+        Override examples:
+            Electrometer: [plot.getViewBox() for plot in self.plot_tab.plots]
+            RHTP/AFM: self.plot_tab.viewboxes
+        """
+        if hasattr(self, 'plot_tab') and hasattr(self.plot_tab, 'viewbox'):
+            return [self.plot_tab.viewbox]
+        return []
+
+    def restore_ui_state(self, device_config, app_config):
+        """
+        Restore device UI state from configuration after loading.
+
+        Override in devices with persistent UI state that needs restoration
+        after the device widget is created (e.g., 10Hz button state, co_flow value).
+
+        Args:
+            device_config: DeviceConfig with extra_params containing saved state
+            app_config: AppConfig for accessing global settings
+
+        Override examples:
+            PSM: Restore 10Hz button color, co_flow spinbox value, set_app_config
+            CPC: Call set_app_config for database tab RHTP dropdown
+        """
+        pass
+
+    def update_auxiliary_displays(self):
+        """
+        Update auxiliary displays beyond main plots (contour plots, etc.).
+
+        Called during plot updates for connected devices.
+        Override in devices with additional display elements.
+
+        Override example:
+            PSM: Update contour plot with current_data
+        """
+        pass
+
+    def validate_connected_devices(self, device_config, data_holder, config):
+        """
+        Validate connections to other devices and update UI accordingly.
+
+        Called during plot updates to check device dependencies and update
+        status indicators. Override in devices that depend on other devices.
+
+        Args:
+            device_config: This device's configuration
+            data_holder: DataHolder for accessing other devices
+            config: App config for accessing all device configurations
+
+        Override example:
+            PSM: Check connected CPC, update flow status, sync sample flow
+        """
+        pass
+
+    def perform_pre_plot_calculations(self, data_holder):
+        """
+        Perform calculations before plot data extraction.
+
+        Called at the start of plot update cycle for connected devices.
+        Override in devices that need to compute derived values.
+
+        Args:
+            data_holder: DataHolder for accessing shared state
+
+        Override example:
+            PSM: Calculate dilution-corrected CPC values
+        """
+        pass
+
+    def setup_main_window_references(self, main_window):
+        """
+        Set up references to main window for cross-component communication.
+
+        Called after device widget is created and added to GUI.
+        Override in devices that need main window access.
+
+        Args:
+            main_window: Main application window instance
+
+        Override example:
+            CPC: Set database_tab.main_window, connection string, status
+        """
+        pass
+
     @abstractmethod
     def parse_message(self, message, data_holder=None):
         """

@@ -86,4 +86,9 @@ class ElectrometerWidget(SimpleDevice):
         dev_conn.connection.read_all()
         dev_conn.send_message(":MEAS:V")
 
+    def get_viewboxes(self) -> list:
+        """Return viewboxes for Electrometer's multi-plot structure."""
+        return [plot.getViewBox() for plot in self.plot_tab.plots]
+
+
 __all__ = ['ElectrometerWidget']

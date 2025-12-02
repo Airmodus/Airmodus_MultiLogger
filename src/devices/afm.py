@@ -104,4 +104,9 @@ class AFMWidget(SimpleDevice):
         """AFM supports IDN inquiry."""
         return True
 
+    def get_viewboxes(self) -> list:
+        """Return viewboxes for AFM's multi-plot structure."""
+        return self.plot_tab.viewboxes
+
+
 __all__ = ['AFMWidget']

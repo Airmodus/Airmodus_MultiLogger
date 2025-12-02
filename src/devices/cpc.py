@@ -607,6 +607,32 @@ class CPCWidget(ComplexDevice):
                 if self.settings and self.settings.averaging_time < 1:
                     self.connection.send_message(":SET:TAVG 1")
 
+    # App Integration Methods
+
+    @classmethod
+    def get_default_extra_params(cls, device_type: int) -> dict:
+        """Return default extra_params for CPC devices."""
+        return {
+            '10_hz': False,
+            'database_enabled': False,
+            'linked_rhtp': 'None',
+            'db_averaging_interval': '1 minute'
+        }
+
+    def restore_ui_state(self, device_config, app_config):
+        """Restore CPC UI state from configuration."""
+        if hasattr(self, 'set_app_config'):
+            self.set_app_config(app_config)
+
+    def setup_main_window_references(self, main_window):
+        """Set up CPC database tab references to main window."""
+        if hasattr(self, 'database_tab'):
+            self.database_tab.main_window = main_window
+            if hasattr(main_window, 'database_manager') and hasattr(main_window.database_manager, 'connection_string_cached'):
+                self.database_tab.connection_string_input.setText(main_window.database_manager.connection_string_cached)
+            self.database_tab.update_global_connection_status()
+
+
 # set tab widget containing settings and message input
 # used in CPCWidget
 class CPCSetTab(QWidget):

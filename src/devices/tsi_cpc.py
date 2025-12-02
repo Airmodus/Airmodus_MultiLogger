@@ -107,4 +107,10 @@ class TSIWidget(SimpleDevice):
         """Send TSI CPC read commands."""
         dev_conn.send_multiple_messages(self)
 
+    @classmethod
+    def get_default_extra_params(cls, device_type: int) -> dict:
+        """Return default extra_params for TSI CPC devices."""
+        return {'10_hz': False}
+
+
 __all__ = ['TSIWidget']

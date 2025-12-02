@@ -761,6 +761,90 @@ class PSMWidget(ComplexDevice):
                                 self.on_config_changed()
                         break
 
+    # App Integration Methods
+
+    @classmethod
+    def get_default_extra_params(cls, device_type: int) -> dict:
+        """Return default extra_params for PSM devices."""
+        params = {
+            '10_hz': False,
+            'connected_cpc': 'None',
+            'calibration_file_path': '',
+            'firmware_version': ''
+        }
+        # PSM Retrofit has CO flow, PSM2 doesn't
+        if device_type == PSM:
+            params['co_flow'] = ''
+        return params
+
+    def restore_ui_state(self, device_config, app_config):
+        """Restore PSM UI state from configuration."""
+        # Set app config for contour tab historical data loading
+        if hasattr(self, 'set_app_config'):
+            self.set_app_config(app_config)
+
+        # Restore 10 Hz button state
+        if '10_hz' in device_config.extra_params:
+            self.measure_tab.ten_hz.change_color(int(device_config.extra_params['10_hz']))
+
+        # Restore CO flow (PSM Retrofit only)
+        if self.dev_type == PSM and 'co_flow' in device_config.extra_params:
+            try:
+                co_flow_val = float(device_config.extra_params['co_flow'])
+                self.set_tab.set_co_flow.value_spinbox.setValue(round(co_flow_val, 3))
+            except (ValueError, AttributeError):
+                pass
+
+    def update_auxiliary_displays(self):
+        """Update PSM contour plot."""
+        import logging
+        import traceback
+        if hasattr(self, 'contour_tab') and self.is_connected:
+            try:
+                self.contour_tab.update_contour(self.current_data)
+            except Exception as e:
+                logging.error(f"Error updating PSM contour plot: {e}")
+                traceback.print_exc()
+
+    def validate_connected_devices(self, device_config, data_holder, config):
+        """Validate PSM-CPC connection and update flow status."""
+        from config import CPC
+        dev_id = device_config.device_id
+
+        # Get connected CPC id from extra params
+        connected_cpc_id = device_config.extra_params.get('connected_cpc', 'None')
+
+        # If no CPC is connected
+        if connected_cpc_id == 'None':
+            if self.status_tab.flow_cpc.value_label.text() != "Not connected":
+                self.status_tab.flow_cpc.change_color(1)  # red
+                self.status_tab.flow_cpc.change_value("Not connected")
+            data_holder.error_status = 1
+            data_holder.device_errors[dev_id] = True
+        else:
+            # Find connected CPC device config
+            cpc_config = next((d for d in config.devices if d.device_id == connected_cpc_id), None)
+            if cpc_config:
+                # If connected CPC is Airmodus CPC, sync sample flow
+                if cpc_config.device_type == CPC:
+                    cpc_settings = data_holder.get_device_settings(connected_cpc_id)
+                    cpc_sample_flow = float(cpc_settings.measured_cpc_flow) if cpc_settings else 0.0
+                    if self.set_tab.set_cpc_sample_flow.value_spinbox.value() != cpc_sample_flow:
+                        self.set_tab.set_cpc_sample_flow.value_spinbox.setValue(cpc_sample_flow)
+
+                # Update CPC inlet flow display in Status tab
+                psm_settings = data_holder.get_device_settings(dev_id)
+                if psm_settings:
+                    cpc_flow_str = str(psm_settings.cpc_inlet_flow) + " lpm"
+                    if self.status_tab.flow_cpc.value_label.text() != cpc_flow_str:
+                        self.status_tab.flow_cpc.change_color(0)  # normal
+                        self.status_tab.flow_cpc.change_value(cpc_flow_str)
+
+    def perform_pre_plot_calculations(self, data_holder):
+        """Calculate PSM dilution-corrected CPC values."""
+        if self.is_connected and hasattr(self, 'plot_config'):
+            self.plot_config.calculate_connected_cpc_values(data_holder)
+
 
 class PSMSetTab(QSplitter):
     def __init__(self, device_type, *args, **kwargs):

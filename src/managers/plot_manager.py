@@ -17,18 +17,12 @@ class PlotManager:
     # update plot data lists
     def update_plot_data(self):
         """Update plot data arrays with latest measurements."""
-        # ----- PSM connected CPC calculations -----
-        # Before setting plot data, calculate PSM-CPC dilution corrections
+        # ----- Pre-plot calculations (e.g., PSM dilution corrections) -----
         for device_config in self.config.devices:
             try:
-                # if device is PSM and it is connected, calculate connected CPC values
-                if device_config.device_type in [PSM, PSM2]:
-                    psm_widget = self.data_holder.device_widgets.get(device_config.device_id)
-                    if psm_widget and hasattr(psm_widget, 'is_connected') and psm_widget.is_connected:
-                        if hasattr(psm_widget, 'plot_config'):
-                            # Use PSM plot config's calculation method
-                            psm_widget.plot_config.calculate_connected_cpc_values(self.data_holder)
-
+                device_widget = self.data_holder.device_widgets.get(device_config.device_id)
+                if device_widget and hasattr(device_widget, 'is_connected') and device_widget.is_connected:
+                    device_widget.perform_pre_plot_calculations(self.data_holder)
             except Exception as e:
                 print(traceback.format_exc())
                 logging.exception(e)
@@ -179,13 +173,8 @@ class PlotManager:
                             self.data_holder
                         )
 
-                        # Update PSM contour plot if device is PSM/PSM2
-                        if device_config.device_type in [PSM, PSM2] and hasattr(device_widget, 'contour_tab'):
-                            try:
-                                device_widget.contour_tab.update_contour(device_widget.current_data)
-                            except Exception as e:
-                                logging.error(f"Error updating PSM contour plot: {e}")
-                                traceback.print_exc()
+                        # Update auxiliary displays (e.g., PSM contour plot)
+                        device_widget.update_auxiliary_displays()
 
                         # scale x-axis range if Follow is on
                         if self.config.plot_settings.follow:
@@ -194,46 +183,9 @@ class PlotManager:
                                 self.config.plot_settings.time_window_s
                             )
 
-                # PSM CPC FLOW CHECK
-                # warn if no CPC is connected or update Set tab's CPC sample flow value
-
-                # if device type is PSM and it is connected
-                if device_config.device_type in [PSM, PSM2] and is_connected:
-                    # Get connected CPC id from extra params
-                    connected_cpc_id = device_config.extra_params.get('connected_cpc', 'None')
-
-                    # if no CPC is connected
-                    if connected_cpc_id == 'None':
-                        # update status_tab flow_cpc widget value and color
-                        if self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != "Not connected":
-                            # set status_tab flow_cpc color to red and change text
-                            self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_color(1) # change color to red
-                            self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_value("Not connected") # update value on status_tab as well
-                        # set data_holder.error_status flag to 1
-                        self.data_holder.error_status = 1
-                        # set device error flag
-                        self.data_holder.device_errors[dev_id] = True
-                    # if CPC is connected
-                    else:
-                        # Find connected CPC device config
-                        cpc_config = next((d for d in self.config.devices if d.device_id == connected_cpc_id), None)
-                        if cpc_config:
-                            # if connected CPC is Airmodus CPC, check if connected CPC sample flow has changed
-                            if cpc_config.device_type == CPC:
-                                cpc_settings = self.data_holder.get_device_settings(connected_cpc_id)
-                                cpc_sample_flow = float(cpc_settings.measured_cpc_flow) if cpc_settings else 0.0
-                                # if CPC sample flow is different from value displayed in Set tab, update displayed value
-                                if self.data_holder.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.value() != cpc_sample_flow:
-                                    self.data_holder.device_widgets[dev_id].set_tab.set_cpc_sample_flow.value_spinbox.setValue(cpc_sample_flow)
-
-                            # if CPC inlet flow is different from value displayed in Status tab, update displayed value
-                            psm_settings = self.data_holder.get_device_settings(dev_id)
-                            if psm_settings:
-                                cpc_flow_str = str(psm_settings.cpc_inlet_flow) + " lpm"
-                                if self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.value_label.text() != cpc_flow_str:
-                                    # set status_tab flow_cpc color to normal and change text
-                                    self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_color(0)
-                                    self.data_holder.device_widgets[dev_id].status_tab.flow_cpc.change_value(cpc_flow_str)
+                # Validate connected devices (e.g., PSM-CPC flow check)
+                if is_connected:
+                    device_widget.validate_connected_devices(device_config, self.data_holder, self.config)
 
             except Exception as e:
                 print(traceback.format_exc())

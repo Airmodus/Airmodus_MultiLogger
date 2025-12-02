@@ -100,4 +100,9 @@ class RHTPWidget(SimpleDevice):
         """RHTP supports IDN inquiry."""
         return True
 
+    def get_viewboxes(self) -> list:
+        """Return viewboxes for RHTP's triple-plot structure."""
+        return self.plot_tab.viewboxes
+
+
 __all__ = ['RHTPWidget']
