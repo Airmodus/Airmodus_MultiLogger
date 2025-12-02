@@ -322,6 +322,30 @@ class MainWindow(QMainWindow):
             self.device_tabs.removeWidget(widget)
             self.device_tabs.insertWidget(to_index, widget)
 
+        # Reorder config.devices to match the new tab order
+        self._sync_config_devices_order()
+
+        # Save the configuration
+        self.save_ini()
+
+    def _sync_config_devices_order(self):
+        """Reorder config.devices list to match current tab order."""
+        # Build new device order based on tab positions (skip index 0 = Main plot)
+        new_order = []
+        for i in range(1, self.device_tabs.count()):
+            widget = self.device_tabs.widget(i)
+            if widget and hasattr(widget, 'dev_id'):
+                dev_id = widget.dev_id
+                # Find the matching device config
+                for dc in self.config.devices:
+                    if dc.device_id == dev_id:
+                        new_order.append(dc)
+                        break
+
+        # Replace devices list with new order
+        if len(new_order) == len(self.config.devices):
+            self.config.devices = new_order
+
     def _create_error_indicator_icon(self, color="#F57C00"):
         """Create a small colored dot icon for tab error indicators.
 
@@ -1132,9 +1156,11 @@ class MainWindow(QMainWindow):
             )
 
     def _initialize_device_links(self):
-        """Initialize device links from config and reorder tabs on startup.
+        """Initialize device links from config on startup.
 
-        Called after all devices are loaded to restore tab grouping.
+        Called after all devices are loaded. Does NOT auto-reorder tabs since
+        the saved device order in config already reflects the user's preferred order.
+        Auto-reordering only happens when a NEW link is created.
         """
         # Populate link registry from device configs
         for device_config in self.config.devices:
@@ -1150,8 +1176,8 @@ class MainWindow(QMainWindow):
                 if rhtp_id != 'None' and rhtp_id is not None:
                     self._device_links['cpc_rhtp'][device_config.device_id] = rhtp_id
 
-        # Reorder tabs to group linked devices
-        self._reorder_linked_tabs()
+        # Don't reorder tabs on startup - respect the saved device order
+        # Auto-reordering only happens when creating a new link (in _on_device_link_changed)
 
         # Update visual connectors
         self._update_tab_link_overlay()
