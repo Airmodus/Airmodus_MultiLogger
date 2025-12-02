@@ -1,5 +1,8 @@
 # Airmodus MultiLogger - Software change log
 
+### 0.11.0 - 2025.11.10
+- Refactor merge
+
 ### 0.10.9 - 2025.10.09
 - Removed PSM CPC inlet flow reset (when CPC not connected)
 - Added pulse quality indicator to CPC status tab

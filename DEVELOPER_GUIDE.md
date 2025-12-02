@@ -1,6 +1,6 @@
 # Airmodus MultiLogger - Developer Guide
 
-**Version**: 0.10.9
+**Version**: 0.11.0
 **Last Updated**: November 2025
 
 This guide provides step-by-step instructions for developers to extend the Airmodus MultiLogger application, with a focus on adding new devices.

@@ -1,3 +1,0 @@
-YYYY.MM.DD hh:mm:ss,Averaging time (s),Nominal flow rate (lpm),Flow rate (lpm),Saturator T setpoint (C),Condenser T setpoint (C),Optics T setpoint (C),Autofill,OPC counter threshold voltage (mV),OPC counter threshold 2 voltage (mV),Water removal,Dead time correction,Drain,K-factor,Tau,Command input
-2025.11.24 15:50:09,nan,nan,nan,nan,nan,nan,nan,nan,nan,nan,nan,nan,nan,nan
-2025.11.24 15:50:11,1.0,1.0,1.0,35.0,20.0,36.0,1.0,250.0,nan,0.0,1.0,0.0,1.0,135.0

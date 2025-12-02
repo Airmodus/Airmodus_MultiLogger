@@ -393,7 +393,7 @@ Airmodus_MultiLogger/
 
 ## Version History
 
-**Current Version: 0.10.9**
+**Current Version: 0.11.0**
 
 Recent updates focus on architectural refactoring:
 - BaseDevice abstract class for easier device addition

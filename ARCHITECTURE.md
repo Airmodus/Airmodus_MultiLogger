@@ -1,6 +1,6 @@
 # Airmodus MultiLogger - Architecture Documentation
 
-**Version**: 0.10.9
+**Version**: 0.11.0
 **Last Updated**: November 2025
 
 This document provides a comprehensive technical deep dive into the Airmodus MultiLogger application architecture, design patterns, data flow, and implementation details.
