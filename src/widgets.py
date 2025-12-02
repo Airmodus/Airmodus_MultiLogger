@@ -407,12 +407,17 @@ class _InnerTabBar(QTabBar):
         self.setExpanding(False)  # Don't stretch tabs - we control sizing
         self.setUsesScrollButtons(False)  # Disable native scroll - we handle it
         self.setMovable(True)  # Enable drag-and-drop reordering
-        self.setElideMode(Qt.ElideRight)
+        self.setElideMode(Qt.ElideNone)  # Show full text, don't truncate
 
     def tabSizeHint(self, index):
-        """Return flexible width for tabs (150-200px based on text length)."""
+        """Return width that fits the full tab text with padding for close button."""
         size = QTabBar.tabSizeHint(self, index)
-        width = max(150, min(size.width(), 200))
+        # Calculate text width using font metrics for accuracy
+        text = self.tabText(index)
+        fm = self.fontMetrics()
+        text_width = fm.horizontalAdvance(text)
+        # Add padding: left margin + right margin + close button space
+        width = max(150, text_width + 100)
         return QSize(width, size.height())
 
 
@@ -637,10 +642,10 @@ class BrowserStyleTabBar(QWidget):
 
     def _update_tab_bar_size(self):
         """Update the inner tab bar's size to fit all tabs."""
-        # Calculate total width needed
+        # Calculate total width needed using size hints (not tabRect which may be stale)
         total_width = 0
         for i in range(self._tab_bar.count()):
-            total_width += self._tab_bar.tabRect(i).width()
+            total_width += self._tab_bar.tabSizeHint(i).width()
 
         # Add some padding
         total_width += 10
@@ -648,6 +653,7 @@ class BrowserStyleTabBar(QWidget):
         # Set the tab bar width
         self._tab_bar.setFixedWidth(max(total_width, self._scroll_area.width()))
         self._tab_bar.setFixedHeight(53)
+        self._update_scroll_buttons()
 
     def _scroll_left(self):
         """Scroll viewport to the left."""
