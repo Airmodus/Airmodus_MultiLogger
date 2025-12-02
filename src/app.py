@@ -116,12 +116,10 @@ class MainWindow(QMainWindow):
         self._update_psm_cpc_connections()
 
         # Set initial window size
-        self.resize(1500, 650)
+        self.resize(1500, 1040)
 
-        # Set window size policy to prevent automatic expansion when tabs are added
-        # Allow height to be flexible but constrain width
+        # Set minimum width to prevent window from becoming too narrow
         self.setMinimumWidth(1000)
-        self.setMaximumWidth(1800)
 
     def _setup_gui(self):
         """Build main layout, splitters, tabs, etc."""
@@ -275,10 +273,12 @@ class MainWindow(QMainWindow):
         self.device_tabs.setCurrentIndex(index)
         self._update_close_button_visibility()
 
-        # Reset device's internal tab to show Plot tab (index 0) when switching devices
+        # Restore device's last viewed internal tab (default to Plot tab index 0)
         device_widget = self.device_tabs.widget(index)
-        if device_widget and hasattr(device_widget, 'setCurrentIndex'):
-            device_widget.setCurrentIndex(0)
+        if device_widget and hasattr(device_widget, 'device_config'):
+            saved = device_widget.device_config.extra_params.get('last_tab_index', 0)
+            if 0 <= saved < device_widget.count():
+                device_widget.setCurrentIndex(saved)
 
     def _create_error_indicator_icon(self, color="#F57C00"):
         """Create a small colored dot icon for tab error indicators.
@@ -866,6 +866,14 @@ class MainWindow(QMainWindow):
                     widget.set_tab.set_co_flow.value_spinbox.setValue(round(co_flow_val, 3))
                 except (ValueError, AttributeError):
                     pass
+
+        # Restore last viewed tab and connect signal to save tab changes
+        saved_tab = device_config.extra_params.get('last_tab_index', 0)
+        if 0 <= saved_tab < widget.count():
+            widget.setCurrentIndex(saved_tab)
+        widget.currentChanged.connect(
+            lambda idx, dc=device_config: dc.extra_params.__setitem__('last_tab_index', idx)
+        )
 
         if device_config.device_type == CPC:
             # Set app config for database tab RHTP dropdown
