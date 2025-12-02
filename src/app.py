@@ -74,6 +74,13 @@ class MainWindow(QMainWindow):
         # Track active confirmation popup to prevent stacking
         self._active_popup = None
 
+        # Device link registry for tab grouping
+        # Tracks which devices are linked together for visual connectors
+        self._device_links = {
+            'psm_cpc': {},   # {psm_device_id: cpc_device_id}
+            'cpc_rhtp': {}   # {cpc_device_id: rhtp_device_id}
+        }
+
         # Extracted inits
         self.data_holder = DataHolder()
         self.data_holder.error_icon = QIcon(resource_path + "/icons/error.png")
@@ -114,6 +121,9 @@ class MainWindow(QMainWindow):
 
         # Update PSM connected CPC references after all devices are loaded
         self._update_psm_cpc_connections()
+
+        # Initialize device links and reorder tabs for linked devices
+        self._initialize_device_links()
 
         # Set initial window size
         self.resize(1500, 1040)
@@ -193,6 +203,7 @@ class MainWindow(QMainWindow):
             }
         """)
         self.device_tab_bar.currentChanged.connect(self._on_tab_changed)
+        self.device_tab_bar.tabMoved.connect(self._on_tab_moved)
 
         tab_bar_container_layout.addWidget(self.device_tab_bar, stretch=1)
 
@@ -279,6 +290,37 @@ class MainWindow(QMainWindow):
             saved = device_widget.device_config.extra_params.get('last_tab_index', 0)
             if 0 <= saved < device_widget.count():
                 device_widget.setCurrentIndex(saved)
+
+    def _on_tab_moved(self, from_index, to_index):
+        """Handle user drag-drop tab reordering - sync QStackedWidget and protect Main plot.
+
+        Args:
+            from_index: Original tab position before drag
+            to_index: New tab position after drag
+        """
+        inner_tab_bar = self.device_tab_bar.innerTabBar
+
+        # Prevent Main plot (index 0) from being moved
+        if from_index == 0:
+            # Main plot was dragged - revert it back to index 0
+            inner_tab_bar.blockSignals(True)
+            inner_tab_bar.moveTab(to_index, 0)
+            inner_tab_bar.blockSignals(False)
+            return
+
+        # Prevent tabs from being placed before Main plot
+        if to_index == 0:
+            # A tab was dragged to position 0 - move it to position 1 instead
+            inner_tab_bar.blockSignals(True)
+            inner_tab_bar.moveTab(0, 1)
+            inner_tab_bar.blockSignals(False)
+            to_index = 1
+
+        # Sync QStackedWidget to match the new tab bar order
+        widget = self.device_tabs.widget(from_index)
+        if widget:
+            self.device_tabs.removeWidget(widget)
+            self.device_tabs.insertWidget(to_index, widget)
 
     def _create_error_indicator_icon(self, color="#F57C00"):
         """Create a small colored dot icon for tab error indicators.
@@ -492,6 +534,19 @@ class MainWindow(QMainWindow):
 
         # Remove from config
         self.config.devices = [d for d in self.config.devices if d.device_id != dev_id]
+
+        # Clean up device links registry
+        for link_type in self._device_links:
+            # Remove as source
+            if dev_id in self._device_links[link_type]:
+                del self._device_links[link_type][dev_id]
+            # Remove as target (set other devices' links to 'None')
+            for source_id, target_id in list(self._device_links[link_type].items()):
+                if target_id == dev_id:
+                    self._device_links[link_type][source_id] = 'None'
+
+        # Update visual connectors
+        self._update_tab_link_overlay()
 
         # Update CPC/RHTP dicts
         self._update_cpc_dict()
@@ -833,6 +888,11 @@ class MainWindow(QMainWindow):
                 # Refresh the status display
                 self.status_bar.update_device_status(device_config.device_id)
 
+            # If this is a CPC device, update PSM dropdowns to reflect new nickname
+            if device_config.device_type in [CPC, TSI_CPC]:
+                self._update_cpc_dict()
+                self._refresh_psm_cpc_dropdowns()
+
         widget.on_config_changed = on_device_config_changed
 
         # Set up device-specific connections using device registry
@@ -880,6 +940,10 @@ class MainWindow(QMainWindow):
 
         # Set up main window references for devices that need them
         widget.setup_main_window_references(self)
+
+        # Connect link_changed signal for tab grouping (PSM, CPC devices)
+        if hasattr(widget, 'link_changed'):
+            widget.link_changed.connect(self._on_device_link_changed)
 
     def _restore_database_connections(self, conn_string):
         """Restore database connections for CPC devices."""
@@ -970,6 +1034,127 @@ class MainWindow(QMainWindow):
                 if not name.strip():
                     name = device_config.device_type_name
                 self.rhtp_dict[name] = device_config.device_id
+
+    def _move_device_widget(self, from_index, to_index):
+        """Move a device widget in both tab bar and stacked widget.
+
+        Args:
+            from_index: Current position (0 = Main plot, can't be moved)
+            to_index: Target position
+        """
+        if from_index == to_index or from_index < 1:  # Can't move Main plot
+            return
+        if to_index < 1:
+            to_index = 1  # Never move before Main plot
+
+        # Get widget before moving
+        widget = self.device_tabs.widget(from_index)
+        if not widget:
+            return
+
+        # Move in stacked widget
+        self.device_tabs.removeWidget(widget)
+        self.device_tabs.insertWidget(to_index, widget)
+
+        # Move tab bar tab
+        self.device_tab_bar.moveTab(from_index, to_index)
+
+    def _get_device_tab_index(self, device_id):
+        """Get the tab index for a device by its ID."""
+        widget = self.data_holder.device_widgets.get(device_id)
+        if widget:
+            return self.device_tabs.indexOf(widget)
+        return -1
+
+    def _reorder_linked_tabs(self):
+        """Reorder tabs to group linked devices together.
+
+        Called after device links change or on app startup.
+        Order: PSM followed by its connected CPC, CPC followed by its linked RHTP.
+        """
+        # Process PSM -> CPC links first
+        for psm_id, cpc_id in list(self._device_links['psm_cpc'].items()):
+            if cpc_id == 'None' or cpc_id is None:
+                continue
+
+            psm_idx = self._get_device_tab_index(psm_id)
+            cpc_idx = self._get_device_tab_index(cpc_id)
+
+            if psm_idx > 0 and cpc_idx > 0 and cpc_idx != psm_idx + 1:
+                # Move CPC to right of PSM (always target psm_idx + 1)
+                target_idx = psm_idx + 1
+                self._move_device_widget(cpc_idx, target_idx)
+
+        # Process CPC -> RHTP links
+        for cpc_id, rhtp_id in list(self._device_links['cpc_rhtp'].items()):
+            if rhtp_id == 'None' or rhtp_id is None:
+                continue
+
+            cpc_idx = self._get_device_tab_index(cpc_id)
+            rhtp_idx = self._get_device_tab_index(rhtp_id)
+
+            if cpc_idx > 0 and rhtp_idx > 0 and rhtp_idx != cpc_idx + 1:
+                # Move RHTP to right of CPC (always target cpc_idx + 1)
+                target_idx = cpc_idx + 1
+                self._move_device_widget(rhtp_idx, target_idx)
+
+    def _on_device_link_changed(self, device_id, link_type, old_target, new_target):
+        """Handle device link changes (PSM->CPC or CPC->RHTP).
+
+        Args:
+            device_id: The source device ID
+            link_type: 'psm_cpc' or 'cpc_rhtp'
+            old_target: Previous linked device ID (or 'None')
+            new_target: New linked device ID (or 'None')
+        """
+        # Update link registry
+        if new_target == 'None' or new_target is None:
+            # Remove link if exists
+            if device_id in self._device_links[link_type]:
+                del self._device_links[link_type][device_id]
+        else:
+            self._device_links[link_type][device_id] = new_target
+
+        # Reorder tabs if connecting (not disconnecting)
+        if new_target != 'None' and new_target is not None:
+            self._reorder_linked_tabs()
+
+        # Update visual connectors
+        self._update_tab_link_overlay()
+
+    def _update_tab_link_overlay(self):
+        """Update the visual connector overlay with current link data."""
+        if hasattr(self.device_tab_bar, 'update_links'):
+            self.device_tab_bar.update_links(
+                self._device_links,
+                self.data_holder.device_widgets,
+                self.device_tabs
+            )
+
+    def _initialize_device_links(self):
+        """Initialize device links from config and reorder tabs on startup.
+
+        Called after all devices are loaded to restore tab grouping.
+        """
+        # Populate link registry from device configs
+        for device_config in self.config.devices:
+            # PSM -> CPC links
+            if device_config.device_type in [PSM, PSM2]:
+                cpc_id = device_config.extra_params.get('connected_cpc', 'None')
+                if cpc_id != 'None' and cpc_id is not None:
+                    self._device_links['psm_cpc'][device_config.device_id] = cpc_id
+
+            # CPC -> RHTP links
+            if device_config.device_type == CPC:
+                rhtp_id = device_config.extra_params.get('linked_rhtp', 'None')
+                if rhtp_id != 'None' and rhtp_id is not None:
+                    self._device_links['cpc_rhtp'][device_config.device_id] = rhtp_id
+
+        # Reorder tabs to group linked devices
+        self._reorder_linked_tabs()
+
+        # Update visual connectors
+        self._update_tab_link_overlay()
 
     def _refresh_psm_cpc_dropdowns(self):
         """Refresh Connected CPC dropdowns in all PSM widgets."""

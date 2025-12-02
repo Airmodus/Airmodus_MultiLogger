@@ -128,13 +128,13 @@ class PSMData:
         # Conditionally include vacuum_flow only if it's not NaN (i.e., for PSM2)
         if not math.isnan(self.vacuum_flow):
             base.append(self.vacuum_flow)  # Inserted at legacy-equivalent 15
-        # determine PSM status
-        if int(self.status_hex, 16) == 0:
+        # determine PSM status (handle empty string)
+        if not self.status_hex or int(self.status_hex, 16) == 0:
             psm_status = 1
         else:
             psm_status = 0
-        # determine PSM note
-        if int(self.note_hex, 16) == 0:
+        # determine PSM note (handle empty string)
+        if not self.note_hex or int(self.note_hex, 16) == 0:
             psm_note = 1
         else:
             psm_note = 0

@@ -7,6 +7,8 @@ from PyQt5.QtWidgets import (QLabel, QWidget, QVBoxLayout, QLineEdit, QPushButto
 from datetime import datetime as dt
 import sys
 
+from tab_link_overlay import TabLinkOverlay
+
 
 # used in PSMMeasureTab
 class StepsWidget(QWidget):
@@ -404,7 +406,7 @@ class _InnerTabBar(QTabBar):
         super().__init__(parent)
         self.setExpanding(False)  # Don't stretch tabs - we control sizing
         self.setUsesScrollButtons(False)  # Disable native scroll - we handle it
-        self.setMovable(False)
+        self.setMovable(True)  # Enable drag-and-drop reordering
         self.setElideMode(Qt.ElideRight)
 
     def tabSizeHint(self, index):
@@ -423,8 +425,9 @@ class BrowserStyleTabBar(QWidget):
     Exposes QTabBar methods via delegation for compatibility.
     """
 
-    # Forward the currentChanged signal
+    # Forward signals from inner tab bar
     currentChanged = pyqtSignal(int)
+    tabMoved = pyqtSignal(int, int)  # (from_index, to_index) - emitted when user drags a tab
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -454,6 +457,7 @@ class BrowserStyleTabBar(QWidget):
         # The actual tab bar inside the scroll area
         self._tab_bar = _InnerTabBar()
         self._tab_bar.currentChanged.connect(self.currentChanged.emit)
+        self._tab_bar.tabMoved.connect(self.tabMoved.emit)  # Forward tab drag events
         self._scroll_area.setWidget(self._tab_bar)
 
         # Right scroll button
@@ -495,8 +499,28 @@ class BrowserStyleTabBar(QWidget):
         # Scroll step size in pixels
         self._scroll_step = 150
 
-        # Set fixed height to match tab bar
+        # Height for the link overlay bracket area
+        self._overlay_height = 12
+
+        # Create link overlay for drawing connectors between linked tabs
+        # Position it at the TOP of the tabs
+        self._link_overlay = TabLinkOverlay(self, self)
+        self._link_overlay.setGeometry(0, 0, self.width(), self._overlay_height)
+        self._link_overlay.raise_()  # Bring to front
+        self._link_overlay.show()
+
+        # Set fixed height
         self.setFixedHeight(53)
+
+    def update_links(self, links, device_widgets, stacked_widget):
+        """Update the link overlay with current device link data.
+
+        Args:
+            links: Dict like {'psm_cpc': {psm_id: cpc_id}, 'cpc_rhtp': {cpc_id: rhtp_id}}
+            device_widgets: Dict of device_id -> widget
+            stacked_widget: QStackedWidget containing device widgets
+        """
+        self._link_overlay.set_links(links, device_widgets, stacked_widget)
 
     # === Delegate QTabBar methods to inner tab bar ===
 
@@ -553,6 +577,56 @@ class BrowserStyleTabBar(QWidget):
         Use this instead of mapToGlobal when working with tabRect coordinates.
         """
         return self._tab_bar.mapToGlobal(point)
+
+    def insertTab(self, index, *args):
+        """Insert a tab at the specified index."""
+        result = self._tab_bar.insertTab(index, *args)
+        self._update_tab_bar_size()
+        self._update_scroll_buttons()
+        return result
+
+    def moveTab(self, from_index, to_index):
+        """Move a tab from one position to another.
+
+        Since QTabBar doesn't support moveTab directly, this removes and re-inserts.
+
+        Args:
+            from_index: Current tab index
+            to_index: Target tab index
+        """
+        if from_index == to_index:
+            return
+        if from_index < 0 or from_index >= self.count():
+            return
+        if to_index < 0 or to_index > self.count():
+            return
+
+        # Store tab data before removal
+        text = self._tab_bar.tabText(from_index)
+        icon = self._tab_bar.tabIcon(from_index)
+        data = self._tab_bar.tabData(from_index)
+        close_button = self._tab_bar.tabButton(from_index, QTabBar.RightSide)
+
+        # Detach close button before tab removal (Qt would delete it otherwise)
+        if close_button:
+            self._tab_bar.setTabButton(from_index, QTabBar.RightSide, None)
+
+        # Remove tab
+        self._tab_bar.removeTab(from_index)
+
+        # Re-insert tab at new position
+        if icon and not icon.isNull():
+            self._tab_bar.insertTab(to_index, icon, text)
+        else:
+            self._tab_bar.insertTab(to_index, text)
+
+        if data:
+            self._tab_bar.setTabData(to_index, data)
+        if close_button:
+            self._tab_bar.setTabButton(to_index, QTabBar.RightSide, close_button)
+
+        self._update_tab_bar_size()
+        self._update_scroll_buttons()
 
     @property
     def innerTabBar(self):
@@ -614,6 +688,11 @@ class BrowserStyleTabBar(QWidget):
         super().resizeEvent(event)
         self._update_tab_bar_size()
         self._update_scroll_buttons()
+        # Update link overlay geometry
+        if hasattr(self, '_link_overlay'):
+            self._link_overlay.setGeometry(0, 0, self.width(), self._overlay_height)
+            self._link_overlay.raise_()
+            self._link_overlay.update()
 
     def wheelEvent(self, event):
         """Enable mouse wheel/touchpad to scroll through tabs."""

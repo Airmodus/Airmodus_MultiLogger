@@ -23,6 +23,9 @@ from devices.data_writers import CPCDataWriter
 
 # CPC widget containing CPC related GUI elements as tabs
 class CPCWidget(ComplexDevice):
+    # Signal emitted when device link changes: (device_id, link_type, old_target, new_target)
+    link_changed = pyqtSignal(int, str, object, object)
+
     def __init__(self, device_config, *args, **kwargs):
         super().__init__(device_config, *args, **kwargs)
 
@@ -1569,8 +1572,22 @@ class CPCDatabaseTab(QWidget):
         # Get the selected RHTP device ID from the dropdown
         rhtp_id = self.linked_rhtp_dropdown.currentData()
 
+        # Get old value before updating
+        old_rhtp_id = self.device_config.extra_params.get('linked_rhtp', 'None')
+
         # Update device config
         self.device_config.extra_params['linked_rhtp'] = rhtp_id
+
+        # Emit link changed signal via parent CPCWidget for tab grouping
+        parent_widget = self.parent()
+        if parent_widget and hasattr(parent_widget, 'link_changed'):
+            parent_widget.link_changed.emit(
+                self.device_config.device_id,
+                'cpc_rhtp',
+                old_rhtp_id,
+                rhtp_id
+            )
+
         # Trigger config save (CPC widget should have on_config_changed method)
         if hasattr(self, 'on_config_changed'):
             self.on_config_changed()

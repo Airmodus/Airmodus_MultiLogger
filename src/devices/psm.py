@@ -1,5 +1,5 @@
 from PyQt5.QtGui import QColor
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QSplitter, QTabWidget, QGridLayout, QWidget,
     QSizePolicy)
 from numpy import nan
@@ -25,6 +25,9 @@ from devices.data_writers import PSMDataWriter
 
 # PSM widget
 class PSMWidget(ComplexDevice):
+    # Signal emitted when device link changes: (device_id, link_type, old_target, new_target)
+    link_changed = pyqtSignal(int, str, object, object)
+
     def __init__(self, device_config, *args, **kwargs):
         super().__init__(device_config, *args, **kwargs)
         # device_type is already set by BaseDevice from device_config
@@ -124,7 +127,16 @@ class PSMWidget(ComplexDevice):
             selected_cpc_id = self.connected_cpc_dropdown.currentData()
             if selected_cpc_id is None:
                 selected_cpc_id = 'None'
+            # Get old value before updating
+            old_cpc_id = self.device_config.extra_params.get('connected_cpc', 'None')
             self.device_config.extra_params['connected_cpc'] = selected_cpc_id
+            # Emit link changed signal for tab grouping
+            self.link_changed.emit(
+                self.device_config.device_id,
+                'psm_cpc',
+                old_cpc_id,
+                selected_cpc_id
+            )
             # Trigger config save
             if hasattr(self, 'on_config_changed'):
                 self.on_config_changed()
