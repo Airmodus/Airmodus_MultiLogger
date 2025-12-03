@@ -25,7 +25,8 @@ class SerialDeviceConnection():
             self.connection.close()
         except: # if fails (i.e. port has not been open) continue normally
             pass
-        self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout) #, rtscts=True)
+        # dsrdtr=False and dtr=False prevent Arduino auto-reset when opening connection
+        self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout, dsrdtr=False, dtr=False)
         print("Connected to %s" % self.serial_port)
 
     def connect_async(self, callback=None):
