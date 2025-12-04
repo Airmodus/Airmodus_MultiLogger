@@ -420,6 +420,8 @@ class PSMWidget(ComplexDevice):
                 current_fw = self.device_config.extra_params.get('firmware_version', '')
                 if current_fw != firmware_version:
                     self.device_config.extra_params['firmware_version'] = firmware_version
+                    # Update UI based on PSM type (2.0 vs Retrofit)
+                    self._update_psm_type_ui()
 
             # Show messages in command widget if requested
             if parsed.get('show_in_command_widget', False):
@@ -771,6 +773,25 @@ class PSMWidget(ComplexDevice):
         """PSM supports 10 Hz mode."""
         return True
 
+    def _update_psm_type_ui(self):
+        """Update UI elements based on PSM type (2.0 vs Retrofit).
+
+        Called when firmware version is received and PSM type can be determined.
+        Hides CO flow widget for PSM 2.0, shows for Retrofit.
+        """
+        if hasattr(self.set_tab, 'set_co_flow'):
+            if self.is_psm2:
+                self.set_tab.set_co_flow.hide()
+            else:
+                self.set_tab.set_co_flow.show()
+
+        # Update status tab vacuum flow visibility
+        if hasattr(self.status_tab, 'flow_vacuum'):
+            if self.is_psm2:
+                self.status_tab.flow_vacuum.show()
+            else:
+                self.status_tab.flow_vacuum.hide()
+
     def on_connection_established(self):
         """
         Reset PSM state on connection.
@@ -926,9 +947,11 @@ class PSMSetTab(QSplitter):
         middle_splitter.addWidget(self.set_cpc_inlet_flow)
         self.set_cpc_sample_flow = SetWidget("CPC sample flow rate\n(used in concentration calculation)", " lpm", decimals=3)
         middle_splitter.addWidget(self.set_cpc_sample_flow)
-        if not is_psm2:  # Retrofit only - add CO flow rate set widget
-            self.set_co_flow = SetWidget("CO flow rate", " lpm", decimals=3)
-            middle_splitter.addWidget(self.set_co_flow)
+        # CO flow rate widget - always created, visibility updated when firmware received
+        self.set_co_flow = SetWidget("CO flow rate", " lpm", decimals=3)
+        middle_splitter.addWidget(self.set_co_flow)
+        if is_psm2:
+            self.set_co_flow.hide()  # Hide initially for PSM 2.0
         # horizontal splitter containing lower half of tab - mode widgets
         lower_splitter = QSplitter(Qt.Horizontal)
         self.autofill = ToggleButton("Autofill")
