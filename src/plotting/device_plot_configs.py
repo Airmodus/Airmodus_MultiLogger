@@ -504,16 +504,14 @@ class PSMPlotConfig(BasePlotConfig):
     """Plot configuration for PSM."""
 
     def get_plot_keys(self):
-        """PSM has saturator flow and concentration."""
-        return ['', ':conc']
+        """PSM has saturator flow. Concentration is plotted via connected CPC."""
+        return ['']
 
     def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
-        """Store PSM saturator flow and concentration."""
+        """Store PSM saturator flow. Concentration is handled by connected CPC."""
         psm_data = self.device.current_data
         # Saturator flow (default key '')
         plot_data[str(dev_id)][time_counter] = psm_data.saturator_flow
-        # Concentration (key ':conc') - calculated in calculate_connected_cpc_values
-        plot_data[str(dev_id)+':conc'][time_counter] = psm_data.concentration_psm
 
     def get_viewbox_type(self):
         """PSM uses PSM viewbox (both 2.0 and Retrofit)."""
@@ -536,29 +534,25 @@ class PSMPlotConfig(BasePlotConfig):
         """
         Get axis configuration for PSM main plot.
 
-        Label changes based on selector: Flow or Concentration.
+        Only saturator flow is plotted. Concentration is handled via connected CPC.
         """
         # None means "don't plot" - hide axis
         if plot_to_main_value is None:
             return None
 
-        # Map selector value to axis configuration
-        axis_configs = {
-            '': {'label': 'PSM saturator flow rate', 'units': 'lpm', 'color': 'w'},
-            ':conc': {'label': 'PSM concentration', 'units': '#/cc', 'color': 'w'},
-        }
-
-        config = axis_configs.get(plot_to_main_value)
-        if config:
+        # Only saturator flow is available
+        if plot_to_main_value == '':
             return {
                 'viewbox_type': PSM,
                 'show': True,
-                **config
+                'label': 'PSM saturator flow rate',
+                'units': 'lpm',
+                'color': 'w'
             }
         return None
 
     def get_legend_value(self, dev_id, time_counter, plot_data, selector_value=None):
-        """Get value for legend based on selector (Flow or Concentration)."""
+        """Get value for legend (saturator flow)."""
         key = self.get_main_plot_key(selector_value)
         if key is not None:
             value = plot_data[str(dev_id)+key][time_counter]

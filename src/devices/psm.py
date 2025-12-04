@@ -77,6 +77,11 @@ class PSMWidget(ComplexDevice):
         # Add Connected CPC dropdown to Device settings tab
         self._add_connected_cpc_dropdown()
 
+        # Ensure CO flow visibility matches PSM type
+        # This handles case where PSMSetTab was created with incorrect is_psm2
+        # (e.g., firmware_version was empty during widget creation)
+        self._update_psm_type_ui()
+
         # Add Device tab at the end
         self._add_device_tab_at_end()
 
@@ -120,15 +125,16 @@ class PSMWidget(ComplexDevice):
             return "PSM (Retrofit)"
 
     def get_plot_keys(self):
-        """PSM has saturator flow and concentration plots."""
-        return ['', ':conc']
+        """PSM has saturator flow plot. Concentration is plotted via connected CPC."""
+        return ['']
 
     def get_plot_value_labels(self):
-        """Return labels for PSM plot values in main plot dropdown."""
-        return {
-            '': 'Saturator Flow (lpm)',
-            ':conc': 'Concentration (#/cc)'
-        }
+        """Return labels for PSM plot values in main plot dropdown.
+
+        Returns empty dict since PSM only has one plot value (Saturator Flow).
+        No dropdown needed when there's only one option.
+        """
+        return {}
 
     def showEvent(self, event):
         """Override showEvent to lazily update CPC dropdown when widget becomes visible."""
@@ -417,11 +423,10 @@ class PSMWidget(ComplexDevice):
             elif parsed['type'] == 'firmware':
                 # Update firmware version
                 firmware_version = parsed['data']
-                current_fw = self.device_config.extra_params.get('firmware_version', '')
-                if current_fw != firmware_version:
-                    self.device_config.extra_params['firmware_version'] = firmware_version
-                    # Update UI based on PSM type (2.0 vs Retrofit)
-                    self._update_psm_type_ui()
+                self.device_config.extra_params['firmware_version'] = firmware_version
+                # Always update UI based on PSM type (2.0 vs Retrofit)
+                # This ensures CO flow visibility is correct even if firmware was same
+                self._update_psm_type_ui()
 
             # Show messages in command widget if requested
             if parsed.get('show_in_command_widget', False):
@@ -864,7 +869,11 @@ class PSMWidget(ComplexDevice):
         if '10_hz' in device_config.extra_params:
             self.measure_tab.ten_hz.change_color(int(device_config.extra_params['10_hz']))
 
-        # Restore CO flow (Retrofit only)
+        # Update PSM type UI (CO flow visibility, vacuum flow visibility)
+        # This ensures correct UI state based on firmware version from config
+        self._update_psm_type_ui()
+
+        # Restore CO flow value (Retrofit only)
         if not self.is_psm2 and 'co_flow' in device_config.extra_params:
             try:
                 co_flow_val = float(device_config.extra_params['co_flow'])

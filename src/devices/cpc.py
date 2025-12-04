@@ -73,8 +73,8 @@ class CPCWidget(ComplexDevice):
     def get_plot_value_labels(self):
         """Return labels for CPC plot values."""
         return {
-            '': 'Concentration (#/cc)',
-            ':raw': 'Raw Concentration (#/cc)'
+            '': 'Dilution Corrected Concentration (#/cc)',
+            ':raw': 'Raw CPC Concentration (#/cc)'
         }
 
     def get_rolling_buffer_keys(self):
