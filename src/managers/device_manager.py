@@ -241,7 +241,8 @@ class DeviceManager(QObject):
                 'device_type': port_info.get('device_type', 'Unknown'),
                 'serial_number': port_info.get('serial_number', ''),
                 'manufacturer': port_info.get('manufacturer', ''),
-                'vid_pid': port_info.get('vid_pid', '')
+                'vid_pid': port_info.get('vid_pid', ''),
+                'firmware': port_info.get('firmware', '')
             }
         }
 
@@ -296,7 +297,8 @@ class DeviceManager(QObject):
                 'device_type': port_data.get('device_type', 'Unknown'),
                 'serial_number': port_data.get('serial_number', ''),
                 'manufacturer': port_data.get('manufacturer', ''),
-                'vid_pid': port_data.get('vid_pid', '')
+                'vid_pid': port_data.get('vid_pid', ''),
+                'firmware': port_data.get('firmware', '')
             }
 
         # Check which ports are actually connected to devices in the application

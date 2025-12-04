@@ -495,6 +495,12 @@ class PortSelectionDialog(QDialog):
             return self.port_info[self.selected_port].get('serial_number', '')
         return ''
 
+    def get_selected_firmware(self):
+        """Return firmware version of the selected port (if detected)."""
+        if self.selected_port and self.selected_port in self.port_info:
+            return self.port_info[self.selected_port].get('firmware', '')
+        return ''
+
     def showEvent(self, event):
         """Enable fast port scanning when dialog is shown."""
         super().showEvent(event)

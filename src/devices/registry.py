@@ -7,7 +7,7 @@ To add a new device, simply add one entry to this registry.
 New devices can use the @register_device decorator for automatic registration.
 """
 
-from config import (CPC, PSM, PSM2, ELECTROMETER, CO2_SENSOR, RHTP, AFM,
+from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM,
                    EDILUTER, TSI_CPC, EXAMPLE_DEVICE)
 
 
@@ -264,11 +264,7 @@ DEVICE_REGISTRY = {
         has_special_setup=False
     ),
 
-    PSM2: DeviceConfig(
-        widget_class=PSMWidget,
-        setup_connections_func=setup_psm_connections,
-        has_special_setup=False
-    ),
+    # PSM2 removed - configs migrated to PSM, version determined by firmware
 
     ELECTROMETER: DeviceConfig(
         widget_class=ElectrometerWidget,

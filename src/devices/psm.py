@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QSplitter, QTabWidget, QGridLayout, QWidget,
 from numpy import nan
 
 
-from config import PSM, PSM2, PSM_ERRORS
+from config import PSM, PSM_ERRORS
 from widgets import (
     CommandWidget,
     SetWidget,
@@ -30,18 +30,21 @@ class PSMWidget(ComplexDevice):
 
     def __init__(self, device_config, *args, **kwargs):
         super().__init__(device_config, *args, **kwargs)
-        # device_type is already set by BaseDevice from device_config
-        device_type = device_config.device_type
         self.connected_cpc_device = None  # Direct reference to connected CPC widget
         self._needs_cpc_dropdown_update = False  # Flag for lazy dropdown updates
+
+        # Update device type label to show version (2.0 or Retrofit)
+        if hasattr(self, 'device_type_label'):
+            self.device_type_label.setText(self.display_device_type)
+
         # create plot widget for PSM (first tab)
         self.plot_tab = SinglePlot(device_type=PSM)
         self.addTab(self.plot_tab, "Plot")
-        # create set tab for PSM
-        self.set_tab = PSMSetTab(device_type)
+        # create set tab for PSM (pass is_psm2 to determine UI)
+        self.set_tab = PSMSetTab(self.is_psm2)
         self.addTab(self.set_tab, "Set")
         # create status tab for PSM
-        self.status_tab = PSMStatusTab(device_type)
+        self.status_tab = PSMStatusTab(self.is_psm2)
         self.addTab(self.status_tab, "Status")
         # create mode tab for PSM
         self.measure_tab = PSMMeasureTab()
@@ -60,7 +63,7 @@ class PSMWidget(ComplexDevice):
             self.status_tab.pressure_critical_orifice, "mfc_temp"
         ]
         # if PSM 2.0, add vacuum flow widget to list
-        if device_type == PSM2:
+        if self.is_psm2:
             self.psm_status_widgets.append(self.status_tab.flow_vacuum)
 
         # PSM-specific flags
@@ -77,9 +80,55 @@ class PSMWidget(ComplexDevice):
         # Add Device tab at the end
         self._add_device_tab_at_end()
 
+    @property
+    def is_psm2(self) -> bool:
+        """Determine if this is PSM 2.0 based on firmware version.
+
+        Returns True if firmware >= 0.6.x (PSM 2.0)
+        Returns False if firmware < 0.6.x (Retrofit) or unknown
+
+        Retrofit firmware is always 0.x.x where x < 6
+        """
+        fw = self.device_config.extra_params.get('firmware_version', '')
+        if not fw:
+            return False  # Default to Retrofit behavior if unknown
+        try:
+            parts = fw.split('.')
+            major = int(parts[0])
+            minor = int(parts[1])
+            # Retrofit is always 0.x.x where x < 6
+            # PSM 2.0 is 0.6.x and above, or any 1.x.x+
+            if major == 0:
+                return minor >= 6
+            else:
+                return True  # Assume 1.x.x+ is PSM 2.0 or newer
+        except (IndexError, ValueError):
+            return False
+
+    @property
+    def display_device_type(self) -> str:
+        """Get display name for device type including version.
+
+        Returns "PSM (2.0)", "PSM (Retrofit)", or "PSM" if version unknown.
+        """
+        fw = self.device_config.extra_params.get('firmware_version', '')
+        if not fw:
+            return "PSM"  # Version unknown
+        if self.is_psm2:
+            return "PSM (2.0)"
+        else:
+            return "PSM (Retrofit)"
+
     def get_plot_keys(self):
-        """PSM has a single concentration plot."""
-        return ['']
+        """PSM has saturator flow and concentration plots."""
+        return ['', ':conc']
+
+    def get_plot_value_labels(self):
+        """Return labels for PSM plot values in main plot dropdown."""
+        return {
+            '': 'Saturator Flow (lpm)',
+            ':conc': 'Concentration (#/cc)'
+        }
 
     def showEvent(self, event):
         """Override showEvent to lazily update CPC dropdown when widget becomes visible."""
@@ -265,7 +314,7 @@ class PSMWidget(ComplexDevice):
         self.status_tab.pressure_inlet.change_value(str(current_list[9]) + " kPa")
         self.status_tab.pressure_critical_orifice.change_value(str(current_list[12]) + " kPa")
         # update vacuum flow if PSM 2.0
-        if self.device_type == PSM2:
+        if self.is_psm2:
             self.status_tab.flow_vacuum.change_value(str(current_list[13]) + " lpm")
         # liquid level values are updated in PSMWidget's update_notes()
 
@@ -381,10 +430,9 @@ class PSMWidget(ComplexDevice):
         # Compile settings if all required data is available
         if self.needs_settings_fetch and settings_fetched and self.settings.dilution_parameters:
             try:
-                # Get CO flow rate (PSM Retrofit only)
-                from config import PSM
+                # Get CO flow rate (Retrofit only)
                 # Update settings with co_flow (dilution_parameters already set above)
-                if self.dev_type == PSM:
+                if not self.is_psm2:
                     self.settings.co_flow = round(self.set_tab.set_co_flow.value_spinbox.value(), 3)
                 else:
                     self.settings.co_flow = nan
@@ -496,18 +544,17 @@ class PSMWidget(ComplexDevice):
                 try:
                     firmware_version_str = self.device_config.extra_params.get('firmware_version', '')
                     if firmware_version_str != "":
-                        firmware_version = firmware_version_str.split(".")
-                        # Retrofit: version >= 0.5.5
-                        if self.device_type == PSM:
-                            if int(firmware_version[1]) > 5:
+                        parts = firmware_version_str.split(".")
+                        major = int(parts[0])
+                        minor = int(parts[1])
+                        patch = int(parts[2])
+                        # PSM 2.0 (firmware >= 0.6.x): scan_status available in >= 0.6.8
+                        if self.is_psm2:
+                            if major > 0 or minor > 6 or (minor == 6 and patch >= 8):
                                 scan_status = data[15]
-                            elif int(firmware_version[1]) == 5 and int(firmware_version[2]) >= 5:
-                                scan_status = data[15]
-                        # PSM 2.0: version >= 0.6.8
-                        elif self.device_type == PSM2:
-                            if int(firmware_version[1]) > 6:
-                                scan_status = data[15]
-                            elif int(firmware_version[1]) == 6 and int(firmware_version[2]) >= 8:
+                        # Retrofit (firmware 0.x.x where x < 6): scan_status available in >= 0.5.5
+                        else:
+                            if minor > 5 or (minor == 5 and patch >= 5):
                                 scan_status = data[15]
                 except Exception:
                     # If firmware version check fails, keep scan_status as "9" (undefined)
@@ -527,7 +574,7 @@ class PSMWidget(ComplexDevice):
                 self.current_data.pres_inlet_saturator = float(data[10])
                 self.current_data.pres_saturator_excess = float(data[11])
                 self.current_data.pres_critical_orifice = float(data[12])
-                if self.device_type == PSM2: 
+                if self.is_psm2:
                     self.current_data.vacuum_flow = float(data[13])
                 self.current_data.poly_correction = poly_correction
                 self.current_data.scan_status = scan_status # [15]
@@ -611,8 +658,8 @@ class PSMWidget(ComplexDevice):
                 error_messages = []
                 for i in range(error_length):
                     if inverted_status_bin[i] == "1":
-                        # Special handling for MFC_HEATER/MFC_EXCESS error (index 27)
-                        if i == 27 and self.device_type == PSM:
+                        # Special handling for MFC_HEATER/MFC_EXCESS error (index 27) - Retrofit only
+                        if i == 27 and not self.is_psm2:
                             error_messages.append(f"Bit {i}: ERROR_SELFTEST_MFC_EXCESS")
                         else:
                             error_messages.append(f"Bit {i}: {PSM_ERRORS[i]}")
@@ -630,8 +677,8 @@ class PSMWidget(ComplexDevice):
             # Handle :SELF:ERR - error message
             elif command == ":SELF:ERR":
                 error_code = int(data[0])
-                # Special handling for index 27
-                if error_code == 27 and self.device_type == PSM:
+                # Special handling for index 27 - Retrofit only
+                if error_code == 27 and not self.is_psm2:
                     error_msg = "ERROR_SELFTEST_MFC_EXCESS"
                 else:
                     error_msg = PSM_ERRORS[error_code] if error_code < len(PSM_ERRORS) else "Unknown error"
@@ -715,9 +762,8 @@ class PSMWidget(ComplexDevice):
         return self.status_tab
 
     def has_device_specific_errors(self):
-        """PSM has CO flow error (PSM Retrofit only)."""
-        from config import PSM
-        if self.device_config.device_type == PSM:
+        """PSM has CO flow error (Retrofit only)."""
+        if not self.is_psm2:
             return hasattr(self.set_tab, 'set_co_flow') and self.set_tab.set_co_flow.error
         return False
 
@@ -778,16 +824,14 @@ class PSMWidget(ComplexDevice):
     @classmethod
     def get_default_extra_params(cls, device_type: int) -> dict:
         """Return default extra_params for PSM devices."""
-        params = {
+        # co_flow included for all PSM - only used by Retrofit UI
+        return {
             '10_hz': False,
             'connected_cpc': 'None',
             'calibration_file_path': '',
-            'firmware_version': ''
+            'firmware_version': '',
+            'co_flow': ''
         }
-        # PSM Retrofit has CO flow, PSM2 doesn't
-        if device_type == PSM:
-            params['co_flow'] = ''
-        return params
 
     def restore_ui_state(self, device_config, app_config):
         """Restore PSM UI state from configuration."""
@@ -799,8 +843,8 @@ class PSMWidget(ComplexDevice):
         if '10_hz' in device_config.extra_params:
             self.measure_tab.ten_hz.change_color(int(device_config.extra_params['10_hz']))
 
-        # Restore CO flow (PSM Retrofit only)
-        if self.dev_type == PSM and 'co_flow' in device_config.extra_params:
+        # Restore CO flow (Retrofit only)
+        if not self.is_psm2 and 'co_flow' in device_config.extra_params:
             try:
                 co_flow_val = float(device_config.extra_params['co_flow'])
                 self.set_tab.set_co_flow.value_spinbox.setValue(round(co_flow_val, 3))
@@ -859,12 +903,10 @@ class PSMWidget(ComplexDevice):
 
 
 class PSMSetTab(QSplitter):
-    def __init__(self, device_type, *args, **kwargs):
+    def __init__(self, is_psm2: bool, *args, **kwargs):
         super().__init__()
         # split tab vertically
         self.setOrientation(Qt.Vertical)
-
-        # TODO check device type and create widgets accordingly
 
         # horizontal splitter containing upper half of tab - set widgets
         upper_splitter = QSplitter(Qt.Horizontal)
@@ -884,7 +926,7 @@ class PSMSetTab(QSplitter):
         middle_splitter.addWidget(self.set_cpc_inlet_flow)
         self.set_cpc_sample_flow = SetWidget("CPC sample flow rate\n(used in concentration calculation)", " lpm", decimals=3)
         middle_splitter.addWidget(self.set_cpc_sample_flow)
-        if device_type == PSM: # if PSM, add CO flow rate set widget
+        if not is_psm2:  # Retrofit only - add CO flow rate set widget
             self.set_co_flow = SetWidget("CO flow rate", " lpm", decimals=3)
             middle_splitter.addWidget(self.set_co_flow)
         # horizontal splitter containing lower half of tab - mode widgets
@@ -903,21 +945,16 @@ class PSMSetTab(QSplitter):
         lower_splitter.setSizes([1000, 1000, 1000])
         self.addWidget(lower_splitter)
         # add line edit for command input
-        if device_type == PSM: # if PSM
-            self.command_widget = CommandWidget("PSM Retrofit")
-        elif device_type == PSM2: # if PSM 2.0
-            self.command_widget = CommandWidget("PSM 2.0")
+        self.command_widget = CommandWidget("PSM")
         self.addWidget(self.command_widget)
         # set relative sizes in tab splitter
         self.setSizes([1000, 1000, 1000, 1000])
     
 class PSMStatusTab(QWidget):
-    def __init__(self, device_type, *args, **kwargs):
+    def __init__(self, is_psm2: bool, *args, **kwargs):
         super().__init__()
 
         layout = QGridLayout() # create layout
-
-        # TODO check device type and create widgets accordingly
 
         # temperature indicators
         self.temp_growth_tube = IndicatorWidget("Growth tube temperature")
@@ -938,24 +975,22 @@ class PSMStatusTab(QWidget):
         layout.addWidget(self.flow_cpc, 1, 1)
         self.flow_saturator = IndicatorWidget("Saturator flow")
         layout.addWidget(self.flow_saturator, 2, 1)
-        self.flow_excess = IndicatorWidget("Excess flow") # TODO change name to heater flow?
+        self.flow_excess = IndicatorWidget("Excess flow")
         layout.addWidget(self.flow_excess, 3, 1)
         self.flow_inlet = IndicatorWidget("Inlet flow")
         layout.addWidget(self.flow_inlet, 4, 1)
-        if device_type == PSM2: # if PSM 2.0, add vacuum flow indicator
+        if is_psm2:  # PSM 2.0 only - add vacuum flow indicator
             self.flow_vacuum = IndicatorWidget("Vacuum flow")
             layout.addWidget(self.flow_vacuum, 4, 2)
 
         # pressure indicators
         self.pressure_inlet = IndicatorWidget("Inlet pressure")
         layout.addWidget(self.pressure_inlet, 0, 2)
-        if device_type == PSM: # if PSM, add critical orifice pressure indicator
-            self.pressure_critical_orifice = IndicatorWidget("Critical orifice pressure")
-            layout.addWidget(self.pressure_critical_orifice, 1, 2)
-        elif device_type == PSM2: # if PSM 2.0, add vacuum line pressure indicator
-            # TODO name variable accordingly?
+        if is_psm2:  # PSM 2.0 - vacuum line pressure
             self.pressure_critical_orifice = IndicatorWidget("Vacuum line pressure")
-            layout.addWidget(self.pressure_critical_orifice, 1, 2)
+        else:  # Retrofit - critical orifice pressure
+            self.pressure_critical_orifice = IndicatorWidget("Critical orifice pressure")
+        layout.addWidget(self.pressure_critical_orifice, 1, 2)
 
         # liquid level indicators
         self.liquid_saturator = IndicatorWidget("Saturator liquid level")

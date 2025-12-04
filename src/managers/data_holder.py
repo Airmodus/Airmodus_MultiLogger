@@ -1,7 +1,7 @@
 from numpy import full, nan
 from time import time
 from utils import _manage_plot_array
-from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, PSM2, TSI_CPC)
+from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, TSI_CPC)
 
 class DataHolder:
     """Holds all app data dicts/lists. No logic—just storage."""
@@ -27,7 +27,7 @@ class DataHolder:
         self.device_errors = {} # contains device error flags: 0 = ok, 1 = errors
         self.idn_inquiry_devices = [] # contains IDs of devices that need IDN inquiry
         # Device names (static, move here for centralization)
-        self.device_names = {CPC: 'CPC', PSM: 'PSM Retrofit', ELECTROMETER: 'Electrometer', CO2_SENSOR: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', EDILUTER: 'eDiluter', PSM2: 'PSM 2.0', TSI_CPC: 'TSI CPC', EXAMPLE_DEVICE: 'Example device'} # Use actual constants like CPC=0, etc.
+        self.device_names = {CPC: 'CPC', PSM: 'PSM', ELECTROMETER: 'Electrometer', CO2_SENSOR: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', EDILUTER: 'eDiluter', TSI_CPC: 'TSI CPC', EXAMPLE_DEVICE: 'Example device'}  # PSM2 removed - version determined by firmware
 
         # Timer variables
         self.first_connection = False # once first connection has been made, set to True

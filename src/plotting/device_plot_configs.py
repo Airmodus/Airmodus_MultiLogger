@@ -12,7 +12,7 @@ instead of inheriting bloated plotting methods.
 import logging
 import traceback
 from numpy import nan, nanmean, array, polyval
-from config import PSM, PSM2, CPC, TSI_CPC, ELECTROMETER, RHTP, AFM, CO2_SENSOR, EDILUTER, EXAMPLE_DEVICE
+from config import PSM, CPC, TSI_CPC, ELECTROMETER, RHTP, AFM, CO2_SENSOR, EDILUTER, EXAMPLE_DEVICE
 
 
 class BasePlotConfig:
@@ -294,7 +294,7 @@ class CPCPlotConfig(BasePlotConfig):
         psm_connection = False
         if data_holder and hasattr(data_holder, 'device_widgets'):
             for widget in data_holder.device_widgets.values():
-                if widget.device_config.device_type in [PSM, PSM2]:
+                if widget.device_config.device_type == PSM:
                     connected_cpc = widget.device_config.extra_params.get('connected_cpc', 'None')
                     if connected_cpc == dev_id:
                         # Plot PSM concentration instead of CPC
@@ -464,7 +464,7 @@ class TSICPCPlotConfig(BasePlotConfig):
         psm_connection = False
         if data_holder and hasattr(data_holder, 'device_widgets'):
             for widget in data_holder.device_widgets.values():
-                if widget.device_config.device_type in [PSM, PSM2]:
+                if widget.device_config.device_type == PSM:
                     connected_cpc = widget.device_config.extra_params.get('connected_cpc', 'None')
                     if connected_cpc == dev_id:
                         psm_id = widget.device_config.device_id
@@ -503,16 +503,67 @@ class TSICPCPlotConfig(BasePlotConfig):
 class PSMPlotConfig(BasePlotConfig):
     """Plot configuration for PSM."""
 
+    def get_plot_keys(self):
+        """PSM has saturator flow and concentration."""
+        return ['', ':conc']
+
     def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
-        """Store PSM saturator flow."""
+        """Store PSM saturator flow and concentration."""
         psm_data = self.device.current_data
+        # Saturator flow (default key '')
         plot_data[str(dev_id)][time_counter] = psm_data.saturator_flow
+        # Concentration (key ':conc') - calculated in calculate_connected_cpc_values
+        plot_data[str(dev_id)+':conc'][time_counter] = psm_data.concentration_psm
 
     def get_viewbox_type(self):
-        """PSM2 uses PSM viewbox."""
-        if self.device.dev_type == PSM2:
-            return PSM
-        return self.device.dev_type
+        """PSM uses PSM viewbox (both 2.0 and Retrofit)."""
+        return PSM
+
+    def update_main_plot(self, dev_id, time_counter, x_time_list, plot_data,
+                        curve, plot_to_main_value):
+        """Update main plot with selected value (Flow or Concentration)."""
+        # None means "don't plot", empty string '' means Flow (default)
+        if plot_to_main_value is not None:
+            key = self.get_main_plot_key(plot_to_main_value)
+            curve.setData(
+                x=x_time_list[:time_counter+1],
+                y=plot_data[str(dev_id)+key][:time_counter+1]
+            )
+        else:
+            curve.setData(x=[], y=[])
+
+    def get_main_axis_config(self, plot_to_main_value):
+        """
+        Get axis configuration for PSM main plot.
+
+        Label changes based on selector: Flow or Concentration.
+        """
+        # None means "don't plot" - hide axis
+        if plot_to_main_value is None:
+            return None
+
+        # Map selector value to axis configuration
+        axis_configs = {
+            '': {'label': 'PSM saturator flow rate', 'units': 'lpm', 'color': 'w'},
+            ':conc': {'label': 'PSM concentration', 'units': '#/cc', 'color': 'w'},
+        }
+
+        config = axis_configs.get(plot_to_main_value)
+        if config:
+            return {
+                'viewbox_type': PSM,
+                'show': True,
+                **config
+            }
+        return None
+
+    def get_legend_value(self, dev_id, time_counter, plot_data, selector_value=None):
+        """Get value for legend based on selector (Flow or Concentration)."""
+        key = self.get_main_plot_key(selector_value)
+        if key is not None:
+            value = plot_data[str(dev_id)+key][time_counter]
+            return round(value, 2) if value == value else value  # Handle NaN
+        return ''
 
     def calculate_connected_cpc_values(self, data_holder):
         """
@@ -557,8 +608,8 @@ class PSMPlotConfig(BasePlotConfig):
         cpc_flow = float(psm_settings.cpc_inlet_flow) if psm_settings else 0.0
 
         # Calculate inlet flow based on PSM type
-        if dev_type == PSM:
-            # Get CO flow rate from PSM widget
+        if not self.device.is_psm2:
+            # Retrofit: Get CO flow rate from PSM widget
             co_flow = round(psm_widget.set_tab.set_co_flow.value_spinbox.value(), 3)
             if co_flow == 0:  # CO flow not set
                 psm_widget.set_tab.set_co_flow.set_red_color()
@@ -567,8 +618,8 @@ class PSMPlotConfig(BasePlotConfig):
                 psm_widget.set_tab.set_co_flow.set_default_color()
             inlet_flow = cpc_flow + co_flow - float(psm_data.saturator_flow) - float(psm_data.excess_flow)
 
-        elif dev_type == PSM2:
-            # Get vacuum flow from PSM data
+        else:
+            # PSM 2.0: Get vacuum flow from PSM data
             vacuum_flow = float(psm_data.vacuum_flow)
             inlet_flow = cpc_flow + vacuum_flow - float(psm_data.saturator_flow) - float(psm_data.excess_flow)
             inlet_flow0 = cpc_flow + vacuum_flow - 4 + float(psm_data.saturator_flow) + float(psm_data.excess_flow)
@@ -582,17 +633,22 @@ class PSMPlotConfig(BasePlotConfig):
         # Calculate polynomial correction factor
         if psm_data.poly_correction == 0:
             # Calculate from saturator flow
-            if dev_type == PSM:
+            if not self.device.is_psm2:
+                # Retrofit polynomial coefficients
                 pcor = array([-0.0272052, 0.11394213, -0.08959011, -0.20675596, 0.24343024, 1.10531145])
-            elif dev_type == PSM2:
+            else:
+                # PSM 2.0 polynomial coefficients
                 pcor = array([0.12949491, -0.50587616, 0.57214191, 0.76108161])
             poly_correction = polyval(pcor, float(psm_data.saturator_flow))
         else:
             poly_correction = psm_data.poly_correction
 
         # Calculate dilution correction factor
-        dilution_correction_factor = (inlet_flow + float(psm_data.excess_flow) + float(psm_data.saturator_flow)) / inlet_flow
-        if dev_type == PSM2:
+        if not self.device.is_psm2:
+            # Retrofit dilution calculation
+            dilution_correction_factor = (inlet_flow + float(psm_data.excess_flow) + float(psm_data.saturator_flow)) / inlet_flow
+        else:
+            # PSM 2.0 dilution calculation
             dilution_correction_factor = (inlet_flow + 4 - float(psm_data.excess_flow) - float(psm_data.saturator_flow)) / inlet_flow
 
         # Calculate concentration from PSM

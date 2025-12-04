@@ -1,5 +1,5 @@
 from numpy import full, nan, roll
-from config import MAX_TIME_SEC, CPC, PSM, PSM2
+from config import MAX_TIME_SEC, CPC, PSM
 
 # compile settings list for CPC .par file
 def compile_cpc_settings(prnt, pall):

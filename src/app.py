@@ -617,7 +617,6 @@ class MainWindow(QMainWindow):
         """Open dialog to add a new device."""
         from dialogs import PortSelectionDialog
         from devices.device_data import create_device_settings
-        from config_migration import _get_device_type_name
 
         # Show port selection dialog
         dialog = PortSelectionDialog(self.device_manager, self.data_holder)
@@ -627,6 +626,7 @@ class MainWindow(QMainWindow):
         selected_port = dialog.get_selected_port()
         device_type_name = dialog.get_selected_type()
         serial_number = dialog.get_selected_serial_number()
+        firmware_version = dialog.get_selected_firmware()
 
         if not selected_port or not device_type_name:
             return  # Invalid selection
@@ -666,6 +666,10 @@ class MainWindow(QMainWindow):
         device_class = DEVICE_REGISTRY[device_type].widget_class
         extra_params = device_class.get_default_extra_params(device_type)
 
+        # Store firmware version if detected during port scan
+        if firmware_version:
+            extra_params['firmware_version'] = firmware_version
+
         # Create device configuration
         device_config = DeviceConfig(
             device_id=self._next_device_id,
@@ -700,7 +704,7 @@ class MainWindow(QMainWindow):
         # This prevents blocking the main thread during device addition
         # Mark all PSMs as needing dropdown updates
         for device_config in self.config.devices:
-            if device_config.device_type in [PSM, PSM2]:
+            if device_config.device_type == PSM:
                 psm_widget = self.data_holder.device_widgets.get(device_config.device_id)
                 if psm_widget and hasattr(psm_widget, '_needs_cpc_dropdown_update'):
                     psm_widget._needs_cpc_dropdown_update = True
@@ -872,6 +876,11 @@ class MainWindow(QMainWindow):
 
         # Create serial connection (runtime state, stored in widget)
         connection = SerialDeviceConnection()
+
+        # Disable DTR for Arduino-based devices (prevents auto-reset on connect)
+        if device_config.device_type == AFM:
+            connection.disable_dtr = True
+
         if device_config.com_port:
             # Don't connect immediately - just set the port
             # The device_manager.connection_test() will handle actual connection
@@ -1029,7 +1038,7 @@ class MainWindow(QMainWindow):
     def _update_psm_cpc_connections(self):
         """Update PSM connected CPC references after all devices are loaded."""
         for device_config in self.config.devices:
-            if device_config.device_type not in [PSM, PSM2]:
+            if device_config.device_type != PSM:
                 continue
 
             cpc_id = device_config.extra_params.get('connected_cpc', 'None')
@@ -1168,7 +1177,7 @@ class MainWindow(QMainWindow):
         # Populate link registry from device configs
         for device_config in self.config.devices:
             # PSM -> CPC links
-            if device_config.device_type in [PSM, PSM2]:
+            if device_config.device_type == PSM:
                 cpc_id = device_config.extra_params.get('connected_cpc', 'None')
                 if cpc_id != 'None' and cpc_id is not None:
                     self._device_links['psm_cpc'][device_config.device_id] = cpc_id
@@ -1189,7 +1198,7 @@ class MainWindow(QMainWindow):
         """Refresh Connected CPC dropdowns in all PSM widgets."""
         # Use pre-built cpc_dict for performance (avoids nested iteration)
         for device_config in self.config.devices:
-            if device_config.device_type in [PSM, PSM2]:
+            if device_config.device_type == PSM:
                 psm_widget = self.data_holder.device_widgets.get(device_config.device_id)
                 if psm_widget and hasattr(psm_widget, '_populate_cpc_dropdown'):
                     psm_widget._populate_cpc_dropdown(self.cpc_dict)

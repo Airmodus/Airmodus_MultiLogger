@@ -12,6 +12,7 @@ class SerialDeviceConnection():
         self._connecting = False  # Flag to prevent duplicate connection attempts
         self._connection_thread = None
         self._pending_timers = []  # Track pending message timers for cancellation
+        self.disable_dtr = False  # Set True for Arduino devices to prevent auto-reset on connect
         
     def set_port(self, serial_port):
         self.serial_port = serial_port
@@ -25,8 +26,11 @@ class SerialDeviceConnection():
             self.connection.close()
         except: # if fails (i.e. port has not been open) continue normally
             pass
-        # dsrdtr=False and dtr=False prevent Arduino auto-reset when opening connection
-        self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout, dsrdtr=False, dtr=False)
+        # For Arduino devices, disable DTR to prevent auto-reset when opening connection
+        if self.disable_dtr:
+            self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout, dsrdtr=False, dtr=False)
+        else:
+            self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout)
         print("Connected to %s" % self.serial_port)
 
     def connect_async(self, callback=None):

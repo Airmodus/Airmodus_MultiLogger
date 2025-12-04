@@ -8,14 +8,15 @@ from typing import Union, Optional
 
 # Mapping from device type integer constants to string names
 # Kept in sync with data_holder.py device_names
+# Note: PSM 2.0 (7) kept for backwards compatibility with existing configs
 DEVICE_TYPE_NAMES = {
     1: 'CPC',
-    2: 'PSM Retrofit',
+    2: 'PSM',  # User sees just "PSM", version detected from firmware
     3: 'Electrometer',
     4: 'CO2 sensor',
     5: 'RHTP',
     6: 'eDiluter',
-    7: 'PSM 2.0',
+    7: 'PSM',  # PSM 2.0 - maps to same "PSM" for backwards compatibility
     8: 'TSI CPC',
     9: 'AFM',
     -1: 'Example device'
@@ -27,9 +28,12 @@ class DeviceIdentifier:
 
     # Only the patterns we actually need for our devices
     # Based on real device examples from production
+    # Note: PSM patterns combined - version (2.0/Retrofit) determined by firmware
     PATTERNS = {
-        'PSM 2.0': [r'^9\d{6,7}$'],  # 9142501 (7-8 digits starting with 9)
-        'PSM Retrofit': [r'^8\d{8,10}$'],  # 8211445616 (10 digits starting with 8)
+        'PSM': [
+            r'^9\d{6,7}$',   # PSM 2.0 serial: 9142501 (7-8 digits starting with 9)
+            r'^8\d{8,10}$',  # PSM Retrofit serial: 8211445616 (10 digits starting with 8)
+        ],
         'CPC': [
             r'^Z812',  # Z812001104 (starts with Z812)
             r'^2\d{9}$',  # 2812001104 (10 digits starting with 2)
@@ -100,8 +104,8 @@ class DeviceIdentifier:
             "301* Jerry" -> "Airmodus CPC Jerry"
             "235* Peggy" -> "Airmodus CPC Peggy"
             "2300001" -> "Airmodus RHTP [..001]"
-            "9142501" -> "Airmodus PSM 2.0 [..501]"
-            "8211445616" -> "Airmodus PSM Retrofit [..616]"
+            "9142501" -> "Airmodus PSM [..501]"
+            "8211445616" -> "Airmodus PSM [..616]"
             "Z812001104" -> "Airmodus CPC [..104]"
             "unknown123" -> "" (empty, show raw serial instead)
 

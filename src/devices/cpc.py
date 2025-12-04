@@ -580,7 +580,7 @@ class CPCWidget(ComplexDevice):
         When 10 Hz is disabled:
         - Set TAVG to 1.0 if currently < 1
         """
-        from config import PSM, PSM2
+        from config import PSM
 
         dev_id = device_config.device_id
         ten_hz_enabled = device_config.extra_params.get('10_hz', False)
@@ -596,7 +596,7 @@ class CPCWidget(ComplexDevice):
                 psm_config.extra_params.get('connected_cpc') == dev_id and
                 psm_config.extra_params.get('10_hz', False)
                 for psm_config in app_config.devices
-                if psm_config.device_type in [PSM, PSM2]
+                if psm_config.device_type == PSM
             )
 
             # If no PSM with 10Hz is connected, disable 10Hz mode
