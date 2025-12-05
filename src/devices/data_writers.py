@@ -136,7 +136,12 @@ class PSMDataWriter(BaseDataWriter):
         # Check connected CPC par_updates
         cpc_id = self.device.device_config.extra_params.get('connected_cpc', 'None')
         if cpc_id != 'None':
-            if cpc_id in data_holder.par_updates and data_holder.par_updates[cpc_id] == 1:
+            # Convert to int for lookup (JSON stores as string)
+            try:
+                cpc_id_int = int(cpc_id)
+            except (ValueError, TypeError):
+                cpc_id_int = None
+            if cpc_id_int in data_holder.par_updates and data_holder.par_updates[cpc_id_int] == 1:
                 return True
 
         return False
@@ -156,13 +161,18 @@ class PSMDataWriter(BaseDataWriter):
         # Add connected CPC settings if applicable
         cpc_id = self.device.device_config.extra_params.get('connected_cpc', 'None')
         if cpc_id != 'None':
+            # Convert to int for lookup (JSON stores as string)
+            try:
+                cpc_id_int = int(cpc_id)
+            except (ValueError, TypeError):
+                cpc_id_int = None
             # Find CPC device widget in device_widgets
-            cpc_widget = data_holder.device_widgets.get(cpc_id)
+            cpc_widget = data_holder.device_widgets.get(cpc_id_int)
 
             # If CPC widget exists and is Airmodus CPC, write settings
             if cpc_widget and cpc_widget.device_config.device_type == CPC:
                 cpc_idn = cpc_widget.device_config.serial_number
-                cpc_settings = data_holder.get_device_settings(cpc_id)
+                cpc_settings = data_holder.get_device_settings(cpc_id_int)
 
                 if cpc_settings:
                     connected_cpc_settings = [

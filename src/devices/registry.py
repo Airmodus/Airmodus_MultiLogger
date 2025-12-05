@@ -191,18 +191,6 @@ def setup_psm_connections(widget, device_config, connection, app):
     widget.set_tab.drying.clicked.connect(
         lambda: connection.send_message(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
 
-    # Wire up connected CPC device reference
-    def update_connected_cpc():
-        """Update PSM's reference to connected CPC widget."""
-        cpc_id = device_config.extra_params.get('connected_cpc', 'None')
-        if cpc_id != 'None':
-            widget.connected_cpc_device = app.data_holder.device_widgets.get(cpc_id)
-        else:
-            widget.connected_cpc_device = None
-
-    # Set initial reference
-    update_connected_cpc()
-
 
 def setup_ediluter_connections(widget, device_config, connection, app):
     """Set up eDiluter-specific connections."""

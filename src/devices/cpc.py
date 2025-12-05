@@ -66,20 +66,72 @@ class CPCWidget(ComplexDevice):
         # Add Device tab at the end
         self._add_device_tab_at_end()
 
+        # Hide main plot dropdown by default (will be shown when PSM connects)
+        if hasattr(self, 'main_plot_dropdown') and self.main_plot_dropdown:
+            self.main_plot_dropdown.hide()
+            if hasattr(self, '_main_plot_label') and self._main_plot_label:
+                self._main_plot_label.hide()
+
     def get_plot_keys(self):
         """CPC has concentration and raw concentration plots."""
-        return ['', ':raw']
+        return [':conc', ':raw']
 
     def get_plot_value_labels(self):
         """Return labels for CPC plot values."""
         return {
-            '': 'Dilution Corrected Concentration (#/cc)',
+            ':conc': 'Dilution Corrected Concentration (#/cc)',
             ':raw': 'Raw CPC Concentration (#/cc)'
         }
 
     def get_rolling_buffer_keys(self):
         """CPC has 24-hour rolling buffers for pulse analysis."""
         return {':pd': 86400, ':pr': 86400}
+
+    def is_connected_to_psm(self, app_config=None):
+        """Check if any PSM has this CPC as its connected CPC."""
+        if not app_config:
+            return False
+        from config import PSM
+        dev_id = self.device_config.device_id
+        for device_config in app_config.devices:
+            if device_config.device_type == PSM:
+                connected_cpc = device_config.extra_params.get('connected_cpc', 'None')
+                try:
+                    if connected_cpc != 'None' and int(connected_cpc) == dev_id:
+                        return True
+                except (ValueError, TypeError):
+                    pass
+        return False
+
+    def update_main_plot_dropdown_visibility(self, app_config):
+        """Show/hide main plot dropdown based on PSM connection."""
+        if not hasattr(self, 'main_plot_dropdown') or not self.main_plot_dropdown:
+            return
+
+        has_psm = self.is_connected_to_psm(app_config)
+
+        if has_psm:
+            # Show dropdown, select :conc by default
+            self.main_plot_dropdown.show()
+            if hasattr(self, '_main_plot_label'):
+                self._main_plot_label.show()
+            # Set to :conc if not already
+            if self.device_config.plot_to_main != ':conc':
+                index = self.main_plot_dropdown.findData(':conc')
+                if index >= 0:
+                    self.main_plot_dropdown.setCurrentIndex(index)
+                    self.device_config.plot_to_main = ':conc'
+                    if hasattr(self, 'on_config_changed') and self.on_config_changed:
+                        self.on_config_changed()
+        else:
+            # Hide dropdown, set to :raw
+            self.main_plot_dropdown.hide()
+            if hasattr(self, '_main_plot_label'):
+                self._main_plot_label.hide()
+            if self.device_config.plot_to_main != ':raw':
+                self.device_config.plot_to_main = ':raw'
+                if hasattr(self, 'on_config_changed') and self.on_config_changed:
+                    self.on_config_changed()
 
     def set_app_config(self, app_config):
         """Set the app config reference for database tab RHTP dropdown."""
@@ -592,9 +644,14 @@ class CPCWidget(ComplexDevice):
                     self.connection.send_message(":SET:TAVG 0.1")
 
             # Validate PSM connection - check if any PSM has this CPC connected with 10Hz
+            def _cpc_matches(psm_config):
+                connected_cpc = psm_config.extra_params.get('connected_cpc', 'None')
+                try:
+                    return int(connected_cpc) == dev_id if connected_cpc != 'None' else False
+                except (ValueError, TypeError):
+                    return False
             ten_hz_connected = any(
-                psm_config.extra_params.get('connected_cpc') == dev_id and
-                psm_config.extra_params.get('10_hz', False)
+                _cpc_matches(psm_config) and psm_config.extra_params.get('10_hz', False)
                 for psm_config in app_config.devices
                 if psm_config.device_type == PSM
             )
@@ -626,6 +683,8 @@ class CPCWidget(ComplexDevice):
         """Restore CPC UI state from configuration."""
         if hasattr(self, 'set_app_config'):
             self.set_app_config(app_config)
+        # Initialize dropdown visibility based on PSM connection
+        self.update_main_plot_dropdown_visibility(app_config)
 
     def setup_main_window_references(self, main_window):
         """Set up CPC database tab references to main window."""

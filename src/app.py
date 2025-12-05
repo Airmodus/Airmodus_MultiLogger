@@ -119,11 +119,11 @@ class MainWindow(QMainWindow):
         # load ini file if available (with auto-migration)
         self.load_ini()
 
-        # Update PSM connected CPC references after all devices are loaded
-        self._update_psm_cpc_connections()
-
         # Initialize device links and reorder tabs for linked devices
         self._initialize_device_links()
+
+        # Update all CPC dropdowns after device links are initialized
+        self._update_all_cpc_dropdowns()
 
         # Set initial window size
         self.resize(1500, 1040)
@@ -1035,22 +1035,6 @@ class MainWindow(QMainWindow):
                 cpc_widget.database_tab.update_global_connection_status()
                 cpc_widget.database_tab.sync_global_status_to_all_cpcs()
 
-    def _update_psm_cpc_connections(self):
-        """Update PSM connected CPC references after all devices are loaded."""
-        for device_config in self.config.devices:
-            if device_config.device_type != PSM:
-                continue
-
-            cpc_id = device_config.extra_params.get('connected_cpc', 'None')
-            if cpc_id == 'None':
-                continue
-
-            psm_widget = self.data_holder.device_widgets.get(device_config.device_id)
-            if psm_widget and hasattr(psm_widget, 'connected_cpc_device'):
-                cpc_widget = self.data_holder.device_widgets.get(cpc_id)
-                if cpc_widget:
-                    psm_widget.connected_cpc_device = cpc_widget
-
     def _update_cpc_dict(self):
         """Update CPC dictionary for PSM device linking."""
         self.cpc_dict = {'None': 'None'}
@@ -1149,7 +1133,12 @@ class MainWindow(QMainWindow):
             if device_id in self._device_links[link_type]:
                 del self._device_links[link_type][device_id]
         else:
-            self._device_links[link_type][device_id] = new_target
+            # Convert to int if string (JSON stores as string)
+            try:
+                new_target_int = int(new_target) if isinstance(new_target, str) else new_target
+                self._device_links[link_type][device_id] = new_target_int
+            except (ValueError, TypeError):
+                pass
 
         # Reorder tabs if connecting (not disconnecting)
         if new_target != 'None' and new_target is not None:
@@ -1157,6 +1146,28 @@ class MainWindow(QMainWindow):
 
         # Update visual connectors
         self._update_tab_link_overlay()
+
+        # Notify affected CPCs to update their dropdown visibility
+        if link_type == 'psm_cpc':
+            # Notify old CPC (if any) that PSM disconnected
+            if old_target and old_target != 'None':
+                try:
+                    old_cpc_id = int(old_target) if isinstance(old_target, str) else old_target
+                    old_cpc_widget = self.data_holder.device_widgets.get(old_cpc_id)
+                    if old_cpc_widget and hasattr(old_cpc_widget, 'update_main_plot_dropdown_visibility'):
+                        old_cpc_widget.update_main_plot_dropdown_visibility(self.config)
+                except (ValueError, TypeError):
+                    pass
+
+            # Notify new CPC (if any) that PSM connected
+            if new_target and new_target != 'None':
+                try:
+                    new_cpc_id = int(new_target) if isinstance(new_target, str) else new_target
+                    new_cpc_widget = self.data_holder.device_widgets.get(new_cpc_id)
+                    if new_cpc_widget and hasattr(new_cpc_widget, 'update_main_plot_dropdown_visibility'):
+                        new_cpc_widget.update_main_plot_dropdown_visibility(self.config)
+                except (ValueError, TypeError):
+                    pass
 
     def _update_tab_link_overlay(self):
         """Update the visual connector overlay with current link data."""
@@ -1180,13 +1191,23 @@ class MainWindow(QMainWindow):
             if device_config.device_type == PSM:
                 cpc_id = device_config.extra_params.get('connected_cpc', 'None')
                 if cpc_id != 'None' and cpc_id is not None:
-                    self._device_links['psm_cpc'][device_config.device_id] = cpc_id
+                    # Convert to int (JSON stores as string)
+                    try:
+                        cpc_id_int = int(cpc_id)
+                        self._device_links['psm_cpc'][device_config.device_id] = cpc_id_int
+                    except (ValueError, TypeError):
+                        pass
 
             # CPC -> RHTP links
             if device_config.device_type == CPC:
                 rhtp_id = device_config.extra_params.get('linked_rhtp', 'None')
                 if rhtp_id != 'None' and rhtp_id is not None:
-                    self._device_links['cpc_rhtp'][device_config.device_id] = rhtp_id
+                    # Convert to int (JSON stores as string)
+                    try:
+                        rhtp_id_int = int(rhtp_id)
+                        self._device_links['cpc_rhtp'][device_config.device_id] = rhtp_id_int
+                    except (ValueError, TypeError):
+                        pass
 
         # Don't reorder tabs on startup - respect the saved device order
         # Auto-reordering only happens when creating a new link (in _on_device_link_changed)
@@ -1202,6 +1223,18 @@ class MainWindow(QMainWindow):
                 psm_widget = self.data_holder.device_widgets.get(device_config.device_id)
                 if psm_widget and hasattr(psm_widget, '_populate_cpc_dropdown'):
                     psm_widget._populate_cpc_dropdown(self.cpc_dict)
+
+    def _update_all_cpc_dropdowns(self):
+        """Update main plot dropdown visibility for all CPC and TSI CPC widgets.
+
+        Called after device links are initialized to ensure CPCs know if they
+        have a PSM connected to them.
+        """
+        for device_config in self.config.devices:
+            if device_config.device_type in (CPC, TSI_CPC):
+                cpc_widget = self.data_holder.device_widgets.get(device_config.device_id)
+                if cpc_widget and hasattr(cpc_widget, 'update_main_plot_dropdown_visibility'):
+                    cpc_widget.update_main_plot_dropdown_visibility(self.config)
 
     def x_range_changed(self, viewbox):
         # if autoscale y is on

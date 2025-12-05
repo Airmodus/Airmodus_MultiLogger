@@ -189,9 +189,12 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
                     self.on_config_changed()
 
             self.main_plot_dropdown.currentIndexChanged.connect(update_main_plot_value)
-            form_layout.addRow("Main Plot Value:", self.main_plot_dropdown)
+            # Store label reference so it can be shown/hidden with dropdown
+            self._main_plot_label = QLabel("Main Plot Value:")
+            form_layout.addRow(self._main_plot_label, self.main_plot_dropdown)
         else:
             self.main_plot_dropdown = None
+            self._main_plot_label = None
 
         # Store form_layout reference for later use
         self._device_settings_form_layout = form_layout
@@ -1162,7 +1165,8 @@ class DefaultSinglePlotConfig:
     def update_main_plot(self, dev_id, time_counter, x_time_list, plot_data,
                         curve, plot_to_main_value):
         """Update main plot with single value."""
-        if plot_to_main_value:
+        # Note: empty string '' is a valid key
+        if plot_to_main_value is not None and plot_to_main_value is not False:
             curve.setData(
                 x=x_time_list[:time_counter+1],
                 y=plot_data[str(dev_id)][:time_counter+1]
@@ -1210,7 +1214,8 @@ class DefaultSinglePlotConfig:
         Returns:
             dict or None: Axis config or None if axis should be hidden
         """
-        if plot_to_main_value:
+        # Note: empty string '' is a valid key
+        if plot_to_main_value is not None and plot_to_main_value is not False:
             return {
                 'viewbox_type': self.get_viewbox_type(),
                 'show': True

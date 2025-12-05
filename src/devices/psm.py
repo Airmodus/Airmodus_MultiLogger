@@ -30,7 +30,6 @@ class PSMWidget(ComplexDevice):
 
     def __init__(self, device_config, *args, **kwargs):
         super().__init__(device_config, *args, **kwargs)
-        self.connected_cpc_device = None  # Direct reference to connected CPC widget
         self._needs_cpc_dropdown_update = False  # Flag for lazy dropdown updates
 
         # Update device type label to show version (2.0 or Retrofit)
@@ -424,6 +423,9 @@ class PSMWidget(ComplexDevice):
                 # Update firmware version
                 firmware_version = parsed['data']
                 self.device_config.extra_params['firmware_version'] = firmware_version
+                # Save config so firmware version persists across restarts
+                if hasattr(self, 'on_config_changed') and self.on_config_changed:
+                    self.on_config_changed()
                 # Always update UI based on PSM type (2.0 vs Retrofit)
                 # This ensures CO flow visibility is correct even if firmware was same
                 self._update_psm_type_ui()
@@ -782,8 +784,12 @@ class PSMWidget(ComplexDevice):
         """Update UI elements based on PSM type (2.0 vs Retrofit).
 
         Called when firmware version is received and PSM type can be determined.
-        Hides CO flow widget for PSM 2.0, shows for Retrofit.
+        Updates device type label, hides CO flow widget for PSM 2.0, shows for Retrofit.
         """
+        # Update device type label to show version (2.0 or Retrofit)
+        if hasattr(self, 'device_type_label'):
+            self.device_type_label.setText(self.display_device_type)
+
         if hasattr(self.set_tab, 'set_co_flow'):
             if self.is_psm2:
                 self.set_tab.set_co_flow.hide()
@@ -801,28 +807,31 @@ class PSMWidget(ComplexDevice):
         """
         Reset PSM state on connection.
 
-        Clears firmware version and dilution parameters so they are re-fetched.
+        Clears dilution parameters so they are re-fetched.
         """
-        # Clear firmware version
-        self.device_config.extra_params['firmware_version'] = ""
-
         # Clear dilution parameters in device settings
         if self.settings:
             self.settings.dilution_parameters = []
 
     def send_read_commands(self, dev_conn, device_config):
         """
-        Send PSM read commands for settings and dilution parameters.
+        Send PSM read commands for settings, dilution parameters, and firmware.
 
         Sends:
         - :SYST:PRNT if settings need to be fetched
         - :SYST:VCMP if dilution parameters are missing
+        - :SYST:VER if firmware version is unknown
         """
         if self.needs_settings_fetch:
             dev_conn.send_message(":SYST:PRNT")
 
         if self.settings and not self.settings.dilution_parameters:
             dev_conn.send_delayed_message(":SYST:VCMP", 150)
+
+        # Query firmware if not yet known (determines PSM 2.0 vs Retrofit)
+        fw = device_config.extra_params.get('firmware_version', '')
+        if not fw:
+            dev_conn.send_delayed_message(":SYST:VER", 300)
 
     def validate_10hz_mode(self, app_config, device_config):
         """
@@ -835,9 +844,14 @@ class PSMWidget(ComplexDevice):
         if device_config.extra_params.get('10_hz', False):
             cpc_id = device_config.extra_params.get('connected_cpc', 'None')
             if cpc_id != 'None':
+                # Convert to int for comparison (JSON stores as string)
+                try:
+                    cpc_id_int = int(cpc_id)
+                except (ValueError, TypeError):
+                    cpc_id_int = None
                 # Find connected CPC and enable its 10 Hz mode
                 for cpc_config in app_config.devices:
-                    if cpc_config.device_id == cpc_id and cpc_config.device_type == CPC:
+                    if cpc_config.device_id == cpc_id_int and cpc_config.device_type == CPC:
                         if not cpc_config.extra_params.get('10_hz', False):
                             cpc_config.extra_params['10_hz'] = True
                             # Trigger config save
@@ -908,12 +922,17 @@ class PSMWidget(ComplexDevice):
             data_holder.error_status = 1
             data_holder.device_errors[dev_id] = True
         else:
+            # Convert to int for comparison (JSON stores as string)
+            try:
+                connected_cpc_id_int = int(connected_cpc_id)
+            except (ValueError, TypeError):
+                connected_cpc_id_int = None
             # Find connected CPC device config
-            cpc_config = next((d for d in config.devices if d.device_id == connected_cpc_id), None)
+            cpc_config = next((d for d in config.devices if d.device_id == connected_cpc_id_int), None)
             if cpc_config:
                 # If connected CPC is Airmodus CPC, sync sample flow
                 if cpc_config.device_type == CPC:
-                    cpc_settings = data_holder.get_device_settings(connected_cpc_id)
+                    cpc_settings = data_holder.get_device_settings(connected_cpc_id_int)
                     cpc_sample_flow = float(cpc_settings.measured_cpc_flow) if cpc_settings else 0.0
                     if self.set_tab.set_cpc_sample_flow.value_spinbox.value() != cpc_sample_flow:
                         self.set_tab.set_cpc_sample_flow.value_spinbox.setValue(cpc_sample_flow)

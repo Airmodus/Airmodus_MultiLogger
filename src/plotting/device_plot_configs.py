@@ -80,7 +80,8 @@ class BasePlotConfig:
             plot_to_main_value: Value of "Plot to main" parameter
         """
         # Default behavior: plot the primary key if enabled
-        if plot_to_main_value:
+        # Note: empty string '' is a valid key (e.g., CPC dilution corrected concentration)
+        if plot_to_main_value is not None and plot_to_main_value is not False:
             key = self.get_main_plot_key(plot_to_main_value)
             plot_key = str(dev_id) + key
             # Only plot if key exists in plot_data
@@ -247,7 +248,8 @@ class BasePlotConfig:
             } or None if axis should be hidden
         """
         # Default: simple show/hide based on plot_to_main_value
-        if plot_to_main_value:
+        # Note: empty string '' is a valid key (e.g., CPC dilution corrected concentration)
+        if plot_to_main_value is not None and plot_to_main_value is not False:
             return {
                 'viewbox_type': self.get_viewbox_type(),
                 'show': True
@@ -269,7 +271,7 @@ class CPCPlotConfig(BasePlotConfig):
 
     def get_plot_keys(self):
         """CPC has concentration and raw concentration."""
-        return ['', ':raw']
+        return [':conc', ':raw']
 
     def get_rolling_buffer_keys(self):
         """CPC has 24-hour rolling buffers for pulse analysis."""
@@ -296,19 +298,24 @@ class CPCPlotConfig(BasePlotConfig):
             for widget in data_holder.device_widgets.values():
                 if widget.device_config.device_type == PSM:
                     connected_cpc = widget.device_config.extra_params.get('connected_cpc', 'None')
-                    if connected_cpc == dev_id:
+                    # Convert to int for comparison (JSON stores as string)
+                    try:
+                        connected_cpc_id = int(connected_cpc) if connected_cpc != 'None' else None
+                    except (ValueError, TypeError):
+                        connected_cpc_id = None
+                    if connected_cpc_id == dev_id:
                         # Plot PSM concentration instead of CPC
                         psm_id = widget.device_config.device_id
                         psm_data = data_holder.get_device_data(psm_id)
                         if psm_data:
-                            plot_data[str(dev_id)][time_counter] = psm_data.concentration_psm
+                            plot_data[str(dev_id)+':conc'][time_counter] = psm_data.concentration_psm
                             psm_connection = True
                         break
 
         # If not connected to PSM, plot CPC concentration
         if not psm_connection:
             cpc_data = self.device.current_data
-            plot_data[str(dev_id)][time_counter] = cpc_data.concentration
+            plot_data[str(dev_id)+':conc'][time_counter] = cpc_data.concentration
 
         # Always store raw concentration
         cpc_data = self.device.current_data
@@ -365,8 +372,28 @@ class CPCPlotConfig(BasePlotConfig):
 
     def get_legend_value(self, dev_id, time_counter, plot_data, selector_value=None):
         """Round CPC values to 2 decimals for legend."""
-        value = plot_data[str(dev_id)][time_counter]
+        key = selector_value if selector_value else ':raw'
+        value = plot_data[str(dev_id)+key][time_counter]
         return round(value, 2)
+
+    def get_main_axis_config(self, plot_to_main_value):
+        """Get axis configuration for CPC main plot."""
+        if not plot_to_main_value:
+            return None
+
+        axis_configs = {
+            ':conc': {'label': 'CPC Concentration (dilution corrected)', 'units': '#/cc', 'color': 'w'},
+            ':raw': {'label': 'CPC Concentration (raw)', 'units': '#/cc', 'color': 'w'},
+        }
+
+        config = axis_configs.get(plot_to_main_value)
+        if config:
+            return {
+                'viewbox_type': CPC,
+                'show': True,
+                **config
+            }
+        return None
 
     def update_auxiliary_plots(self, dev_id, time_counter, x_time_list, plot_data, data_holder):
         """Update CPC pulse quality scatter plot and labels."""
@@ -452,7 +479,7 @@ class TSICPCPlotConfig(BasePlotConfig):
 
     def get_plot_keys(self):
         """TSI CPC has concentration and raw concentration."""
-        return ['', ':raw']
+        return [':conc', ':raw']
 
     def get_viewbox_type(self):
         """TSI CPC uses CPC viewbox."""
@@ -461,24 +488,23 @@ class TSICPCPlotConfig(BasePlotConfig):
     def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
         """Store TSI CPC concentration (same as CPC but no pulse quality)."""
         # Check for PSM connection (same logic as CPC)
-        psm_connection = False
         if data_holder and hasattr(data_holder, 'device_widgets'):
             for widget in data_holder.device_widgets.values():
                 if widget.device_config.device_type == PSM:
                     connected_cpc = widget.device_config.extra_params.get('connected_cpc', 'None')
-                    if connected_cpc == dev_id:
+                    # Convert to int for comparison (JSON stores as string)
+                    try:
+                        connected_cpc_id = int(connected_cpc) if connected_cpc != 'None' else None
+                    except (ValueError, TypeError):
+                        connected_cpc_id = None
+                    if connected_cpc_id == dev_id:
                         psm_id = widget.device_config.device_id
                         psm_data = data_holder.get_device_data(psm_id)
                         if psm_data:
-                            plot_data[str(dev_id)][time_counter] = psm_data.concentration_psm
-                            psm_connection = True
+                            plot_data[str(dev_id)+':conc'][time_counter] = psm_data.concentration_psm
                         break
 
-        if not psm_connection:
-            cpc_data = self.device.current_data
-            plot_data[str(dev_id)][time_counter] = cpc_data.concentration
-
-        # Raw concentration
+        # Always store raw concentration
         cpc_data = self.device.current_data
         plot_data[str(dev_id)+':raw'][time_counter] = cpc_data.concentration
 
@@ -496,8 +522,28 @@ class TSICPCPlotConfig(BasePlotConfig):
 
     def get_legend_value(self, dev_id, time_counter, plot_data, selector_value=None):
         """Round TSI CPC values to 2 decimals for legend."""
-        value = plot_data[str(dev_id)][time_counter]
+        key = selector_value if selector_value else ':raw'
+        value = plot_data[str(dev_id)+key][time_counter]
         return round(value, 2)
+
+    def get_main_axis_config(self, plot_to_main_value):
+        """Get axis configuration for TSI CPC main plot."""
+        if not plot_to_main_value:
+            return None
+
+        axis_configs = {
+            ':conc': {'label': 'TSI CPC Concentration (dilution corrected)', 'units': '#/cc', 'color': 'w'},
+            ':raw': {'label': 'TSI CPC Concentration (raw)', 'units': '#/cc', 'color': 'w'},
+        }
+
+        config = axis_configs.get(plot_to_main_value)
+        if config:
+            return {
+                'viewbox_type': CPC,
+                'show': True,
+                **config
+            }
+        return None
 
 
 class PSMPlotConfig(BasePlotConfig):
@@ -536,20 +582,19 @@ class PSMPlotConfig(BasePlotConfig):
 
         Only saturator flow is plotted. Concentration is handled via connected CPC.
         """
-        # None means "don't plot" - hide axis
-        if plot_to_main_value is None:
+        # None or False means "don't plot" - hide axis
+        if plot_to_main_value is None or plot_to_main_value is False:
             return None
 
-        # Only saturator flow is available
-        if plot_to_main_value == '':
-            return {
-                'viewbox_type': PSM,
-                'show': True,
-                'label': 'PSM saturator flow rate',
-                'units': 'lpm',
-                'color': 'w'
-            }
-        return None
+        # Saturator flow is the only option
+        # True (default) or '' both mean show flow
+        return {
+            'viewbox_type': PSM,
+            'show': True,
+            'label': 'PSM saturator flow rate',
+            'units': 'lpm',
+            'color': 'w'
+        }
 
     def get_legend_value(self, dev_id, time_counter, plot_data, selector_value=None):
         """Get value for legend (saturator flow)."""
@@ -578,6 +623,13 @@ class PSMPlotConfig(BasePlotConfig):
         if cpc_id == 'None':
             return
 
+        # Convert cpc_id to int if it's a string (JSON config stores as string)
+        if isinstance(cpc_id, str):
+            try:
+                cpc_id = int(cpc_id)
+            except ValueError:
+                return  # Invalid ID
+
         # Check if connected CPC is doing pulse analysis
         cpc_widget = data_holder.device_widgets.get(cpc_id)
         if cpc_widget and hasattr(cpc_widget, 'pulse_analysis_index'):
@@ -588,12 +640,7 @@ class PSMPlotConfig(BasePlotConfig):
         if not cpc_widget or not cpc_widget.is_connected:
             return
 
-        # Get PSM and CPC widgets
         psm_widget = self.device
-        cpc_widget = psm_widget.connected_cpc_device
-        if not cpc_widget:
-            return
-
         cpc_data = cpc_widget.current_data
         psm_data = psm_widget.current_data
         psm_settings = psm_widget.settings

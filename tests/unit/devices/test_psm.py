@@ -400,11 +400,6 @@ class TestPSMDataArrayConversion:
 class TestPSMCPCIntegration:
     """Test PSM integration with connected CPC."""
 
-    def test_psm_has_connected_cpc_device_reference(self, psm_retrofit_widget):
-        """Test that PSM has a reference for connected CPC device."""
-        assert hasattr(psm_retrofit_widget, 'connected_cpc_device')
-        assert psm_retrofit_widget.connected_cpc_device is None  # Initially None
-
     def test_psm_data_has_cpc_fields(self, psm_retrofit_widget):
         """Test that PSM data structure has fields for CPC data."""
         assert hasattr(psm_retrofit_widget.current_data, 'cpc_concentration')
