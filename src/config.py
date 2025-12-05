@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, Q
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.11.0"
+version_number = "0.11.1"
 
 # Define instrument types
 CPC = 1
@@ -34,6 +34,7 @@ EDILUTER = 6
 PSM2 = 7
 TSI_CPC = 8
 AFM = 9
+AFC = 10
 EXAMPLE_DEVICE = -1
 
 # App-wide constants
@@ -91,6 +92,6 @@ else:
 
 __all__ = [
     'MAX_TIME_SEC', 'PULSE_ANALYSIS_THRESHOLDS', 'TIMER_DELAY_MS', 'IDN_INQUIRY_DELAY_MS', 'FIRMWARE_INQUIRY_DELAY_MS', 'version_number', 'CPC', 'PSM', 'ELECTROMETER', 'CO2_SENSOR', 'RHTP', 'EDILUTER',
-    'PSM2', 'TSI_CPC', 'AFM', 'EXAMPLE_DEVICE', 'CPC_ERRORS', 'PSM_ERRORS',
+    'PSM2', 'TSI_CPC', 'AFM', 'AFC', 'EXAMPLE_DEVICE', 'CPC_ERRORS', 'PSM_ERRORS',
     'osx_mode', 'save_path', 'resource_path', 'script_path'
 ]

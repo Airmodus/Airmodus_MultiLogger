@@ -815,6 +815,15 @@ class AFMPlotConfig(BasePlotConfig):
         return None
 
 
+class AFCPlotConfig(BasePlotConfig):
+    """Plot configuration for AFC (Airmodus Flow Controller)."""
+
+    def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
+        """Store AFC flow value."""
+        afc_data = self.device.current_data
+        plot_data[str(dev_id)][time_counter] = afc_data.flow
+
+
 class ExampleDevicePlotConfig(BasePlotConfig):
     """Plot configuration for example/test device."""
 

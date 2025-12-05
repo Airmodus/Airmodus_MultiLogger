@@ -2,7 +2,7 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QWidget, QVBoxLayout
 from PyQt5.QtCore import Qt
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, LegendItem
-from config import CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, PSM2, TSI_CPC
+from config import CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, PSM2, AFC, TSI_CPC
 
 # main plot widget
 class MainPlot(QWidget):
@@ -108,6 +108,17 @@ class MainPlot(QWidget):
         self.axes[EDILUTER].setLabel('eDiluter temperature', units='°C', color='w') # set label
         self.set_axis_style(self.axes[EDILUTER], 'w') # set axis style
         self.axes[EDILUTER].linkToView(self.viewboxes[EDILUTER]) # link axis to viewbox
+        
+        # AFC viewbox
+        self.viewboxes[AFC] = ViewBox() # create viewbox
+        self.plot.scene().addItem(self.viewboxes[AFC]) # add viewbox to scene
+        self.viewboxes[AFC].setXLink(self.plot) # link x axis of viewbox to x axis of plot
+        # AFC axis
+        self.axes[AFC] = AxisItem('right') # create axis
+        self.plot.layout.addItem(self.axes[AFC], 2, 9) # add axis to plot
+        self.axes[AFC].setLabel('AFC flow', units='slm', color='w') # set label
+        self.set_axis_style(self.axes[AFC], 'w') # set axis style
+        self.axes[AFC].linkToView(self.viewboxes[AFC]) # link axis to viewbox
 
         # Example device viewbox
         self.viewboxes[EXAMPLE_DEVICE] = ViewBox() # create viewbox
@@ -115,7 +126,7 @@ class MainPlot(QWidget):
         self.viewboxes[EXAMPLE_DEVICE].setXLink(self.plot) # link x axis of viewbox to x axis of plot
         # Example device axis
         self.axes[EXAMPLE_DEVICE] = AxisItem('right') # create axis
-        self.plot.layout.addItem(self.axes[EXAMPLE_DEVICE], 2, 9) # add axis to plot
+        self.plot.layout.addItem(self.axes[EXAMPLE_DEVICE], 2, 10) # add axis to plot
         self.axes[EXAMPLE_DEVICE].setLabel('Example device', units='units', color='w') # set label
         self.set_axis_style(self.axes[EXAMPLE_DEVICE], 'w') # set axis style
         self.axes[EXAMPLE_DEVICE].linkToView(self.viewboxes[EXAMPLE_DEVICE]) # link axis to viewbox

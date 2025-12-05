@@ -50,6 +50,7 @@ class DeviceManager(QObject):
         for device_config in self.config.devices:
             dev_id = device_config.device_id
             device_widget = self.data_holder.device_widgets.get(dev_id)
+            device_type = device_config.device_type
 
             if not device_widget:
                 continue  # Skip if widget not found
@@ -92,7 +93,10 @@ class DeviceManager(QObject):
                         if connection.serial_port != port:
                             connection.set_port(port)
                         # Start background connection - next cycle will detect success
-                        connection.connect_async()
+                        if device_type in [AFM, AFC]:
+                            connection.connect_async(disable_dtr=True)
+                        else:
+                            connection.connect_async()
 
             # Handle connection state changes
             if device_widget:

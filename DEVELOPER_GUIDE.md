@@ -104,7 +104,7 @@ Define a dataclass to hold your device's measurements:
 
 ```python
 from dataclasses import dataclass
-from math import nan
+from numpy import nan
 
 @dataclass
 class FlowMeterData:
@@ -125,11 +125,12 @@ class FlowMeterData:
 
 **Guidelines**:
 - Use `@dataclass` decorator
-- Initialize numeric fields to `nan` from `math` module
+- Initialize numeric fields to `nan` from `numpy` module
 - Initialize string fields to sensible defaults
 - Add docstrings describing each field
 - Implement `to_array()` method
 - Use descriptive field names with units in comments
+- Add the new data class to `create_device_data()` function
 
 **Benefits of Dataclasses**:
 - Named fields instead of magic indices
@@ -153,6 +154,7 @@ class FlowMeterSettings:
     alarm_threshold: float = 10.0   # L/min
     calibration_factor: float = 1.0 # Dimensionless
 ```
+Add the new settings class to `create_device_settings()` function.
 
 **Note**: Skip this step if your device is monitor-only (SimpleDevice).
 
@@ -176,9 +178,9 @@ class FlowMeterPlotConfig(BasePlotConfig):
 
         Keys are appended to device ID:
         - '' (empty string) = main plot (e.g., '0')
-        - '_temp' = auxiliary plot (e.g., '0_temp')
+        - ':t' = auxiliary plot (e.g., '0:t')
         """
-        return ['', '_temp', '_pressure']
+        return ['', ':t', ':p']
 
     def get_plot_values(self, dev_id, time_counter, plot_data,
                        device_param, data_holder):
@@ -197,10 +199,10 @@ class FlowMeterPlotConfig(BasePlotConfig):
             self.device.current_data.flow_rate
 
         # Auxiliary plots for other measurements
-        plot_data[f'{dev_id}_temp'][time_counter] = \
+        plot_data[f'{dev_id}:t'][time_counter] = \
             self.device.current_data.temperature
 
-        plot_data[f'{dev_id}_pressure'][time_counter] = \
+        plot_data[f'{dev_id}:p'][time_counter] = \
             self.device.current_data.pressure
 
     def update_main_plot(self, curve, data):
@@ -223,15 +225,15 @@ class FlowMeterPlotConfig(BasePlotConfig):
 
 | Method | Required | Purpose |
 |--------|----------|---------|
-| `get_plot_keys()` | Yes | Define which plot arrays to create |
+| `get_plot_keys()` | No | Define which plot arrays to create |
 | `get_plot_values()` | Yes | Extract data into plot arrays |
 | `update_main_plot()` | No | Custom rendering for main plot |
 | `update_individual_plots()` | No | Update device-specific plot tabs |
 
 **Plot Key Naming**:
 - `''` (empty string): Main plot value
-- `'_suffix'`: Auxiliary plots (temperature, pressure, etc.)
-- Keys become: `{dev_id}{suffix}` (e.g., `'0'`, `'0_temp'`)
+- `':suffix'`: Auxiliary plots (temperature, pressure, etc.)
+- Keys become: `{dev_id}{suffix}` (e.g., `'0'`, `'0:t'`)
 
 ---
 
@@ -303,10 +305,10 @@ class FlowMeterDataWriter(BaseDataWriter):
 | Method | Required | Purpose |
 |--------|----------|---------|
 | `get_dat_header()` | Yes | Column headers for .dat file |
-| `get_dat_data()` | Yes | Data line for .dat file |
-| `supports_par_file()` | Yes | Whether device has .par file |
-| `get_par_header()` | If supports_par | Column headers for .par file |
-| `get_par_data()` | If supports_par | Data line for .par file |
+| `get_dat_data()` | No | Data line for .dat file |
+| `should_write_par()` | If .par file | Whether device has .par file |
+| `get_par_header()` | If .par file | Column headers for .par file |
+| `get_par_data()` | If .par file | Data line for .par file |
 
 ---
 

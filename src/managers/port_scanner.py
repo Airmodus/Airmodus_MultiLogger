@@ -377,7 +377,9 @@ class PortScannerThread(QThread):
                 port=port,
                 baudrate=115200,  # Standard baud rate for Airmodus devices
                 timeout=self.connection_timeout,
-                write_timeout=self.connection_timeout
+                write_timeout=self.connection_timeout,
+                dsrdtr=False,
+                dtr=False
             )
 
             # Small delay before sending command
@@ -452,7 +454,7 @@ class PortScannerThread(QThread):
         """
         try:
             # Try to open the port exclusively
-            ser = serial.Serial(port, timeout=0.05)
+            ser = serial.Serial(port, timeout=0.05, dsrdtr=False, dtr=False)
             ser.close()
             return False
         except serial.SerialException:

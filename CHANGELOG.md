@@ -1,5 +1,8 @@
 # Airmodus MultiLogger - Software change log
 
+### 0.11.1 - 2025.12.05
+- AFM device type (WIP)
+
 ### 0.11.0 - 2025.11.10
 - Refactor merge
 

@@ -33,6 +33,7 @@ from devices import (
     eDiluterWidget,
     AFMWidget,
     TSIWidget,
+    AFCWidget,
     ExampleDeviceWidget
 )
 

@@ -1,6 +1,6 @@
 from PyQt5.QtGui import QFont
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, PlotItem
-from config import RHTP, CPC, PSM, CO2_SENSOR, EDILUTER, AFM, EXAMPLE_DEVICE
+from config import RHTP, CPC, PSM, CO2_SENSOR, EDILUTER, AFM, AFC, EXAMPLE_DEVICE
 
 # triple plot widget containing three plots
 class TriplePlot(GraphicsLayoutWidget):
@@ -247,6 +247,8 @@ class SinglePlot(GraphicsLayoutWidget):
             self.plot.setLabel('left', "eDiluter temperature", units='°C')
         elif device_type == AFM:
             self.plot.setLabel('left', "Flow", units='lpm')
+        elif device_type == AFC:
+            self.plot.setLabel('left', "Standard flow", units='slm')
         elif device_type == EXAMPLE_DEVICE:
             self.plot.setLabel('left', "Example device", units='units')
         

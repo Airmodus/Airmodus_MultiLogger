@@ -12,6 +12,8 @@ from dataclasses import dataclass, field, asdict
 from numpy import nan, isnan
 from typing import Protocol, List, Optional, Dict, Any
 import math
+from config import (CPC, PSM, PSM2, ELECTROMETER, CO2_SENSOR, RHTP,
+                    AFM, EDILUTER, TSI_CPC, AFC, EXAMPLE_DEVICE)
 
 class DeviceDataProtocol(Protocol):
     """Common interface all device data must implement."""
@@ -224,6 +226,25 @@ class AFMData:
 
 
 @dataclass
+class AFCData:
+    """AFC (Airmodus Flow Controller) data structure (4 fields)."""
+    flow: float = nan               # slm (standard liters per minute)
+    average_flow: float = nan       # slm average (10 seconds)
+    temperature: float = nan        # °C
+    error_status: int = 0           # 0 = no error, 1 = error
+
+    def to_array(self) -> list:
+        """Convert to array in order expected by legacy code."""
+        return [
+            self.flow,
+            self.average_flow,
+            self.temperature,
+            self.flow_setpoint,
+            self.error_status
+        ]
+
+
+@dataclass
 class EDiluterData:
     """eDiluter data structure (12 fields)."""
     status: str = ""
@@ -289,8 +310,6 @@ def create_device_data(device_type):
     Returns:
         Appropriate DeviceData instance
     """
-    from config import (CPC, PSM, PSM2, ELECTROMETER, CO2_SENSOR,
-                       RHTP, AFM, EDILUTER, TSI_CPC, EXAMPLE_DEVICE)
 
     data_classes = {
         CPC: CPCData,
@@ -302,6 +321,7 @@ def create_device_data(device_type):
         AFM: AFMData,
         EDILUTER: EDiluterData,
         TSI_CPC: TSI_CPCData,
+        AFC: AFCData,
         EXAMPLE_DEVICE: ExampleDeviceData
     }
 
@@ -430,6 +450,18 @@ class PSMSettings:
         return result
 
 
+@dataclass
+class AFCSettings:
+    """AFC settings structure."""
+    flow_setpoint: float = nan      # slm setpoint
+    
+    def to_array(self) -> list:
+        """Convert to array for legacy code."""
+        return [
+            self.flow_setpoint
+        ]
+
+
 def create_device_settings(device_type):
     """
     Create appropriate settings object for device type.
@@ -440,12 +472,13 @@ def create_device_settings(device_type):
     Returns:
         Appropriate DeviceSettings instance or None
     """
-    from config import CPC, PSM, PSM2
 
     if device_type == CPC:
         return CPCSettings()
     elif device_type in [PSM, PSM2]:
         return PSMSettings()
+    elif device_type == AFC:
+        return AFCSettings()
 
     # Other devices don't have typed settings yet
     return None
