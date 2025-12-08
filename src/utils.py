@@ -1,5 +1,5 @@
 from numpy import full, nan, roll
-from config import MAX_TIME_SEC, CPC, PSM, PSM2
+from config import MAX_TIME_SEC, CPC, PSM
 
 # compile settings list for CPC .par file
 def compile_cpc_settings(prnt, pall):
@@ -73,6 +73,11 @@ def cpc_flow_send(psm_widget, value, device_widgets):
     cpc_id = psm_widget.device_config.extra_params.get('connected_cpc', 'None')
     # if PSM is connected to CPC, send value to CPC
     if cpc_id != 'None':
+        # Convert to int for lookup (JSON stores as string)
+        try:
+            cpc_id = int(cpc_id)
+        except (ValueError, TypeError):
+            return
         # get connected CPC widget
         cpc_widget = device_widgets.get(cpc_id)
         if cpc_widget and cpc_widget.device_config.device_type == CPC:

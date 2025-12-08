@@ -51,6 +51,10 @@ def params_dict_to_app_config(params_dict: Dict[str, Any]) -> AppConfig:
         if device_type is None:
             continue
 
+        # Migrate PSM2 (7) to PSM (2) - version now determined by firmware
+        if device_type == 7:  # PSM2 legacy constant
+            device_type = config.PSM
+
         # Get device type name
         device_type_name = _get_device_type_name(device_type)
 
@@ -110,8 +114,7 @@ def _get_device_type_name(device_type: int) -> str:
     """Convert device type ID to human-readable name."""
     type_map = {
         config.CPC: "CPC",
-        config.PSM: "PSM Retrofit",
-        config.PSM2: "PSM 2.0",
+        config.PSM: "PSM",  # Version (2.0/Retrofit) determined by firmware
         config.ELECTROMETER: "Electrometer",
         config.CO2_SENSOR: "CO2 sensor",
         config.RHTP: "RHTP",

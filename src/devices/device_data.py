@@ -289,13 +289,12 @@ def create_device_data(device_type):
     Returns:
         Appropriate DeviceData instance
     """
-    from config import (CPC, PSM, PSM2, ELECTROMETER, CO2_SENSOR,
+    from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR,
                        RHTP, AFM, EDILUTER, TSI_CPC, EXAMPLE_DEVICE)
 
     data_classes = {
         CPC: CPCData,
         PSM: PSMData,
-        PSM2: PSMData,
         ELECTROMETER: ElectrometerData,
         CO2_SENSOR: CO2Data,
         RHTP: RHTPData,
@@ -440,11 +439,11 @@ def create_device_settings(device_type):
     Returns:
         Appropriate DeviceSettings instance or None
     """
-    from config import CPC, PSM, PSM2
+    from config import CPC, PSM
 
     if device_type == CPC:
         return CPCSettings()
-    elif device_type in [PSM, PSM2]:
+    elif device_type == PSM:
         return PSMSettings()
 
     # Other devices don't have typed settings yet
@@ -567,6 +566,17 @@ class DeviceConfig:
         raw_port = config_data.get('com_port', '')
         if isinstance(raw_port, int) and raw_port > 0:
             config_data['com_port'] = f"COM{raw_port}"
+
+        # Migrate PSM2 (7) to PSM (2) - version now determined by firmware
+        from config import PSM
+        if config_data.get('device_type') == 7:  # PSM2 legacy constant
+            config_data['device_type'] = PSM
+            config_data['device_type_name'] = 'PSM'
+
+        # Normalize PSM device_type_name (old configs may have "PSM Retrofit" or "PSM 2.0")
+        if config_data.get('device_type') == PSM:
+            if config_data.get('device_type_name') in ('PSM Retrofit', 'PSM 2.0'):
+                config_data['device_type_name'] = 'PSM'
 
         return cls(**config_data)
 

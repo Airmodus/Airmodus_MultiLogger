@@ -7,7 +7,7 @@ To add a new device, simply add one entry to this registry.
 New devices can use the @register_device decorator for automatic registration.
 """
 
-from config import (CPC, PSM, PSM2, ELECTROMETER, CO2_SENSOR, RHTP, AFM,
+from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM,
                    EDILUTER, TSI_CPC, EXAMPLE_DEVICE)
 
 
@@ -191,18 +191,6 @@ def setup_psm_connections(widget, device_config, connection, app):
     widget.set_tab.drying.clicked.connect(
         lambda: connection.send_message(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
 
-    # Wire up connected CPC device reference
-    def update_connected_cpc():
-        """Update PSM's reference to connected CPC widget."""
-        cpc_id = device_config.extra_params.get('connected_cpc', 'None')
-        if cpc_id != 'None':
-            widget.connected_cpc_device = app.data_holder.device_widgets.get(cpc_id)
-        else:
-            widget.connected_cpc_device = None
-
-    # Set initial reference
-    update_connected_cpc()
-
 
 def setup_ediluter_connections(widget, device_config, connection, app):
     """Set up eDiluter-specific connections."""
@@ -264,11 +252,7 @@ DEVICE_REGISTRY = {
         has_special_setup=False
     ),
 
-    PSM2: DeviceConfig(
-        widget_class=PSMWidget,
-        setup_connections_func=setup_psm_connections,
-        has_special_setup=False
-    ),
+    # PSM2 removed - configs migrated to PSM, version determined by firmware
 
     ELECTROMETER: DeviceConfig(
         widget_class=ElectrometerWidget,

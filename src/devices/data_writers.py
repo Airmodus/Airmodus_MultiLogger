@@ -6,7 +6,7 @@ should be written to files, including headers, file types, and
 special cases like 10Hz logging or connected device handling.
 """
 
-from config import CPC, PSM, PSM2
+from config import CPC, PSM
 from devices.base_data_writer import BaseDataWriter
 
 
@@ -92,21 +92,21 @@ class PSMDataWriter(BaseDataWriter):
         return ['dat', 'par']
 
     def get_dat_header(self):
-        """Return PSM .dat file header (different for PSM vs PSM2)."""
-        if self.device.dev_type == PSM2:
+        """Return PSM .dat file header (different for PSM 2.0 vs Retrofit)."""
+        if self.device.is_psm2:
             # PSM 2.0 includes vacuum flow
             return 'YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,Vacuum flow (lpm),PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)'
         else:
-            # PSM 1.0
+            # Retrofit
             return 'YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)'
 
     def get_par_header(self):
-        """Return PSM .par file header (different for PSM vs PSM2)."""
-        if self.device.dev_type == PSM2:
+        """Return PSM .par file header (different for PSM 2.0 vs Retrofit)."""
+        if self.device.is_psm2:
             # PSM 2.0 has no CO flow
             return 'YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input'
         else:
-            # PSM 1.0 includes CO flow
+            # Retrofit includes CO flow
             return 'YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input'
 
     def should_write_par(self, data_holder):
@@ -136,7 +136,12 @@ class PSMDataWriter(BaseDataWriter):
         # Check connected CPC par_updates
         cpc_id = self.device.device_config.extra_params.get('connected_cpc', 'None')
         if cpc_id != 'None':
-            if cpc_id in data_holder.par_updates and data_holder.par_updates[cpc_id] == 1:
+            # Convert to int for lookup (JSON stores as string)
+            try:
+                cpc_id_int = int(cpc_id)
+            except (ValueError, TypeError):
+                cpc_id_int = None
+            if cpc_id_int in data_holder.par_updates and data_holder.par_updates[cpc_id_int] == 1:
                 return True
 
         return False
@@ -156,13 +161,18 @@ class PSMDataWriter(BaseDataWriter):
         # Add connected CPC settings if applicable
         cpc_id = self.device.device_config.extra_params.get('connected_cpc', 'None')
         if cpc_id != 'None':
+            # Convert to int for lookup (JSON stores as string)
+            try:
+                cpc_id_int = int(cpc_id)
+            except (ValueError, TypeError):
+                cpc_id_int = None
             # Find CPC device widget in device_widgets
-            cpc_widget = data_holder.device_widgets.get(cpc_id)
+            cpc_widget = data_holder.device_widgets.get(cpc_id_int)
 
             # If CPC widget exists and is Airmodus CPC, write settings
             if cpc_widget and cpc_widget.device_config.device_type == CPC:
                 cpc_idn = cpc_widget.device_config.serial_number
-                cpc_settings = data_holder.get_device_settings(cpc_id)
+                cpc_settings = data_holder.get_device_settings(cpc_id_int)
 
                 if cpc_settings:
                     connected_cpc_settings = [

@@ -12,7 +12,7 @@ instead of inheriting bloated plotting methods.
 import logging
 import traceback
 from numpy import nan, nanmean, array, polyval
-from config import PSM, PSM2, CPC, TSI_CPC, ELECTROMETER, RHTP, AFM, CO2_SENSOR, EDILUTER, EXAMPLE_DEVICE
+from config import PSM, CPC, TSI_CPC, ELECTROMETER, RHTP, AFM, CO2_SENSOR, EDILUTER, EXAMPLE_DEVICE
 
 
 class BasePlotConfig:
@@ -80,7 +80,8 @@ class BasePlotConfig:
             plot_to_main_value: Value of "Plot to main" parameter
         """
         # Default behavior: plot the primary key if enabled
-        if plot_to_main_value:
+        # Note: empty string '' is a valid key (e.g., CPC dilution corrected concentration)
+        if plot_to_main_value is not None and plot_to_main_value is not False:
             key = self.get_main_plot_key(plot_to_main_value)
             plot_key = str(dev_id) + key
             # Only plot if key exists in plot_data
@@ -247,7 +248,8 @@ class BasePlotConfig:
             } or None if axis should be hidden
         """
         # Default: simple show/hide based on plot_to_main_value
-        if plot_to_main_value:
+        # Note: empty string '' is a valid key (e.g., CPC dilution corrected concentration)
+        if plot_to_main_value is not None and plot_to_main_value is not False:
             return {
                 'viewbox_type': self.get_viewbox_type(),
                 'show': True
@@ -269,7 +271,7 @@ class CPCPlotConfig(BasePlotConfig):
 
     def get_plot_keys(self):
         """CPC has concentration and raw concentration."""
-        return ['', ':raw']
+        return [':conc', ':raw']
 
     def get_rolling_buffer_keys(self):
         """CPC has 24-hour rolling buffers for pulse analysis."""
@@ -294,21 +296,26 @@ class CPCPlotConfig(BasePlotConfig):
         psm_connection = False
         if data_holder and hasattr(data_holder, 'device_widgets'):
             for widget in data_holder.device_widgets.values():
-                if widget.device_config.device_type in [PSM, PSM2]:
+                if widget.device_config.device_type == PSM:
                     connected_cpc = widget.device_config.extra_params.get('connected_cpc', 'None')
-                    if connected_cpc == dev_id:
+                    # Convert to int for comparison (JSON stores as string)
+                    try:
+                        connected_cpc_id = int(connected_cpc) if connected_cpc != 'None' else None
+                    except (ValueError, TypeError):
+                        connected_cpc_id = None
+                    if connected_cpc_id == dev_id:
                         # Plot PSM concentration instead of CPC
                         psm_id = widget.device_config.device_id
                         psm_data = data_holder.get_device_data(psm_id)
                         if psm_data:
-                            plot_data[str(dev_id)][time_counter] = psm_data.concentration_psm
+                            plot_data[str(dev_id)+':conc'][time_counter] = psm_data.concentration_psm
                             psm_connection = True
                         break
 
         # If not connected to PSM, plot CPC concentration
         if not psm_connection:
             cpc_data = self.device.current_data
-            plot_data[str(dev_id)][time_counter] = cpc_data.concentration
+            plot_data[str(dev_id)+':conc'][time_counter] = cpc_data.concentration
 
         # Always store raw concentration
         cpc_data = self.device.current_data
@@ -365,8 +372,28 @@ class CPCPlotConfig(BasePlotConfig):
 
     def get_legend_value(self, dev_id, time_counter, plot_data, selector_value=None):
         """Round CPC values to 2 decimals for legend."""
-        value = plot_data[str(dev_id)][time_counter]
+        key = selector_value if selector_value else ':raw'
+        value = plot_data[str(dev_id)+key][time_counter]
         return round(value, 2)
+
+    def get_main_axis_config(self, plot_to_main_value):
+        """Get axis configuration for CPC main plot."""
+        if not plot_to_main_value:
+            return None
+
+        axis_configs = {
+            ':conc': {'label': 'CPC Concentration (dilution corrected)', 'units': '#/cc', 'color': 'w'},
+            ':raw': {'label': 'CPC Concentration (raw)', 'units': '#/cc', 'color': 'w'},
+        }
+
+        config = axis_configs.get(plot_to_main_value)
+        if config:
+            return {
+                'viewbox_type': CPC,
+                'show': True,
+                **config
+            }
+        return None
 
     def update_auxiliary_plots(self, dev_id, time_counter, x_time_list, plot_data, data_holder):
         """Update CPC pulse quality scatter plot and labels."""
@@ -452,7 +479,7 @@ class TSICPCPlotConfig(BasePlotConfig):
 
     def get_plot_keys(self):
         """TSI CPC has concentration and raw concentration."""
-        return ['', ':raw']
+        return [':conc', ':raw']
 
     def get_viewbox_type(self):
         """TSI CPC uses CPC viewbox."""
@@ -461,24 +488,23 @@ class TSICPCPlotConfig(BasePlotConfig):
     def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
         """Store TSI CPC concentration (same as CPC but no pulse quality)."""
         # Check for PSM connection (same logic as CPC)
-        psm_connection = False
         if data_holder and hasattr(data_holder, 'device_widgets'):
             for widget in data_holder.device_widgets.values():
-                if widget.device_config.device_type in [PSM, PSM2]:
+                if widget.device_config.device_type == PSM:
                     connected_cpc = widget.device_config.extra_params.get('connected_cpc', 'None')
-                    if connected_cpc == dev_id:
+                    # Convert to int for comparison (JSON stores as string)
+                    try:
+                        connected_cpc_id = int(connected_cpc) if connected_cpc != 'None' else None
+                    except (ValueError, TypeError):
+                        connected_cpc_id = None
+                    if connected_cpc_id == dev_id:
                         psm_id = widget.device_config.device_id
                         psm_data = data_holder.get_device_data(psm_id)
                         if psm_data:
-                            plot_data[str(dev_id)][time_counter] = psm_data.concentration_psm
-                            psm_connection = True
+                            plot_data[str(dev_id)+':conc'][time_counter] = psm_data.concentration_psm
                         break
 
-        if not psm_connection:
-            cpc_data = self.device.current_data
-            plot_data[str(dev_id)][time_counter] = cpc_data.concentration
-
-        # Raw concentration
+        # Always store raw concentration
         cpc_data = self.device.current_data
         plot_data[str(dev_id)+':raw'][time_counter] = cpc_data.concentration
 
@@ -496,23 +522,87 @@ class TSICPCPlotConfig(BasePlotConfig):
 
     def get_legend_value(self, dev_id, time_counter, plot_data, selector_value=None):
         """Round TSI CPC values to 2 decimals for legend."""
-        value = plot_data[str(dev_id)][time_counter]
+        key = selector_value if selector_value else ':raw'
+        value = plot_data[str(dev_id)+key][time_counter]
         return round(value, 2)
+
+    def get_main_axis_config(self, plot_to_main_value):
+        """Get axis configuration for TSI CPC main plot."""
+        if not plot_to_main_value:
+            return None
+
+        axis_configs = {
+            ':conc': {'label': 'TSI CPC Concentration (dilution corrected)', 'units': '#/cc', 'color': 'w'},
+            ':raw': {'label': 'TSI CPC Concentration (raw)', 'units': '#/cc', 'color': 'w'},
+        }
+
+        config = axis_configs.get(plot_to_main_value)
+        if config:
+            return {
+                'viewbox_type': CPC,
+                'show': True,
+                **config
+            }
+        return None
 
 
 class PSMPlotConfig(BasePlotConfig):
     """Plot configuration for PSM."""
 
+    def get_plot_keys(self):
+        """PSM has saturator flow. Concentration is plotted via connected CPC."""
+        return ['']
+
     def get_plot_values(self, dev_id, time_counter, plot_data, data_holder=None):
-        """Store PSM saturator flow."""
+        """Store PSM saturator flow. Concentration is handled by connected CPC."""
         psm_data = self.device.current_data
+        # Saturator flow (default key '')
         plot_data[str(dev_id)][time_counter] = psm_data.saturator_flow
 
     def get_viewbox_type(self):
-        """PSM2 uses PSM viewbox."""
-        if self.device.dev_type == PSM2:
-            return PSM
-        return self.device.dev_type
+        """PSM uses PSM viewbox (both 2.0 and Retrofit)."""
+        return PSM
+
+    def update_main_plot(self, dev_id, time_counter, x_time_list, plot_data,
+                        curve, plot_to_main_value):
+        """Update main plot with selected value (Flow or Concentration)."""
+        # None means "don't plot", empty string '' means Flow (default)
+        if plot_to_main_value is not None:
+            key = self.get_main_plot_key(plot_to_main_value)
+            curve.setData(
+                x=x_time_list[:time_counter+1],
+                y=plot_data[str(dev_id)+key][:time_counter+1]
+            )
+        else:
+            curve.setData(x=[], y=[])
+
+    def get_main_axis_config(self, plot_to_main_value):
+        """
+        Get axis configuration for PSM main plot.
+
+        Only saturator flow is plotted. Concentration is handled via connected CPC.
+        """
+        # None or False means "don't plot" - hide axis
+        if plot_to_main_value is None or plot_to_main_value is False:
+            return None
+
+        # Saturator flow is the only option
+        # True (default) or '' both mean show flow
+        return {
+            'viewbox_type': PSM,
+            'show': True,
+            'label': 'PSM saturator flow rate',
+            'units': 'lpm',
+            'color': 'w'
+        }
+
+    def get_legend_value(self, dev_id, time_counter, plot_data, selector_value=None):
+        """Get value for legend (saturator flow)."""
+        key = self.get_main_plot_key(selector_value)
+        if key is not None:
+            value = plot_data[str(dev_id)+key][time_counter]
+            return round(value, 2) if value == value else value  # Handle NaN
+        return ''
 
     def calculate_connected_cpc_values(self, data_holder):
         """
@@ -533,6 +623,13 @@ class PSMPlotConfig(BasePlotConfig):
         if cpc_id == 'None':
             return
 
+        # Convert cpc_id to int if it's a string (JSON config stores as string)
+        if isinstance(cpc_id, str):
+            try:
+                cpc_id = int(cpc_id)
+            except ValueError:
+                return  # Invalid ID
+
         # Check if connected CPC is doing pulse analysis
         cpc_widget = data_holder.device_widgets.get(cpc_id)
         if cpc_widget and hasattr(cpc_widget, 'pulse_analysis_index'):
@@ -543,12 +640,7 @@ class PSMPlotConfig(BasePlotConfig):
         if not cpc_widget or not cpc_widget.is_connected:
             return
 
-        # Get PSM and CPC widgets
         psm_widget = self.device
-        cpc_widget = psm_widget.connected_cpc_device
-        if not cpc_widget:
-            return
-
         cpc_data = cpc_widget.current_data
         psm_data = psm_widget.current_data
         psm_settings = psm_widget.settings
@@ -557,8 +649,8 @@ class PSMPlotConfig(BasePlotConfig):
         cpc_flow = float(psm_settings.cpc_inlet_flow) if psm_settings else 0.0
 
         # Calculate inlet flow based on PSM type
-        if dev_type == PSM:
-            # Get CO flow rate from PSM widget
+        if not self.device.is_psm2:
+            # Retrofit: Get CO flow rate from PSM widget
             co_flow = round(psm_widget.set_tab.set_co_flow.value_spinbox.value(), 3)
             if co_flow == 0:  # CO flow not set
                 psm_widget.set_tab.set_co_flow.set_red_color()
@@ -567,8 +659,8 @@ class PSMPlotConfig(BasePlotConfig):
                 psm_widget.set_tab.set_co_flow.set_default_color()
             inlet_flow = cpc_flow + co_flow - float(psm_data.saturator_flow) - float(psm_data.excess_flow)
 
-        elif dev_type == PSM2:
-            # Get vacuum flow from PSM data
+        else:
+            # PSM 2.0: Get vacuum flow from PSM data
             vacuum_flow = float(psm_data.vacuum_flow)
             inlet_flow = cpc_flow + vacuum_flow - float(psm_data.saturator_flow) - float(psm_data.excess_flow)
             inlet_flow0 = cpc_flow + vacuum_flow - 4 + float(psm_data.saturator_flow) + float(psm_data.excess_flow)
@@ -582,17 +674,22 @@ class PSMPlotConfig(BasePlotConfig):
         # Calculate polynomial correction factor
         if psm_data.poly_correction == 0:
             # Calculate from saturator flow
-            if dev_type == PSM:
+            if not self.device.is_psm2:
+                # Retrofit polynomial coefficients
                 pcor = array([-0.0272052, 0.11394213, -0.08959011, -0.20675596, 0.24343024, 1.10531145])
-            elif dev_type == PSM2:
+            else:
+                # PSM 2.0 polynomial coefficients
                 pcor = array([0.12949491, -0.50587616, 0.57214191, 0.76108161])
             poly_correction = polyval(pcor, float(psm_data.saturator_flow))
         else:
             poly_correction = psm_data.poly_correction
 
         # Calculate dilution correction factor
-        dilution_correction_factor = (inlet_flow + float(psm_data.excess_flow) + float(psm_data.saturator_flow)) / inlet_flow
-        if dev_type == PSM2:
+        if not self.device.is_psm2:
+            # Retrofit dilution calculation
+            dilution_correction_factor = (inlet_flow + float(psm_data.excess_flow) + float(psm_data.saturator_flow)) / inlet_flow
+        else:
+            # PSM 2.0 dilution calculation
             dilution_correction_factor = (inlet_flow + 4 - float(psm_data.excess_flow) - float(psm_data.saturator_flow)) / inlet_flow
 
         # Calculate concentration from PSM

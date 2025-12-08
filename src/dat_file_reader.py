@@ -3,6 +3,7 @@ PSM .dat File Reader
 
 Utility functions for parsing MultiLogger .dat files to extract historical scan data.
 Supports both PSM 1.0 (Retrofit) and PSM 2.0 file formats.
+Auto-detects format from file header (presence of "Vacuum flow" column).
 """
 
 import os
@@ -11,12 +12,24 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple
-from config import PSM, PSM2
+
+
+def _detect_psm2_from_file(filepath: str) -> bool:
+    """
+    Auto-detect if a .dat file is PSM 2.0 format by checking header for Vacuum flow column.
+
+    Returns True if PSM 2.0 (has Vacuum flow column), False if Retrofit.
+    """
+    try:
+        with open(filepath, 'r', encoding='UTF-8') as f:
+            header = f.readline()
+            return 'Vacuum flow' in header
+    except Exception:
+        return False  # Default to Retrofit on error
 
 
 def find_todays_psm_file(
     file_path: str,
-    device_type: int,
     serial_number: str = "",
     device_nickname: str = "",
     file_tag: str = ""
@@ -26,7 +39,6 @@ def find_todays_psm_file(
 
     Args:
         file_path: Directory where .dat files are saved
-        device_type: PSM (2) or PSM2 (7)
         serial_number: Device serial number (optional)
         device_nickname: Device nickname (optional)
         file_tag: File tag from settings (optional)
@@ -37,53 +49,55 @@ def find_todays_psm_file(
     # Get today's date
     today = datetime.now().strftime("%Y%m%d")
 
-    # Determine device type name
-    device_type_names = {
-        PSM: "PSM Retrofit",
-        PSM2: "PSM 2.0"
-    }
-    device_type_name = device_type_names.get(device_type, "PSM Retrofit")
+    # Search for all PSM filename variants
+    # Current: "PSM" (Retrofit) and "PSM2" (2.0)
+    # Legacy: "PSM Retrofit" and "PSM 2.0"
+    device_type_names = ["PSM", "PSM2", "PSM Retrofit", "PSM 2.0"]
+    all_matching_files = []
 
-    # Build filename pattern with wildcards
-    # Format: YYYYMMDD_HHMMSS[_SerialNumber]_DeviceType[_DeviceNickname][_FileTag].dat
-    pattern_parts = [today, "*"]  # wildcard for timestamp
+    for device_type_name in device_type_names:
+        # Build filename pattern with wildcards
+        # Format: YYYYMMDD_HHMMSS[_SerialNumber]_DeviceType[_DeviceNickname][_FileTag].dat
+        pattern_parts = [today, "*"]  # wildcard for timestamp
 
-    if serial_number:
-        pattern_parts.append(f"*{serial_number}*")
+        if serial_number:
+            pattern_parts.append(f"*{serial_number}*")
 
-    pattern_parts.append(device_type_name)
+        pattern_parts.append(device_type_name)
 
-    if device_nickname:
-        pattern_parts.append(f"*{device_nickname}*")
+        if device_nickname:
+            pattern_parts.append(f"*{device_nickname}*")
 
-    if file_tag:
-        pattern_parts.append(f"*{file_tag}*")
+        if file_tag:
+            pattern_parts.append(f"*{file_tag}*")
 
-    # Create glob pattern
-    pattern = os.path.join(file_path, "_".join(pattern_parts) + ".dat")
+        # Create glob pattern
+        pattern = os.path.join(file_path, "_".join(pattern_parts) + ".dat")
 
-    # Find matching files
-    matching_files = glob.glob(pattern)
+        # Find matching files
+        matching_files = glob.glob(pattern)
 
-    if not matching_files:
-        # Try without optional fields
-        simple_pattern = os.path.join(file_path, f"{today}_*{device_type_name}*.dat")
-        matching_files = glob.glob(simple_pattern)
+        if not matching_files:
+            # Try without optional fields
+            simple_pattern = os.path.join(file_path, f"{today}_*{device_type_name}*.dat")
+            matching_files = glob.glob(simple_pattern)
 
-    if matching_files:
+        all_matching_files.extend(matching_files)
+
+    if all_matching_files:
         # Return most recent file (by modification time)
-        return max(matching_files, key=os.path.getmtime)
+        return max(all_matching_files, key=os.path.getmtime)
 
     return None
 
 
-def read_psm_dat_file(filepath: str, device_type: int) -> pd.DataFrame:
+def read_psm_dat_file(filepath: str) -> pd.DataFrame:
     """
     Read PSM .dat file and extract relevant columns.
+    Auto-detects PSM version (2.0 vs Retrofit) from file header.
 
     Args:
         filepath: Path to .dat file
-        device_type: PSM (2) or PSM2 (7)
 
     Returns:
         DataFrame with columns: timestamp, satflow, scan_status, concentration
@@ -96,6 +110,9 @@ def read_psm_dat_file(filepath: str, device_type: int) -> pd.DataFrame:
         raise FileNotFoundError(f"File not found: {filepath}")
 
     try:
+        # Auto-detect PSM version from header
+        is_psm2 = _detect_psm2_from_file(filepath)
+
         # Read CSV file
         df = pd.read_csv(filepath)
 
@@ -103,8 +120,7 @@ def read_psm_dat_file(filepath: str, device_type: int) -> pd.DataFrame:
         if len(df.columns) < 20:
             raise ValueError(f"Invalid file format: expected at least 20 columns, got {len(df.columns)}")
 
-        # Column indices differ between PSM 1.0 and PSM 2.0
-        is_psm2 = (device_type == PSM2)
+        # Column indices differ between PSM Retrofit and PSM 2.0
 
         # Extract column names (handle potential variations)
         timestamp_col = df.columns[0]
@@ -201,17 +217,16 @@ def detect_scans_from_dat(df: pd.DataFrame) -> List[Dict[str, np.ndarray]]:
 
 def load_historical_scans(
     file_path: str,
-    device_type: int,
     serial_number: str = "",
     device_nickname: str = "",
     file_tag: str = ""
 ) -> Tuple[Optional[str], List[Dict[str, np.ndarray]]]:
     """
     High-level function to find, read, and parse today's PSM .dat file.
+    Auto-detects PSM version from file content.
 
     Args:
         file_path: Directory where .dat files are saved
-        device_type: PSM (2) or PSM2 (7)
         serial_number: Device serial number (optional)
         device_nickname: Device nickname (optional)
         file_tag: File tag from settings (optional)
@@ -227,7 +242,6 @@ def load_historical_scans(
     # Find today's file
     filepath = find_todays_psm_file(
         file_path=file_path,
-        device_type=device_type,
         serial_number=serial_number,
         device_nickname=device_nickname,
         file_tag=file_tag
@@ -236,8 +250,8 @@ def load_historical_scans(
     if filepath is None:
         return None, []
 
-    # Read and parse file
-    df = read_psm_dat_file(filepath, device_type)
+    # Read and parse file (auto-detects PSM version)
+    df = read_psm_dat_file(filepath)
     scans = detect_scans_from_dat(df)
 
     return filepath, scans

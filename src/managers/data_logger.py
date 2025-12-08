@@ -78,7 +78,12 @@ class DataLogger:
             serial_number = '_' + serial_number
 
         # get device type name from device config
+        # For PSM devices, use "PSM2" for 2.0 and "PSM" for Retrofit
         device_type_name = device_config.device_type_name
+        if device_type_name == "PSM":
+            widget = self.data_holder.device_widgets.get(device_config.device_id)
+            if widget and hasattr(widget, 'is_psm2') and widget.is_psm2:
+                device_type_name = "PSM2"
 
         # get device nickname from device config
         device_nickname = device_config.device_nickname

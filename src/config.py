@@ -91,6 +91,7 @@ else:
 
 __all__ = [
     'MAX_TIME_SEC', 'PULSE_ANALYSIS_THRESHOLDS', 'TIMER_DELAY_MS', 'IDN_INQUIRY_DELAY_MS', 'FIRMWARE_INQUIRY_DELAY_MS', 'version_number', 'CPC', 'PSM', 'ELECTROMETER', 'CO2_SENSOR', 'RHTP', 'EDILUTER',
-    'PSM2', 'TSI_CPC', 'AFM', 'EXAMPLE_DEVICE', 'CPC_ERRORS', 'PSM_ERRORS',
+    'TSI_CPC', 'AFM', 'EXAMPLE_DEVICE', 'CPC_ERRORS', 'PSM_ERRORS',
     'osx_mode', 'save_path', 'resource_path', 'script_path'
 ]
+# Note: PSM2 constant kept for backwards compatibility but not exported

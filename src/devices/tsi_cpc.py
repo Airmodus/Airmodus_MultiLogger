@@ -21,16 +21,69 @@ class TSIWidget(SimpleDevice):
         # Add Device tab at the end
         self._add_device_tab_at_end()
 
+        # Hide main plot dropdown by default (will be shown when PSM connects)
+        if hasattr(self, 'main_plot_dropdown') and self.main_plot_dropdown:
+            self.main_plot_dropdown.hide()
+            if hasattr(self, '_main_plot_label') and self._main_plot_label:
+                self._main_plot_label.hide()
+
     def get_plot_keys(self):
         """TSI CPC has concentration and raw concentration plots like Airmodus CPC."""
-        return ['', ':raw']
+        return [':conc', ':raw']
 
     def get_plot_value_labels(self):
         """Return labels for TSI CPC plot values."""
         return {
-            '': 'Concentration (#/cc)',
+            ':conc': 'Dilution Corrected Concentration (#/cc)',
             ':raw': 'Raw Concentration (#/cc)'
         }
+
+    def is_connected_to_psm(self, app_config=None):
+        """Check if any PSM has this CPC as its connected CPC."""
+        if not app_config:
+            return False
+        from config import PSM
+        dev_id = self.device_config.device_id
+        for device_config in app_config.devices:
+            if device_config.device_type == PSM:
+                connected_cpc = device_config.extra_params.get('connected_cpc', 'None')
+                try:
+                    if connected_cpc != 'None' and int(connected_cpc) == dev_id:
+                        return True
+                except (ValueError, TypeError):
+                    pass
+        return False
+
+    def update_main_plot_dropdown_visibility(self, app_config):
+        """Show/hide main plot dropdown based on PSM connection."""
+        if not hasattr(self, 'main_plot_dropdown') or not self.main_plot_dropdown:
+            return
+
+        has_psm = self.is_connected_to_psm(app_config)
+
+        if has_psm:
+            self.main_plot_dropdown.show()
+            if hasattr(self, '_main_plot_label'):
+                self._main_plot_label.show()
+            if self.device_config.plot_to_main != ':conc':
+                index = self.main_plot_dropdown.findData(':conc')
+                if index >= 0:
+                    self.main_plot_dropdown.setCurrentIndex(index)
+                    self.device_config.plot_to_main = ':conc'
+                    if hasattr(self, 'on_config_changed') and self.on_config_changed:
+                        self.on_config_changed()
+        else:
+            self.main_plot_dropdown.hide()
+            if hasattr(self, '_main_plot_label'):
+                self._main_plot_label.hide()
+            if self.device_config.plot_to_main != ':raw':
+                self.device_config.plot_to_main = ':raw'
+                if hasattr(self, 'on_config_changed') and self.on_config_changed:
+                    self.on_config_changed()
+
+    def restore_ui_state(self, device_config, app_config):
+        """Restore TSI CPC UI state from configuration."""
+        self.update_main_plot_dropdown_visibility(app_config)
 
     def get_read_command(self):
         """TSI CPC auto-pushes data, no read command needed."""

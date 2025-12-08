@@ -17,7 +17,6 @@ from PyQt5.QtGui import QIcon
 import pyqtgraph as pg
 from scipy.interpolate import interp1d
 from dat_file_reader import load_historical_scans, get_scan_time_range
-from config import PSM, PSM2
 
 
 class PSMContourTab(QWidget):
@@ -516,7 +515,6 @@ class PSMContourTab(QWidget):
 
         try:
             # Get device information from config
-            device_type = self.device_config.device_type
             serial_number = self.device_config.serial_number
             device_nickname = self.device_config.device_nickname
 
@@ -530,10 +528,9 @@ class PSMContourTab(QWidget):
 
             print(f"Searching for today's .dat file in: {file_path}")
 
-            # Load historical scans from .dat file
+            # Load historical scans from .dat file (auto-detects PSM version)
             filepath, scans = load_historical_scans(
                 file_path=file_path,
-                device_type=device_type,
                 serial_number=serial_number,
                 device_nickname=device_nickname,
                 file_tag=file_tag
