@@ -166,6 +166,7 @@ class MainWindow(QMainWindow):
 
         # Create container for tab bar
         tab_bar_container = QWidget()
+        tab_bar_container.setStyleSheet("background: transparent;")
         tab_bar_container_layout = QHBoxLayout(tab_bar_container)
         tab_bar_container_layout.setContentsMargins(0, 0, 0, 0)
         tab_bar_container_layout.setSpacing(0)
@@ -173,7 +174,10 @@ class MainWindow(QMainWindow):
         # create tab bar (ONLY the tabs, not the content)
         self.device_tab_bar = BrowserStyleTabBar()
         self.device_tab_bar.setStyleSheet("""
-            QTabBar::tab {
+            QTabBar#mainDeviceTabBar {
+                background: transparent;
+            }
+            QTabBar#mainDeviceTabBar::tab {
                 min-width: 150px;
                 max-width: 200px;
                 height: 53px;
@@ -181,26 +185,27 @@ class MainWindow(QMainWindow):
                 background-color: #3a3a3a;
                 color: #cccccc;
                 border: none;
+                margin: 0px;
                 margin-right: 2px;
                 font-size: 14px;
                 font-weight: 500;
             }
-            QTabBar::tab:selected {
+            QTabBar#mainDeviceTabBar::tab:selected {
                 background-color: #2a2a2a;
                 color: #ffffff;
                 border: none;
-                border-bottom: 3px solid #ffffff;
-                padding-bottom: 5px;
+                border-bottom: 5px solid #ffffff;
+                padding-bottom: 3px;
             }
-            QTabBar::tab:hover {
+            QTabBar#mainDeviceTabBar::tab:hover:!selected {
                 background-color: #4a4a4a;
             }
 
             /* Hide native scroll buttons (we use custom overlays) */
-            QTabBar::scroller {
+            QTabBar#mainDeviceTabBar::scroller {
                 width: 0px;
             }
-            QTabBar QToolButton {
+            QTabBar#mainDeviceTabBar QToolButton {
                 width: 0px;
                 height: 0px;
             }

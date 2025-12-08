@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QStatusBar, QLabel, QWidget, QHBoxLayout, QToolTip, 
 from PyQt5.QtCore import Qt, QEvent, QTimer
 from PyQt5.QtGui import QCursor, QFontMetrics, QFont
 from datetime import datetime as dt
+import logging
 
 
 class VerticalSeparator(QFrame):
@@ -413,7 +414,7 @@ class MultiLoggerStatusBar(QStatusBar):
             try:
                 return device_widget.get_status_bar_text()
             except Exception as e:
-                print(f"Error getting status bar text for dev_id {dev_id}: {e}")
+                logging.error(f"Error getting status bar text for dev_id {dev_id}: {e}")
                 return ""
 
         # Fallback

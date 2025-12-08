@@ -352,7 +352,6 @@ class CPCPlotConfig(BasePlotConfig):
                 plot_data[str(dev_id)+':pd'][-1] = nan
                 plot_data[str(dev_id)+':pr'][-1] = nan
         except Exception as e:
-            print(traceback.format_exc())
             logging.exception(e)
             # Store NaN on error
             plot_data[str(dev_id)+':pd'][-1] = nan
@@ -463,7 +462,6 @@ class CPCPlotConfig(BasePlotConfig):
             # Add analysis point to pulse quality widget
             self.device.pulse_quality.add_analysis_point(pulse_duration, threshold_value)
         except Exception as e:
-            print(traceback.format_exc())
             logging.exception(e)
             # Raise exception to signal error - plot_manager will catch and stop analysis
             raise PulseAnalysisError(f"Pulse analysis failed for device {dev_id}") from e

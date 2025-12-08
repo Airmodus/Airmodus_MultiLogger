@@ -8,13 +8,15 @@ Requires calibration file to perform size distribution inversion.
 
 import os
 import time
+import logging
 import numpy as np
 import pandas as pd
 from typing import Optional, List, Dict
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QFileDialog, QMenu, QSizePolicy, QCheckBox,
-                              QLineEdit, QSpinBox)
-from PyQt5.QtCore import Qt, QPoint
+                              QLineEdit, QSpinBox, QProgressBar, QGraphicsOpacityEffect,
+                              QWidgetAction, QActionGroup)
+from PyQt5.QtCore import Qt, QPoint, QTimer, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QIcon, QIntValidator
 import pyqtgraph as pg
 from scipy.interpolate import interp1d
@@ -41,6 +43,45 @@ class TimeAxisItemForContour(pg.AxisItem):
         return ticks
 
 
+class BinAxisItem(pg.AxisItem):
+    """
+    Custom Y-axis that shows bin limit labels at bin boundaries.
+    Y values are bin indices (0 to num_bins), labels show actual diameter values.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.bin_limits = None  # Will be set when calibration loads
+
+    def set_bin_limits(self, bin_limits):
+        """Set the bin limits for label generation."""
+        self.bin_limits = bin_limits
+
+    def tickValues(self, minVal, maxVal, size):
+        """Generate tick positions at bin boundaries."""
+        if self.bin_limits is None:
+            return super().tickValues(minVal, maxVal, size)
+
+        # Create ticks at each bin boundary (0, 1, 2, ..., num_bins)
+        num_bins = len(self.bin_limits) - 1
+        ticks = [(1, list(range(num_bins + 1)))]  # Level 1 ticks at all boundaries
+        return ticks
+
+    def tickStrings(self, values, scale, spacing):
+        """Convert bin indices to diameter labels."""
+        if self.bin_limits is None:
+            return [f"{v:.1f}" for v in values]
+
+        labels = []
+        for v in values:
+            idx = int(round(v))
+            if 0 <= idx < len(self.bin_limits):
+                labels.append(f"{self.bin_limits[idx]:.1f}")
+            else:
+                labels.append("")
+        return labels
+
+
 class PSMContourTab(QWidget):
     """
     PSM Contour Plot Tab Widget
@@ -57,10 +98,31 @@ class PSMContourTab(QWidget):
         self.app_config = app_config  # Will be set later by PSM widget
         self.on_config_changed = None  # Callback to notify parent when config changes
 
+        # Set longer tooltip duration for this widget and children (10 seconds)
+        self.setToolTipDuration(10000)
+
+        # Try to set application-wide tooltip duration
+        try:
+            from PyQt5.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app:
+                app.setStyleSheet(app.styleSheet() + """
+                    QToolTip {
+                        background-color: #333;
+                        color: white;
+                        border: 1px solid #555;
+                        padding: 8px;
+                        font-size: 12px;
+                    }
+                """)
+        except:
+            pass
+
         # State flags
         self.calibration_loaded = False
         self.plot_initialized = False
         self._historical_data_loaded = False  # Track if we've loaded historical data
+        self._loading_in_progress = False  # Track if loading is currently happening
 
         # Calibration data
         self.calibration_df = None
@@ -81,6 +143,14 @@ class PSMContourTab(QWidget):
         self.averaging_enabled = False
         self.avg_n = 5  # Default: average over 5 scans
 
+        # Follow latest setting - auto-scroll to show newest data
+        self.follow_latest = True  # Default: follow new scans
+
+        # Time window and colormap settings
+        self.time_window_hours = 24  # Default: 24 hours (options: 1, 6, 12, 24, 48)
+        self.current_colormap = 'CET-R4'  # Default colormap
+        self.crosshair_enabled = True  # Show crosshair by default
+
         # Custom time axis for contour plot
         self.time_axis = None
 
@@ -88,7 +158,7 @@ class PSMContourTab(QWidget):
         self.loaded_file_path = None
 
         # File boundary markers for visualization
-        self.file_boundary_lines = []  # List of InfiniteLine items
+        self.file_boundary_lines = []  # List of PlotCurveItem items
         self.file_boundary_labels = []  # List of TextItem items
 
         # Create UI
@@ -145,37 +215,72 @@ class PSMContourTab(QWidget):
         plot_layout = QVBoxLayout()
         plot_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Top bar with averaging controls and settings button
+        # Top bar with controls and settings button
         top_bar = QHBoxLayout()
 
-        # Averaging controls
-        self.avg_checkbox = QCheckBox("Average")
-        self.avg_checkbox.setChecked(self.averaging_enabled)
-        self.avg_checkbox.toggled.connect(self._on_avg_toggle)
-        top_bar.addWidget(self.avg_checkbox)
+        # Follow latest toggle - auto-scroll to show newest data
+        self.follow_checkbox = QCheckBox("Follow")
+        self.follow_checkbox.setChecked(self.follow_latest)
+        self.follow_checkbox.setToolTip("Auto-scroll to show latest scan data")
+        self.follow_checkbox.setToolTipDuration(10000)  # 10 seconds
+        self.follow_checkbox.toggled.connect(self._on_follow_toggle)
+        top_bar.addWidget(self.follow_checkbox)
 
-        self.avg_spinbox = QSpinBox()
-        self.avg_spinbox.setRange(1, 50)
-        self.avg_spinbox.setValue(self.avg_n)
-        self.avg_spinbox.setFixedWidth(50)
-        self.avg_spinbox.setSuffix(" scans")
-        self.avg_spinbox.valueChanged.connect(self._on_avg_n_changed)
-        self.avg_spinbox.setEnabled(self.averaging_enabled)
-        top_bar.addWidget(self.avg_spinbox)
-
-        top_bar.addSpacing(20)
+        top_bar.addSpacing(10)
 
         # File label to show which data file is loaded
         self.file_label = QLabel("")
         self.file_label.setStyleSheet("color: #666; font-size: 11px;")
         top_bar.addWidget(self.file_label)
 
+        top_bar.addSpacing(10)
+
+        # Date label showing current date
+        self.date_label = QLabel("")
+        self.date_label.setStyleSheet("color: #888; font-size: 11px;")
+        top_bar.addWidget(self.date_label)
+
         top_bar.addStretch()
+
+        # Scan progress indicator
+        self.scan_status_label = QLabel("Idle")
+        self.scan_status_label.setStyleSheet("color: #888; font-size: 11px; min-width: 70px;")
+        top_bar.addWidget(self.scan_status_label)
+
+        self.scan_progress_bar = QProgressBar()
+        self.scan_progress_bar.setFixedWidth(80)
+        self.scan_progress_bar.setFixedHeight(16)
+        self.scan_progress_bar.setRange(0, 100)
+        self.scan_progress_bar.setValue(0)
+        self.scan_progress_bar.setTextVisible(False)
+        self.scan_progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #555;
+                border-radius: 3px;
+                background-color: #333;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+                border-radius: 2px;
+            }
+        """)
+        top_bar.addWidget(self.scan_progress_bar)
+
+        top_bar.addSpacing(10)
+
+        # Scan counter
+        self.scan_counter_label = QLabel("Scans: 0")
+        self.scan_counter_label.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+        top_bar.addWidget(self.scan_counter_label)
+
+        top_bar.addSpacing(10)
 
         # Settings button
         self.settings_btn = QPushButton("⚙")
         self.settings_btn.setFixedSize(30, 30)
         self.settings_btn.setStyleSheet("font-size: 18px;")
+        self.settings_btn.setToolTip("Contour plot settings")
+        self.settings_btn.setToolTipDuration(10000)
         self.settings_btn.clicked.connect(self._show_settings_menu)
         top_bar.addWidget(self.settings_btn)
 
@@ -184,13 +289,16 @@ class PSMContourTab(QWidget):
         # Create custom time axis for X-axis (shows HH:MM:SS based on scan index)
         self.time_axis = TimeAxisItemForContour(orientation='bottom')
 
-        # Create PyQtGraph widget with custom axis
+        # Create custom bin axis for Y-axis (shows diameter values at bin boundaries)
+        self.bin_axis = BinAxisItem(orientation='left')
+
+        # Create PyQtGraph widget with custom axes
         self.graphics_widget = pg.GraphicsLayoutWidget()
-        self.plot = self.graphics_widget.addPlot(axisItems={'bottom': self.time_axis})
+        self.plot = self.graphics_widget.addPlot(axisItems={'bottom': self.time_axis, 'left': self.bin_axis})
 
         # Configure axes
         self.plot.setLabel('bottom', 'Scan Time')
-        self.plot.setLabel('left', 'Particle Diameter', units='nm')
+        self.plot.setLabel('left', 'Particle Diameter (nm)')
         self.plot.showGrid(x=True, y=True, alpha=0.3)
 
         # Create image item for contour
@@ -212,17 +320,76 @@ class PSMContourTab(QWidget):
         # Set background to black so NaN gaps show as black
         self.graphics_widget.setBackground('k')
 
+        # Crosshair lines for value readout
+        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('w', width=1, style=Qt.DashLine))
+        self.hLine = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('w', width=1, style=Qt.DashLine))
+        self.plot.addItem(self.vLine, ignoreBounds=True)
+        self.plot.addItem(self.hLine, ignoreBounds=True)
+        self.vLine.hide()
+        self.hLine.hide()
+
+        # Value overlay label (top-left corner)
+        self.value_label = pg.TextItem(text="", color='w', anchor=(0, 0))
+        value_font = pg.QtGui.QFont()
+        value_font.setStyleHint(pg.QtGui.QFont.Monospace)
+        value_font.setPointSize(10)
+        self.value_label.setFont(value_font)
+        self.plot.addItem(self.value_label, ignoreBounds=True)
+        self.value_label.hide()
+
+        # Statistics overlay label (bottom-right corner)
+        self.stats_label = pg.TextItem(text="", color=(180, 180, 180), anchor=(1, 1))
+        stats_font = pg.QtGui.QFont()
+        stats_font.setStyleHint(pg.QtGui.QFont.Monospace)
+        stats_font.setPointSize(9)
+        self.stats_label.setFont(stats_font)
+        self.plot.addItem(self.stats_label, ignoreBounds=True)
+
+        # Connect mouse move signal for crosshair
+        self.plot.scene().sigMouseMoved.connect(self._on_mouse_moved)
+
         plot_layout.addWidget(self.graphics_widget)
         self.plot_widget.setLayout(plot_layout)
+
+        # Create loading overlay (shown while historical data loads)
+        self.loading_overlay = QWidget(self.plot_widget)
+        self.loading_overlay.setStyleSheet("background-color: rgba(0, 0, 0, 0.7);")
+        loading_layout = QVBoxLayout(self.loading_overlay)
+        loading_layout.setAlignment(Qt.AlignCenter)
+        self.loading_label = QLabel("Loading historical data...")
+        self.loading_label.setStyleSheet("color: white; font-size: 16px; font-weight: bold;")
+        self.loading_label.setAlignment(Qt.AlignCenter)
+        loading_layout.addWidget(self.loading_label)
+        self.loading_overlay.hide()
 
         # Hide initially
         self.plot_widget.hide()
         self.main_layout.addWidget(self.plot_widget)
 
+    def _show_loading_overlay(self):
+        """Show loading overlay on the plot."""
+        if hasattr(self, 'loading_overlay') and hasattr(self, 'plot_widget'):
+            self.loading_overlay.setGeometry(self.plot_widget.rect())
+            self.loading_overlay.raise_()
+            self.loading_overlay.show()
+            # Process events to ensure overlay is visible
+            from PyQt5.QtWidgets import QApplication
+            QApplication.processEvents()
+
+    def _hide_loading_overlay(self):
+        """Hide loading overlay."""
+        if hasattr(self, 'loading_overlay'):
+            self.loading_overlay.hide()
+
+    def resizeEvent(self, event):
+        """Handle resize to keep loading overlay properly sized."""
+        super().resizeEvent(event)
+        if hasattr(self, 'loading_overlay') and hasattr(self, 'plot_widget'):
+            self.loading_overlay.setGeometry(self.plot_widget.rect())
+
     def _on_avg_toggle(self, enabled: bool):
         """Handle averaging checkbox toggle."""
         self.averaging_enabled = enabled
-        self.avg_spinbox.setEnabled(enabled)
         self._render_contour()
 
     def _on_avg_n_changed(self, value: int):
@@ -230,6 +397,185 @@ class PSMContourTab(QWidget):
         self.avg_n = value
         if self.averaging_enabled:
             self._render_contour()
+
+    def _on_follow_toggle(self, enabled: bool):
+        """Handle follow latest checkbox toggle."""
+        self.follow_latest = enabled
+        if enabled:
+            # Scroll to show latest data
+            self._render_contour()
+
+    def _on_mouse_moved(self, pos):
+        """Handle mouse move events to show crosshair and values."""
+        if not hasattr(self, 'plot') or not hasattr(self, 'vLine'):
+            return
+
+        # Skip if crosshair is disabled
+        if not self.crosshair_enabled:
+            return
+
+        try:
+            if self.plot.sceneBoundingRect().contains(pos):
+                mouse_point = self.plot.vb.mapSceneToView(pos)
+                x, y = mouse_point.x(), mouse_point.y()
+
+                # Update crosshair position
+                self.vLine.setPos(x)
+                self.hLine.setPos(y)
+                self.vLine.show()
+                self.hLine.show()
+
+                # Get concentration value from image at position
+                conc_value = self._get_value_at_position(x, y)
+
+                # Format time from decimal hours
+                hours = int(x) % 24
+                minutes = int((x - int(x)) * 60)
+                time_str = f"{hours:02d}:{minutes:02d}"
+
+                # Find which bin the cursor is in
+                # Y-axis uses bin indices (0 to num_bins)
+                dp_range_str = f"{y:.1f}"  # Default if no bins
+                inside_data_region = False
+                if hasattr(self, 'bin_limits_dp') and self.bin_limits_dp is not None and hasattr(self, 'num_bins'):
+                    bin_limits = self.bin_limits_dp
+                    num_bins = self.num_bins
+
+                    # Check if cursor is inside the data region (bin index 0 to num_bins)
+                    if y >= 0 and y < num_bins:
+                        inside_data_region = True
+                        # Get the bin index directly from y coordinate
+                        bin_idx = int(y)
+                        bin_idx = max(0, min(bin_idx, num_bins - 1))
+
+                        # Get the actual bin limits for that bin index
+                        dp_range_str = f"{bin_limits[bin_idx]:.1f} - {bin_limits[bin_idx + 1]:.1f} nm"
+                    elif y < 0:
+                        dp_range_str = f"< {bin_limits[0]:.1f} nm"
+                    else:
+                        dp_range_str = f"> {bin_limits[-1]:.1f} nm"
+
+                # Update value label
+                # conc_value is log10(dN/dlogDp), show the actual value only if inside data region
+                if inside_data_region and conc_value is not None and not np.isnan(conc_value):
+                    actual_conc = 10 ** conc_value
+
+                    # Calculate cumulative sums below and above current bin
+                    cumul_below, cumul_above = self._get_cumulative_at_position(x, bin_idx)
+                    cumul_str = f"Σ<: {cumul_below:.0f} | Σ>: {cumul_above:.0f}" if cumul_below is not None else ""
+
+                    label_text = f"Time: {time_str}\nDp: {dp_range_str}\ndN/dlogDp: {actual_conc:.0f}"
+                    if cumul_str:
+                        label_text += f"\n{cumul_str}"
+                    self.value_label.setText(label_text)
+                else:
+                    self.value_label.setText(f"Time: {time_str}\nDp: {dp_range_str}\ndN/dlogDp: --")
+
+                # Position label in top-left of visible area
+                view_range = self.plot.viewRange()
+                self.value_label.setPos(view_range[0][0], view_range[1][1])
+                self.value_label.show()
+            else:
+                self.vLine.hide()
+                self.hLine.hide()
+                self.value_label.hide()
+        except Exception:
+            pass  # Silently ignore errors during hover
+
+    def _get_value_at_position(self, x, y):
+        """Get concentration value from image at given plot coordinates (y is bin index)."""
+        if not hasattr(self, '_last_z_data') or self._last_z_data is None:
+            return None
+
+        try:
+            # Get stored transform info (y is in bin index coordinates)
+            pos_x = getattr(self, '_last_pos_x', 0)
+            width = getattr(self, '_last_width', 24)
+            num_bins = getattr(self, '_last_num_bins', 6)
+
+            # Convert plot coordinates to image indices
+            z_data = self._last_z_data
+            n_time, n_bins = z_data.shape
+
+            # X index
+            x_frac = (x - pos_x) / width
+            x_idx = int(x_frac * n_time)
+
+            # Y index (y is bin index, directly maps to image row)
+            y_idx = int(y)
+
+            # Check bounds
+            if 0 <= x_idx < n_time and 0 <= y_idx < n_bins:
+                return z_data[x_idx, y_idx]
+            return None
+        except Exception:
+            return None
+
+    def _get_cumulative_at_position(self, x, bin_idx):
+        """Get cumulative dN/dlogDp below and above the current bin at given x position.
+
+        Returns:
+            Tuple of (sum_below, sum_above) or (None, None) if data unavailable
+        """
+        if not hasattr(self, '_last_z_data') or self._last_z_data is None:
+            return None, None
+
+        try:
+            pos_x = getattr(self, '_last_pos_x', 0)
+            width = getattr(self, '_last_width', 24)
+
+            z_data = self._last_z_data
+            n_time, n_bins = z_data.shape
+
+            # Get x index
+            x_frac = (x - pos_x) / width
+            x_idx = int(x_frac * n_time)
+
+            if x_idx < 0 or x_idx >= n_time:
+                return None, None
+
+            # Get the column of values at this time point
+            column = z_data[x_idx, :]
+
+            # Convert from log10 to linear values, handling NaN
+            linear_values = np.zeros(n_bins)
+            for i in range(n_bins):
+                if not np.isnan(column[i]):
+                    linear_values[i] = 10 ** column[i]
+
+            # Sum below current bin (smaller particles, lower indices)
+            sum_below = np.sum(linear_values[:bin_idx]) if bin_idx > 0 else 0
+
+            # Sum above current bin (larger particles, higher indices)
+            sum_above = np.sum(linear_values[bin_idx + 1:]) if bin_idx < n_bins - 1 else 0
+
+            return sum_below, sum_above
+        except Exception:
+            return None, None
+
+    def _set_time_window(self, hours):
+        """Set the time window for the contour plot."""
+        self.time_window_hours = hours
+        self._render_contour()
+
+    def _set_colormap(self, cmap_name):
+        """Set the colormap for the contour plot."""
+        self.current_colormap = cmap_name
+        self.data_cmap = pg.colormap.get(cmap_name)
+        self.colorbar.setColorMap(self.data_cmap)
+        self._render_contour()
+
+    def _toggle_crosshair(self, enabled):
+        """Toggle crosshair visibility."""
+        self.crosshair_enabled = enabled
+        if not enabled:
+            # Hide crosshair elements
+            if hasattr(self, 'vLine'):
+                self.vLine.hide()
+            if hasattr(self, 'hLine'):
+                self.hLine.hide()
+            if hasattr(self, 'value_label'):
+                self.value_label.hide()
 
     def initialize_after_config_set(self):
         """
@@ -246,9 +592,9 @@ class PSMContourTab(QWidget):
             calib_path = self.device_config.extra_params.get('calibration_file_path', '')
             if calib_path and os.path.exists(calib_path):
                 self._load_calibration(calib_path, auto_load=True)
-        except Exception as e:
+        except Exception:
             # Silently ignore if parameter doesn't exist (old config)
-            print(f"Error auto-loading calibration: {e}")
+            pass
 
     def _browse_calibration_file(self):
         """Open file dialog to select calibration file."""
@@ -332,10 +678,6 @@ class PSMContourTab(QWidget):
                 self.plot_initialized = True
             self.plot_widget.show()
 
-            print(f"Calibration loaded: {num_bins} bins from {min_diameter:.2f} to {max_diameter:.2f} nm")
-            print(f"Bin limits (dp): {self.bin_limits_dp}")
-            print(f"Bin limits (flow): {self.bin_limits_flow}")
-
             # Trigger config save for manual calibration load (not auto-load)
             if not auto_load and self.on_config_changed:
                 self.on_config_changed()
@@ -345,14 +687,13 @@ class PSMContourTab(QWidget):
             from PyQt5.QtCore import QTimer
             QTimer.singleShot(100, self._load_historical_data_if_ready)
 
-        except Exception as e:
-            print(f"Error loading calibration file: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            pass  # Silently handle calibration loading errors
 
     def _load_historical_data_if_ready(self):
-        """Load historical data if calibration and app_config are ready."""
-        if self.calibration_loaded and self.app_config and not self._historical_data_loaded:
+        """Load historical data if calibration and app_config are ready, but only when tab is visible."""
+        # Only load when tab is actually visible (lazy loading)
+        if self.calibration_loaded and self.app_config and not self._historical_data_loaded and self.isVisible():
             self._historical_data_loaded = True
             self._load_historical_data()
 
@@ -414,27 +755,146 @@ class PSMContourTab(QWidget):
         )
         # DO NOT flip - we want bin_lims in descending order (high flow to low flow)
 
-        print(f"DEBUG _calculate_flow_bins:")
-        print(f"  binning_limit (diameters): {binning_limit}")
-        print(f"  bin_lims (flows): {bin_lims}")
-
         return bin_lims
 
     def _show_settings_menu(self):
         """Show settings dropdown menu."""
         menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        menu.setToolTipDuration(10000)  # 10 seconds for menu tooltips
+        menu.setStyleSheet("""
+            QMenu {
+                padding: 5px;
+            }
+            QToolTip {
+                background-color: #333;
+                color: white;
+                border: 1px solid #555;
+                padding: 8px;
+                font-size: 12px;
+            }
+        """)
 
+        # --- Averaging controls ---
+        avg_widget = QWidget()
+        avg_widget.setStyleSheet("QWidget { background: transparent; }")
+        avg_layout = QHBoxLayout(avg_widget)
+        avg_layout.setContentsMargins(10, 5, 10, 5)
+
+        avg_checkbox = QCheckBox("Average over")
+        avg_checkbox.setChecked(self.averaging_enabled)
+        avg_checkbox.toggled.connect(self._on_avg_toggle)
+        avg_layout.addWidget(avg_checkbox)
+
+        avg_spinbox = QSpinBox()
+        avg_spinbox.setRange(1, 50)
+        avg_spinbox.setValue(self.avg_n)
+        avg_spinbox.setMinimumWidth(80)
+        avg_spinbox.setSuffix(" scans")
+        avg_spinbox.setStyleSheet("""
+            QSpinBox {
+                padding: 3px 5px;
+                border: 1px solid #555;
+                border-radius: 3px;
+                background: #2a2a2a;
+                color: white;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                width: 20px;
+                border: none;
+                background: #444;
+            }
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+                background: #555;
+            }
+            QSpinBox::up-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-bottom: 6px solid #aaa;
+            }
+            QSpinBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 6px solid #aaa;
+            }
+        """)
+        avg_spinbox.valueChanged.connect(self._on_avg_n_changed)
+        avg_layout.addWidget(avg_spinbox)
+
+        avg_action = QWidgetAction(menu)
+        avg_action.setDefaultWidget(avg_widget)
+        menu.addAction(avg_action)
+
+        menu.addSeparator()
+
+        # --- Time window selector ---
+        time_label = menu.addAction("Time window:")
+        time_label.setEnabled(False)
+
+        time_group = QActionGroup(menu)
+        time_group.setExclusive(True)
+        for hours in [1, 6, 12, 24, 48]:
+            action = menu.addAction(f"  {hours}h")
+            action.setCheckable(True)
+            action.setChecked(self.time_window_hours == hours)
+            action.triggered.connect(lambda checked, h=hours: self._set_time_window(h))
+            time_group.addAction(action)
+
+        menu.addSeparator()
+
+        # --- Colormap selector ---
+        cmap_label = menu.addAction("Color map:")
+        cmap_label.setEnabled(False)
+
+        cmap_group = QActionGroup(menu)
+        cmap_group.setExclusive(True)
+        colormaps = ['CET-R4', 'viridis', 'plasma', 'inferno', 'magma', 'cividis']
+        for cmap_name in colormaps:
+            action = menu.addAction(f"  {cmap_name}")
+            action.setCheckable(True)
+            action.setChecked(self.current_colormap == cmap_name)
+            action.triggered.connect(lambda checked, c=cmap_name: self._set_colormap(c))
+            cmap_group.addAction(action)
+
+        menu.addSeparator()
+
+        # --- Crosshair toggle ---
+        crosshair_action = menu.addAction("Show crosshair")
+        crosshair_action.setCheckable(True)
+        crosshair_action.setChecked(self.crosshair_enabled)
+        crosshair_action.setToolTip("Show crosshair and values when hovering over the plot")
+        crosshair_action.triggered.connect(self._toggle_crosshair)
+
+        menu.addSeparator()
+
+        # --- Data actions ---
+        reload_action = menu.addAction("Reload historical data")
+        reload_action.setToolTip("Reload scan data from .dat files from the last 24 hours")
+        reload_action.triggered.connect(lambda: (setattr(self, '_historical_data_loaded', False), self._load_historical_data()))
+
+        clear_buffer_action = menu.addAction("Clear scan buffer")
+        clear_buffer_action.setToolTip("Clear all stored scans (historical and live) and reset the contour plot")
+        clear_buffer_action.triggered.connect(self._clear_scan_buffer)
+
+        menu.addSeparator()
+
+        # --- Export ---
+        export_action = menu.addAction("Export as PNG")
+        export_action.setToolTip("Save the current contour plot as a PNG image")
+        export_action.triggered.connect(self._export_png)
+
+        menu.addSeparator()
+
+        # --- Calibration ---
         change_action = menu.addAction("Change calibration file")
+        change_action.setToolTip("Select a different calibration file (.cal) for the PSM")
         change_action.triggered.connect(self._browse_calibration_file)
 
         clear_action = menu.addAction("Clear calibration")
+        clear_action.setToolTip("Remove the current calibration and return to calibration file selection")
         clear_action.triggered.connect(self._clear_calibration)
-
-        clear_buffer_action = menu.addAction("Clear scan buffer")
-        clear_buffer_action.triggered.connect(self._clear_scan_buffer)
-
-        reload_action = menu.addAction("Reload historical data")
-        reload_action.triggered.connect(lambda: (setattr(self, '_historical_data_loaded', False), self._load_historical_data()))
 
         # Show menu at button position
         menu.exec_(self.settings_btn.mapToGlobal(QPoint(0, self.settings_btn.height())))
@@ -463,6 +923,36 @@ class PSMContourTab(QWidget):
         self.scan_buffer = []
         self._current_scan = None
         self._render_contour()
+
+    def _export_png(self):
+        """Export the current contour plot as a PNG image."""
+        if not hasattr(self, 'graphics_widget'):
+            return
+
+        from PyQt5.QtWidgets import QFileDialog
+        from datetime import datetime
+
+        # Generate default filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"PSM_contour_{timestamp}.png"
+
+        # Get save path from user
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Contour Plot",
+            default_name,
+            "PNG Images (*.png);;All Files (*)"
+        )
+
+        if file_path:
+            try:
+                # Use pyqtgraph's built-in export
+                import pyqtgraph.exporters as exporters
+                exporter = exporters.ImageExporter(self.graphics_widget.scene())
+                exporter.parameters()['width'] = 1920  # High resolution
+                exporter.export(file_path)
+            except Exception as e:
+                logging.error(f"Error exporting PNG: {e}")
 
     def update_contour(self, current_data):
         """
@@ -542,8 +1032,62 @@ class PSMContourTab(QWidget):
                     self._current_scan['satflows'].append(current_data.saturator_flow)
                     self._current_scan['concentrations'].append(current_data.cpc_concentration)
 
+        # Update scan progress UI
+        self._update_scan_progress(scan_status, current_data.saturator_flow)
+
         # Update previous status
         self._prev_scan_status = scan_status
+
+    def _update_scan_progress(self, scan_status: str, current_satflow: float):
+        """Update the scan progress bar and status label."""
+        if not hasattr(self, 'scan_status_label') or not hasattr(self, 'scan_progress_bar'):
+            return
+
+        # Get satflow range from calibration
+        if self.bin_limits_flow is None:
+            return
+
+        min_flow = self.bin_limits_flow.min()
+        max_flow = self.bin_limits_flow.max()
+        flow_range = max_flow - min_flow
+
+        if flow_range <= 0:
+            return
+
+        # Update status label and progress based on scan type
+        if self._current_scan is not None and scan_status in ["1", "2", "3", "0"]:
+            scan_type = self._current_scan['type']
+
+            if scan_type == 'up':
+                self.scan_status_label.setText("Up scan")
+                self.scan_status_label.setStyleSheet("color: #4CAF50; font-size: 11px; min-width: 70px;")
+                # Progress: 0% at min_flow, 100% at max_flow
+                progress = (current_satflow - min_flow) / flow_range * 100
+            else:  # down
+                self.scan_status_label.setText("Down scan")
+                self.scan_status_label.setStyleSheet("color: #2196F3; font-size: 11px; min-width: 70px;")
+                # Progress: 0% at max_flow, 100% at min_flow
+                progress = (max_flow - current_satflow) / flow_range * 100
+
+            # Clamp progress to 0-100
+            progress = max(0, min(100, progress))
+            self.scan_progress_bar.setValue(int(progress))
+
+            # Update progress bar color based on scan type
+            if scan_type == 'up':
+                self.scan_progress_bar.setStyleSheet("""
+                    QProgressBar { border: 1px solid #555; border-radius: 3px; background-color: #333; }
+                    QProgressBar::chunk { background-color: #4CAF50; border-radius: 2px; }
+                """)
+            else:
+                self.scan_progress_bar.setStyleSheet("""
+                    QProgressBar { border: 1px solid #555; border-radius: 3px; background-color: #333; }
+                    QProgressBar::chunk { background-color: #2196F3; border-radius: 2px; }
+                """)
+        elif scan_status == "9":
+            self.scan_status_label.setText("Idle")
+            self.scan_status_label.setStyleSheet("color: #888; font-size: 11px; min-width: 70px;")
+            self.scan_progress_bar.setValue(0)
 
     def _finalize_scan(self):
         """Process and store a completed scan."""
@@ -552,6 +1096,11 @@ class PSMContourTab(QWidget):
             return
 
         try:
+            # Show processing status
+            if hasattr(self, 'scan_status_label'):
+                self.scan_status_label.setText("Processing...")
+                self.scan_status_label.setStyleSheet("color: #FFC107; font-size: 11px; min-width: 70px;")
+
             # Convert to numpy arrays
             times = np.array(self._current_scan['times'])
             satflows = np.array(self._current_scan['satflows'])
@@ -570,15 +1119,123 @@ class PSMContourTab(QWidget):
 
             self.scan_buffer.append(scan_result)
 
+            # Update scan counter with flash effect
+            self._update_scan_counter_with_flash()
+
+            # Reset progress bar
+            if hasattr(self, 'scan_progress_bar'):
+                self.scan_progress_bar.setValue(0)
+
             # Update plot
             self._render_contour()
 
+            # Flash the newly added scan on the plot
+            self._flash_last_scan()
+
         except Exception as e:
-            print(f"Error finalizing scan: {e}")
-            import traceback
-            traceback.print_exc()
+            logging.error(f"Error finalizing scan: {e}")
         finally:
             self._current_scan = None
+
+    def _update_scan_counter_with_flash(self):
+        """Update the scan counter and flash it to indicate new scan added."""
+        if not hasattr(self, 'scan_counter_label'):
+            return
+
+        # Update counter text
+        scan_count = len(self.scan_buffer)
+        self.scan_counter_label.setText(f"Scans: {scan_count}")
+
+        # Flash effect - briefly highlight the counter
+        self.scan_counter_label.setStyleSheet(
+            "color: #4CAF50; font-size: 11px; font-weight: bold; background-color: #1a3d1a; border-radius: 3px; padding: 2px;"
+        )
+
+        # Reset style after delay
+        QTimer.singleShot(500, self._reset_counter_style)
+
+        # Also briefly show "Scan added!" status
+        if hasattr(self, 'scan_status_label'):
+            self.scan_status_label.setText("Scan added!")
+            self.scan_status_label.setStyleSheet("color: #4CAF50; font-size: 11px; min-width: 70px; font-weight: bold;")
+            QTimer.singleShot(1000, self._reset_status_to_idle)
+
+    def _reset_counter_style(self):
+        """Reset counter label to normal style."""
+        if hasattr(self, 'scan_counter_label'):
+            self.scan_counter_label.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+
+    def _reset_status_to_idle(self):
+        """Reset status label to idle."""
+        if hasattr(self, 'scan_status_label'):
+            self.scan_status_label.setText("Idle")
+            self.scan_status_label.setStyleSheet("color: #888; font-size: 11px; min-width: 70px;")
+
+    def _flash_last_scan(self):
+        """Flash a vertical highlight on the plot at the position of the last added scan."""
+        if not hasattr(self, 'plot') or len(self.scan_buffer) == 0:
+            return
+
+        try:
+            # Get the last scan's timestamp
+            last_scan = self.scan_buffer[-1]
+            scan_time = last_scan['time']
+
+            # Calculate x position (same logic as in _render_contour)
+            time_24h_ago = pd.Timestamp.now() - pd.Timedelta(hours=24)
+            hours_since_24h_ago = (scan_time - time_24h_ago).total_seconds() / 3600
+            start_hour = time_24h_ago.hour + time_24h_ago.minute / 60
+            x_pos = start_hour + hours_since_24h_ago
+
+            # Get y range (in bin index coordinates: 0 to num_bins)
+            y_min = 0
+            y_max = self.num_bins if hasattr(self, 'num_bins') else 6
+
+            # Create a semi-transparent vertical highlight bar
+            # Remove old flash item if exists
+            if hasattr(self, '_flash_item') and self._flash_item is not None:
+                try:
+                    self.plot.removeItem(self._flash_item)
+                except:
+                    pass
+
+            # Create vertical line/bar at the scan position (in bin index coordinates)
+            self._flash_item = pg.PlotCurveItem(
+                x=[x_pos, x_pos],
+                y=[y_min, y_max],
+                pen=pg.mkPen(color=(76, 175, 80, 200), width=4)  # Green, semi-transparent
+            )
+            self.plot.addItem(self._flash_item)
+
+            # Start fade-out animation
+            self._flash_alpha = 200
+            self._flash_timer = QTimer()
+            self._flash_timer.timeout.connect(self._fade_flash)
+            self._flash_timer.start(50)  # Update every 50ms
+
+        except Exception as e:
+            logging.error(f"Error flashing scan: {e}")
+
+    def _fade_flash(self):
+        """Gradually fade out the flash highlight."""
+        if not hasattr(self, '_flash_item') or self._flash_item is None:
+            if hasattr(self, '_flash_timer'):
+                self._flash_timer.stop()
+            return
+
+        self._flash_alpha -= 25  # Fade by 25 each step
+
+        if self._flash_alpha <= 0:
+            # Remove flash item and stop timer
+            try:
+                self.plot.removeItem(self._flash_item)
+            except:
+                pass
+            self._flash_item = None
+            self._flash_timer.stop()
+        else:
+            # Update pen with new alpha
+            self._flash_item.setPen(pg.mkPen(color=(76, 175, 80, self._flash_alpha), width=4))
 
     def _bin_and_invert_scan(self, satflows: np.ndarray, concentrations: np.ndarray) -> np.ndarray:
         """
@@ -603,13 +1260,6 @@ class PSMContourTab(QWidget):
 
         # Calculate mean concentration per bin
         bin_means = df.groupby('bins', observed=True)['concentration'].mean()
-
-        if self._bin_debug_count < 3:
-            self._bin_debug_count += 1
-            print(f"\n=== Binning Debug (call {self._bin_debug_count}) ===")
-            print(f"Satflow range in scan: {np.min(satflows):.3f} - {np.max(satflows):.3f}")
-            print(f"Concentration range: {np.min(concentrations):.1f} - {np.max(concentrations):.1f}")
-            print(f"Bin means (ascending flow order):\n{bin_means}")
 
         # Calculate dN using diff (like reference line 187)
         # bin_means is sorted by interval (ascending flow = ascending index)
@@ -651,10 +1301,6 @@ class PSMContourTab(QWidget):
             # Get dN for this bin
             dN_val = dN.iloc[i]
 
-            if self._bin_debug_count <= 3 and i == 1:
-                print(f"Bin {i}: flow=[{lower_flow:.3f}, {upper_flow:.3f}], dp=[{lower_dp:.2f}, {upper_dp:.2f}]")
-                print(f"  dlogDp={dlogDp:.4f}, deteff={max_det_eff:.3f}, dN={dN_val:.2f}")
-
             # Calculate dN/dlogDp with detection efficiency correction
             # Set negative dN to 0 first (like reference line 192-194)
             if pd.isna(dN_val) or dN_val < 0:
@@ -665,9 +1311,6 @@ class PSMContourTab(QWidget):
                 # Output bins go from smallest diameter to largest
                 output_idx = self.num_bins - i  # Reverse order for display
                 dN_dlogDp[output_idx] = dN_val / abs(dlogDp) / max_det_eff
-
-        if self._bin_debug_count <= 3:
-            print(f"Final dN/dlogDp: {dN_dlogDp}")
 
         return dN_dlogDp
 
@@ -706,30 +1349,6 @@ class PSMContourTab(QWidget):
         # Use np.diff which computes arr[i+1] - arr[i], so negate to get arr[i] - arr[i+1]
         dN_values = -np.diff(binned_concentrations)
         # dN_values has num_bins - 1 elements
-
-        # Debug output (only for first few calls)
-        if not hasattr(self, '_debug_count'):
-            self._debug_count = 0
-        if self._debug_count < 3:
-            self._debug_count += 1
-            print(f"\n=== Step Inversion Debug (call {self._debug_count}) ===")
-            print(f"Binned concentrations: {binned_concentrations}")
-            print(f"  - Has NaN: {np.any(np.isnan(binned_concentrations))}")
-            print(f"  - Min/Max: {np.nanmin(binned_concentrations):.1f} / {np.nanmax(binned_concentrations):.1f}")
-            print(f"dN values (-diff): {dN_values}")
-            print(f"Flow bin limits: {self.bin_limits_flow}")
-            # Debug per-bin calculation for first bin
-            higher_flow = self.bin_limits_flow[0]
-            lower_flow = self.bin_limits_flow[1]
-            smaller_dp = np.interp(higher_flow, np.flip(cal_satflow), np.flip(cal_diameter))
-            larger_dp = np.interp(lower_flow, np.flip(cal_satflow), np.flip(cal_diameter))
-            dlogDp = np.log10(larger_dp) - np.log10(smaller_dp)
-            max_det_eff = np.interp(larger_dp, cal_diameter, cal_maxdeteff)
-            print(f"Bin 0 calc: higher_flow={higher_flow:.3f}, lower_flow={lower_flow:.3f}")
-            print(f"  smaller_dp={smaller_dp:.3f}, larger_dp={larger_dp:.3f}")
-            print(f"  dlogDp={dlogDp:.4f}, max_det_eff={max_det_eff:.3f}")
-            if len(dN_values) > 0 and not np.isnan(dN_values[0]):
-                print(f"  dN={dN_values[0]:.2f}, dN/dlogDp/eff={dN_values[0]/dlogDp/max_det_eff:.2f}")
 
         for i in range(num_bins):
             # Get flow bin edges for this bin
@@ -782,17 +1401,27 @@ class PSMContourTab(QWidget):
         Color: log10(dN/dlogDp), with gaps shown as black
         """
         if not self.calibration_loaded or len(self.scan_buffer) == 0:
-            # Clear plot
+            # Clear plot and file boundary markers
             self.image_item.clear()
+            for line in self.file_boundary_lines:
+                self.plot.removeItem(line)
+            for label in self.file_boundary_labels:
+                self.plot.removeItem(label)
+            self.file_boundary_lines = []
+            self.file_boundary_labels = []
             return
 
         try:
             n_scans = len(self.scan_buffer)
             num_bins = self.num_bins
 
-            # Get current time and calculate 24-hour window
+            # Get current time and calculate time window
             now = pd.Timestamp.now()
-            time_24h_ago = now - pd.Timedelta(hours=24)
+            time_window_ago = now - pd.Timedelta(hours=self.time_window_hours)
+
+            # Update date label
+            if hasattr(self, 'date_label'):
+                self.date_label.setText(now.strftime("%Y-%m-%d"))
 
             # Convert scan times to pandas Timestamps
             def to_timestamp(ts):
@@ -806,21 +1435,22 @@ class PSMContourTab(QWidget):
 
             scan_timestamps = [to_timestamp(scan['time']) for scan in self.scan_buffer]
 
-            # Filter scans to last 24 hours
+            # Filter scans to time window
             scans_in_range = [(ts, scan) for ts, scan in zip(scan_timestamps, self.scan_buffer)
-                              if ts >= time_24h_ago]
+                              if ts >= time_window_ago]
 
-            # Create time grid for full 24-hour window with ~4 minute bins
-            time_bin_size_seconds = 240  # 4 minutes
-            n_time_bins = int(24 * 3600 / time_bin_size_seconds)  # 360 bins for 24 hours
+            # Create time grid with bin size scaled to window (more bins for shorter windows)
+            # Aim for ~360 bins regardless of window size
+            time_bin_size_seconds = max(60, int(self.time_window_hours * 3600 / 360))
+            n_time_bins = int(self.time_window_hours * 3600 / time_bin_size_seconds)
 
             # Create data matrix with NaN for gaps (will show as black)
             data_matrix = np.full((num_bins, n_time_bins), np.nan)
 
-            # Place each scan at its time position within the 24h window
+            # Place each scan at its time position within the time window
             for ts, scan in scans_in_range:
-                # Calculate seconds since 24h ago
-                seconds_since_start = (ts - time_24h_ago).total_seconds()
+                # Calculate seconds since window start
+                seconds_since_start = (ts - time_window_ago).total_seconds()
                 time_idx = int(seconds_since_start / time_bin_size_seconds)
                 time_idx = max(0, min(time_idx, n_time_bins - 1))  # Clamp to valid range
 
@@ -831,17 +1461,6 @@ class PSMContourTab(QWidget):
                         data_matrix[:, time_idx] = dN_dlogDp
                     else:
                         data_matrix[:, time_idx] = (data_matrix[:, time_idx] + dN_dlogDp) / 2
-
-            # Debug output
-            if not hasattr(self, '_render_debug_done') or not self._render_debug_done:
-                self._render_debug_done = True
-                print(f"\n=== Contour Render Debug ===")
-                print(f"Total scans in buffer: {n_scans}")
-                print(f"Scans in last 24h: {len(scans_in_range)}")
-                print(f"Time window: {time_24h_ago.strftime('%Y-%m-%d %H:%M')} to {now.strftime('%Y-%m-%d %H:%M')}")
-                print(f"Time bins: {n_time_bins}")
-                valid_count = np.count_nonzero(~np.isnan(data_matrix[0, :]))
-                print(f"Time bins with data: {valid_count} / {n_time_bins}")
 
             # Apply averaging if enabled
             if self.averaging_enabled and self.avg_n > 1:
@@ -871,15 +1490,26 @@ class PSMContourTab(QWidget):
             self.image_item.setImage(z.T, autoLevels=False, levels=(min_z, max_z), lut=lut)
 
             # Set image position and scale
-            # X-axis: hours from start of 24h window (0 = 24h ago, 24 = now)
-            # Convert to "hours since 24h ago" which maps to actual clock times
-            start_hour = time_24h_ago.hour + time_24h_ago.minute / 60
+            # X-axis: hours from start of time window, mapped to actual clock times
+            start_hour = time_window_ago.hour + time_window_ago.minute / 60
             pos_x = start_hour
-            pos_y = self.bin_limits_dp[0]
-            width = 24  # 24 hours
-            height = self.bin_limits_dp[-1] - self.bin_limits_dp[0]
+            width = self.time_window_hours
+
+            # Y-axis uses bin indices (0 to num_bins) - equal height bins
+            pos_y = 0
+            height = num_bins
 
             self.image_item.setRect(pos_x, pos_y, width, height)
+
+            # Update the custom Y-axis with bin limits
+            if hasattr(self, 'bin_axis'):
+                self.bin_axis.set_bin_limits(self.bin_limits_dp)
+
+            # Store data for crosshair value lookup (in bin index coordinates)
+            self._last_z_data = z.T  # Transposed to match image orientation
+            self._last_pos_x = pos_x
+            self._last_width = width
+            self._last_num_bins = num_bins
 
             # Update axis label
             self.plot.setLabel('bottom', 'Time')
@@ -887,16 +1517,32 @@ class PSMContourTab(QWidget):
             # Update colorbar range (don't include the "gap" value)
             self.colorbar.setLevels((min_z, max_z))
 
-            # Add file boundary markers
-            self._draw_file_boundaries(scans_in_range, time_24h_ago, pos_y, height)
+            # Update statistics overlay
+            if hasattr(self, 'stats_label') and len(scans_in_range) > 0:
+                first_ts = scans_in_range[0][0]
+                last_ts = scans_in_range[-1][0]
+                time_range_str = f"{first_ts.strftime('%H:%M')} - {last_ts.strftime('%H:%M')}"
+                conc_min = 10 ** min_z if min_z > 0 else 0
+                conc_max = 10 ** max_z if max_z > 0 else 0
+                stats_text = f"Scans: {len(scans_in_range)}\nRange: {time_range_str}\nConc: {conc_min:.0f} - {conc_max:.0f}"
+                self.stats_label.setText(stats_text)
+                # Position in bottom-right
+                view_range = self.plot.viewRange()
+                self.stats_label.setPos(view_range[0][1], view_range[1][0])
+
+            # Add file boundary markers (pass bin index coordinates)
+            self._draw_file_boundaries(scans_in_range, time_window_ago, pos_y, height)
 
         except Exception as e:
-            print(f"Error rendering contour: {e}")
-            import traceback
-            traceback.print_exc()
+            logging.error(f"Error rendering contour: {e}")
 
     def _draw_file_boundaries(self, scans_in_range, time_24h_ago, y_min, y_height):
-        """Draw vertical lines and labels at file boundaries."""
+        """Draw horizontal line segments at top of plot showing each file's time range.
+
+        Args:
+            y_min: Y position (bin index, typically 0)
+            y_height: Height (number of bins)
+        """
         # Remove old markers
         for line in self.file_boundary_lines:
             self.plot.removeItem(line)
@@ -927,9 +1573,14 @@ class PSMContourTab(QWidget):
                 if file_ranges:
                     file_ranges[-1] = (file_ranges[-1][0], file_ranges[-1][1], ts)
 
-        # Draw markers for each file boundary (skip the first one)
+        # Draw horizontal line segments at top of plot for each file (in bin index coordinates)
         start_hour = time_24h_ago.hour + time_24h_ago.minute / 60
         y_top = y_min + y_height
+
+        # Position line right at the plot top
+        y_line = y_top
+        # Label position slightly above the line
+        y_label = y_top + (y_height * 0.02)
 
         for i, (file_name, start_ts, end_ts) in enumerate(file_ranges):
             # Calculate x positions (hours since 24h ago, adjusted to clock time)
@@ -938,44 +1589,55 @@ class PSMContourTab(QWidget):
             x_start = start_hour + hours_start
             x_end = start_hour + hours_end
 
-            # Draw white vertical line at file start
-            line_start = pg.InfiniteLine(
-                pos=x_start,
-                angle=90,
-                pen=pg.mkPen(color='w', width=1, style=Qt.SolidLine)
+            # Draw horizontal line above plot spanning file's time range
+            line = pg.PlotCurveItem(
+                x=[x_start, x_end],
+                y=[y_line, y_line],
+                pen=pg.mkPen(color=(255, 255, 255, 180), width=2)
             )
-            self.plot.addItem(line_start)
-            self.file_boundary_lines.append(line_start)
+            self.plot.addItem(line)
+            self.file_boundary_lines.append(line)
 
-            # Draw white vertical line at file end
-            line_end = pg.InfiniteLine(
-                pos=x_end,
-                angle=90,
-                pen=pg.mkPen(color='w', width=1, style=Qt.SolidLine)
-            )
-            self.plot.addItem(line_end)
-            self.file_boundary_lines.append(line_end)
-
-            # Show time from filename (HHMMSS format)
+            # Determine label detail based on available width
             # Format: YYYYMMDD_HHMMSS_DeviceType_Tag.dat
-            display_name = file_name.replace('.dat', '')
-            parts = display_name.split('_')
-            if len(parts) >= 2:
-                display_name = parts[1]  # The HHMMSS time part
-            else:
-                display_name = f"#{i + 1}"
+            range_width = x_end - x_start
+            display_name = None
 
-            # Add file name label at top of plot (centered between start and end)
-            x_center = (x_start + x_end) / 2
-            label = pg.TextItem(
-                text=display_name,
-                color='w',
-                anchor=(0.5, 1)  # Anchor at center-bottom
-            )
-            label.setPos(x_center, y_top)
-            label.setFont(pg.QtGui.QFont('Arial', 9))
-            self.plot.addItem(label)
-            self.file_boundary_labels.append(label)
+            # Parse filename parts
+            base_name = file_name.replace('.dat', '')
+            parts = base_name.split('_')
+
+            if range_width >= 3.0:
+                # Wide range (3+ hours): show full filename
+                display_name = base_name
+            elif range_width >= 1.0:
+                # Medium range (1-3 hours): show HH:MM:SS
+                if len(parts) >= 2 and len(parts[1]) == 6:
+                    time_str = parts[1]
+                    display_name = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
+                else:
+                    display_name = base_name
+            elif range_width >= 0.4:
+                # Narrow range (24min - 1hour): show HH:MM:SS
+                if len(parts) >= 2 and len(parts[1]) == 6:
+                    time_str = parts[1]
+                    display_name = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
+                else:
+                    display_name = f"#{i + 1}"
+            # else: Very narrow range - no label
+
+            if display_name:
+                # Add file name label centered on the horizontal line
+                x_center = (x_start + x_end) / 2
+                label = pg.TextItem(
+                    text=display_name,
+                    color='w',
+                    anchor=(0.5, 1)  # Anchor at center-bottom
+                )
+                label.setPos(x_center, y_label)
+                label.setFont(pg.QtGui.QFont('Arial', 9))
+                self.plot.addItem(label)
+                self.file_boundary_labels.append(label)
 
     def _apply_scan_averaging(self, data_matrix: np.ndarray, n: int) -> np.ndarray:
         """
@@ -989,7 +1651,7 @@ class PSMContourTab(QWidget):
             Averaged data matrix
         """
         df = pd.DataFrame(data_matrix)
-        averaged = df.rolling(n, min_periods=1, axis=1).mean()
+        averaged = df.T.rolling(n, min_periods=1).mean().T
         return averaged.values
 
     def _load_historical_data(self):
@@ -998,8 +1660,13 @@ class PSMContourTab(QWidget):
         Called automatically after calibration loads, or manually from settings menu.
         """
         if not self.calibration_loaded:
-            print("Cannot load historical data: calibration not loaded")
             return
+
+        if self._loading_in_progress:
+            return
+
+        self._loading_in_progress = True
+        self._show_loading_overlay()
 
         try:
             # Get device information from config
@@ -1008,18 +1675,12 @@ class PSMContourTab(QWidget):
 
             # Get file path from global config
             if not self.app_config:
-                print("Cannot access app config")
+                self._loading_in_progress = False
+                self._hide_loading_overlay()
                 return
 
             file_path = self.app_config.data_settings.file_path
             file_tag = self.app_config.data_settings.file_tag
-
-            print(f"Searching for today's .dat file in: {file_path}")
-
-            # Reset debug flags for fresh output
-            self._render_debug_done = False
-            self._debug_count = 0
-            self._bin_debug_count = 0
 
             # Load historical scans from ALL .dat files in last 24 hours
             filepaths, scans = load_historical_scans(
@@ -1030,23 +1691,25 @@ class PSMContourTab(QWidget):
             )
 
             if filepaths is None or len(filepaths) == 0:
-                print("No data files found for last 24 hours")
                 self.file_label.setText("No data files found")
+                self._loading_in_progress = False
+                self._hide_loading_overlay()
                 return
 
             if not scans:
-                file_names = ", ".join(os.path.basename(f) for f in filepaths)
-                print(f"No valid scans found in: {file_names}")
                 self.file_label.setText(f"No scans in {len(filepaths)} file(s)")
+                self._loading_in_progress = False
+                self._hide_loading_overlay()
                 return
 
             # Store loaded file paths
             self.loaded_file_path = filepaths
 
-            print(f"Loading historical data from {len(filepaths)} file(s)")
-            for fp in filepaths:
-                print(f"  - {os.path.basename(fp)}")
-            print(f"Found {len(scans)} merged scan(s)")
+            # Update loading label with progress
+            if hasattr(self, 'loading_label'):
+                self.loading_label.setText(f"Processing {len(scans)} scans...")
+                from PyQt5.QtWidgets import QApplication
+                QApplication.processEvents()
 
             # Clear existing buffer before loading historical data
             self.scan_buffer = []
@@ -1055,29 +1718,35 @@ class PSMContourTab(QWidget):
             for i, scan_data in enumerate(scans):
                 try:
                     self._process_historical_scan(scan_data)
+                    # Update progress occasionally
+                    if i % 20 == 0 and hasattr(self, 'loading_label'):
+                        self.loading_label.setText(f"Processing scan {i+1}/{len(scans)}...")
+                        from PyQt5.QtWidgets import QApplication
+                        QApplication.processEvents()
                 except Exception as e:
-                    print(f"Error processing scan {i+1}: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logging.error(f"Error processing scan {i+1}: {e}")
 
             # Get time range and update label with full info
             start_time, end_time = get_scan_time_range(scans)
             if start_time and end_time:
-                time_range = f"{start_time.strftime('%H:%M:%S')} - {end_time.strftime('%H:%M:%S')}"
-                print(f"Loaded {len(self.scan_buffer)} scans from {time_range}")
-                # Show file count and scan count in label
+                # Show file info in label (scan count shown in counter)
                 if len(filepaths) == 1:
-                    self.file_label.setText(f"File: {os.path.basename(filepaths[0])} ({len(self.scan_buffer)} scans)")
+                    self.file_label.setText(f"File: {os.path.basename(filepaths[0])}")
                 else:
-                    self.file_label.setText(f"{len(filepaths)} files ({len(self.scan_buffer)} scans)")
+                    self.file_label.setText(f"{len(filepaths)} files loaded")
+
+            # Update scan counter
+            if hasattr(self, 'scan_counter_label'):
+                self.scan_counter_label.setText(f"Scans: {len(self.scan_buffer)}")
 
             # Render contour with loaded data
             self._render_contour()
 
         except Exception as e:
-            print(f"Error loading historical data: {e}")
-            import traceback
-            traceback.print_exc()
+            logging.error(f"Error loading historical data: {e}")
+        finally:
+            self._loading_in_progress = False
+            self._hide_loading_overlay()
 
     def _process_historical_scan(self, scan_data: Dict[str, np.ndarray]):
         """

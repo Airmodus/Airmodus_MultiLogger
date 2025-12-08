@@ -8,6 +8,7 @@ Auto-detects format from file header (presence of "Vacuum flow" column).
 
 import os
 import glob
+import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -252,7 +253,7 @@ def load_historical_scans(
             if scans:
                 file_scans.append((fp, scans, len(df)))
         except Exception as e:
-            print(f"Error reading {fp}: {e}")
+            logging.error(f"Error reading {fp}: {e}")
             continue
 
     if not file_scans:
@@ -273,9 +274,9 @@ def load_historical_scans(
             # Use first timestamp as scan identifier (rounded to minute for fuzzy matching)
             scan_time = scan['times'][0]
             if hasattr(scan_time, 'floor'):
-                time_key = scan_time.floor('T')  # Round to minute
+                time_key = scan_time.floor('min')  # Round to minute
             else:
-                time_key = pd.Timestamp(scan_time).floor('T')
+                time_key = pd.Timestamp(scan_time).floor('min')
 
             # Only add if we haven't seen this time period from a better file
             if time_key not in used_times:

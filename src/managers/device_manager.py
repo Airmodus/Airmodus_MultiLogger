@@ -502,7 +502,6 @@ class DeviceManager(QObject):
                     result = widget.process_parsed_messages(parsed_messages, device_config, self.data_holder)
 
                 except Exception as e:
-                    print(traceback.format_exc())
                     logging.exception(e)
 
     # check and update 10 hz settings
@@ -568,6 +567,5 @@ class DeviceManager(QObject):
                     set_tab_index = device_widget.indexOf(device_widget.set_tab)
                     device_widget.setTabIcon(set_tab_index, QIcon())
             except Exception as e:
-                print(traceback.format_exc())
                 logging.exception(e)
 

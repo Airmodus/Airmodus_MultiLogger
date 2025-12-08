@@ -270,7 +270,6 @@ class DataLogger:
                                                                self.data_holder.ten_hz_filenames)
                         # if saving fails, set saving status to 0
                         except Exception as e:
-                            print(traceback.format_exc())
                             logging.exception(e)
                             self.data_holder.saving_status = 0 # set saving status to 0
         else: # if saving is toggled off
@@ -307,7 +306,6 @@ class DataLogger:
                         if device_widget.pulse_analysis_index >= len(PULSE_ANALYSIS_THRESHOLDS):
                             self.pulse_analysis_stop(dev_id, device_config)
                     except Exception as e:
-                        print(traceback.format_exc())
                         logging.exception(e)
                         # stop pulse analysis if exception occurs
                         self.pulse_analysis_stop(dev_id, device_config)
@@ -321,7 +319,6 @@ class DataLogger:
             if cpc_settings and hasattr(device_widget, 'connection'):
                 device_widget.connection.send_message(":SET:OPC:THRS " + str(cpc_settings.opc_threshold))
         except Exception as e:
-            print(traceback.format_exc())
             logging.exception(e)
         # clear current threshold value
         device_widget = self.data_holder.device_widgets[device_id]
@@ -395,7 +392,6 @@ class DataLogger:
                 file.write('Threshold (mV),Number of pulses,Dead time (µs),Pulse duration (ns)')
 
         except Exception as e:
-            print(traceback.format_exc())
             logging.exception(e)
             # if pulse analysis cannot be started, stop it (resume normal operation)
             self.pulse_analysis_stop(device_id, device_config)

@@ -1,6 +1,7 @@
 from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from numpy import full, nan, isnan, array_equal
+import logging
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
 from PyQt5.QtWidgets import (QTabWidget, QGridLayout, QLabel, QWidget,
     QPushButton, QComboBox, QGraphicsRectItem, QTableWidget, QTableWidgetItem,
@@ -343,7 +344,7 @@ class CPCWidget(ComplexDevice):
             if parsed.get('show_in_command_widget', False):
                 self.set_tab.command_widget.update_text_box(parsed['raw'])
                 if parsed['type'] == 'error' and 'error' in parsed:
-                    print("CPC error: " + str(parsed['error']))
+                    logging.error("CPC error: " + str(parsed['error']))
 
         # Update GUI with current data
         self.update_values(self.current_data.to_array())

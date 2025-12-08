@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                               QFileDialog, QWidget, QSpinBox, QTabWidget)
 from PyQt5.QtCore import Qt
 from datetime import datetime as dt
+import logging
 
 
 class DataSettingsDialog(QDialog):
@@ -177,7 +178,7 @@ class DataSettingsDialog(QDialog):
             # Update save status label
             self._update_save_status_label()
         except Exception as e:
-            print(f"Error loading settings values: {e}")
+            logging.error(f"Error loading settings values: {e}")
 
     def accept(self):
         """Save dialog values back to config and emit signals."""
@@ -205,7 +206,7 @@ class DataSettingsDialog(QDialog):
             # Close dialog
             super().accept()
         except Exception as e:
-            print(f"Error saving settings: {e}")
+            logging.error(f"Error saving settings: {e}")
             super().reject()
 
     def _update_save_status_label(self):
@@ -237,5 +238,5 @@ class DataSettingsDialog(QDialog):
 
                 self.save_status_label.setText(" | ".join(status_parts) if status_parts else "Saving enabled")
         except Exception as e:
-            print(f"Error updating save status label: {e}")
+            logging.error(f"Error updating save status label: {e}")
             self.save_status_label.setText("")

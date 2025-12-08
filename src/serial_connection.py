@@ -31,7 +31,6 @@ class SerialDeviceConnection():
             self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout, dsrdtr=False, dtr=False)
         else:
             self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout)
-        print("Connected to %s" % self.serial_port)
 
     def connect_async(self, callback=None):
         """

@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QCursor
 import serial.tools.list_ports
+import logging
 
 
 class PortSelectionDialog(QDialog):
@@ -70,9 +71,7 @@ class PortSelectionDialog(QDialog):
 
             return {}
         except Exception as e:
-            print(f"Error getting port info: {e}")
-            import traceback
-            traceback.print_exc()
+            logging.error(f"Error getting port info: {e}")
             return {}
 
     def _compute_short_ids(self):

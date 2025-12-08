@@ -3,6 +3,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QSplitter, QTabWidget, QGridLayout, QWidget,
     QSizePolicy)
 from numpy import nan
+import logging
 
 
 from config import PSM, PSM_ERRORS
@@ -39,6 +40,9 @@ class PSMWidget(ComplexDevice):
         # create plot widget for PSM (first tab)
         self.plot_tab = SinglePlot(device_type=PSM)
         self.addTab(self.plot_tab, "Plot")
+        # create contour plot tab for PSM (next to Plot tab)
+        self.contour_tab = PSMContourTab(self.device_config)
+        self.addTab(self.contour_tab, "Contour")
         # create set tab for PSM (pass is_psm2 to determine UI)
         self.set_tab = PSMSetTab(self.is_psm2)
         self.addTab(self.set_tab, "Set")
@@ -48,9 +52,6 @@ class PSMWidget(ComplexDevice):
         # create mode tab for PSM
         self.measure_tab = PSMMeasureTab()
         self.addTab(self.measure_tab, "Measure")
-        # create contour plot tab for PSM
-        self.contour_tab = PSMContourTab(self.device_config)
-        self.addTab(self.contour_tab, "Contour")
 
         # create list of PSM status widgets, used in update_errors
         self.psm_status_widgets = [
@@ -440,7 +441,7 @@ class PSMWidget(ComplexDevice):
             if parsed.get('show_in_command_widget', False):
                 self.set_tab.command_widget.update_text_box(parsed['raw'])
                 if parsed['type'] == 'error' and 'error' in parsed:
-                    print("PSM error: " + str(parsed['error']))
+                    logging.error("PSM error: " + str(parsed['error']))
 
         # Compile settings if all required data is available
         if self.needs_settings_fetch and settings_fetched and self.settings.dilution_parameters:
@@ -459,7 +460,6 @@ class PSMWidget(ComplexDevice):
                 self.needs_settings_fetch = False
                 result['settings_updated'] = True
             except Exception as e:
-                print(traceback.format_exc())
                 logging.exception(e)
 
         return result
@@ -1115,7 +1115,6 @@ class PSMMeasureTab(QWidget):
         # add maximum flow to parameters
         parameters.append(round(self.set_max_flow.value_spinbox.value(), 3))
         scan_string = ":SET:FLOW:SCAN " + ",".join(map(str, parameters))
-        print(scan_string)
         return scan_string
     
     def compile_step(self): # compile step command

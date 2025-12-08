@@ -43,9 +43,9 @@ QComboBox#combo_box QListView {
     color: #e9e9e9;
     background-color: #444444;
 }
-/* QTabWidget */
+/* Device sub-tabs (Plot, Status, Settings inside each device) */
 QTabWidget {
-    font-size: 18px;
+    font-size: 16px;
 }
 QTabWidget::pane {
     border: 0px;
@@ -53,11 +53,11 @@ QTabWidget::pane {
 QTabBar::tab {
     background-color: #444444;
     color: #888888;
-    padding-left: 16px;
-    padding-right: 16px;
-    padding-top: 5px;
-    padding-bottom: 5px;
-    font-size: 18;
+    padding-left: 18px;
+    padding-right: 18px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    font-size: 16px;
     margin-left: 4px;
     margin-top: 4px;
     margin-bottom: 4px;

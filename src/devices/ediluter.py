@@ -113,7 +113,6 @@ class eDiluterWidget(ComplexDevice):
 
             elif parsed['type'] == 'error' and parsed['command'] == 'auto-push':
                 # Incomplete message
-                print("readIndata - " + parsed.get('error', 'eDiluter error'))
                 logging.error(parsed.get('error', 'eDiluter error'))
 
             # Show messages in command widget if requested

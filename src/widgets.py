@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (QLabel, QWidget, QVBoxLayout, QLineEdit, QPushButto
                              QToolButton, QScrollArea, QFrame)
 from datetime import datetime as dt
 import sys
+import logging
 
 from tab_link_overlay import TabLinkOverlay
 
@@ -246,7 +247,7 @@ class SetWidget(QWidget):
             else:
                 self.value_spinbox.setValue(float(value))
         except Exception as e:
-            print(e)
+            logging.error(f"Error setting widget value: {e}")
         QTimer.singleShot(50, self.clear_input)
     # function that clears value input line edit after single shot timer
     def clear_input(self):
@@ -408,6 +409,7 @@ class _InnerTabBar(QTabBar):
         self.setUsesScrollButtons(False)  # Disable native scroll - we handle it
         self.setMovable(True)  # Enable drag-and-drop reordering
         self.setElideMode(Qt.ElideNone)  # Show full text, don't truncate
+        self.setDrawBase(False)  # Don't draw the base line behind tabs
 
     def tabSizeHint(self, index):
         """Return width that fits the full tab text with padding for close button."""
@@ -442,6 +444,9 @@ class BrowserStyleTabBar(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # Set transparent background to prevent visible box behind tabs
+        super().setStyleSheet("background: transparent;")
+
         # Left scroll button
         self._left_scroll_btn = QToolButton(self)
         self._left_scroll_btn.setArrowType(Qt.LeftArrow)
@@ -457,13 +462,19 @@ class BrowserStyleTabBar(QWidget):
         self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll_area.setFrameShape(QFrame.NoFrame)
         self._scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # Set transparent background to prevent visible box artifact
+        self._scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; } QScrollArea > QWidget > QWidget { background: transparent; }")
         layout.addWidget(self._scroll_area, stretch=1)
 
         # The actual tab bar inside the scroll area
         self._tab_bar = _InnerTabBar()
+        self._tab_bar.setObjectName("mainDeviceTabBar")  # Unique name for specific styling
         self._tab_bar.currentChanged.connect(self.currentChanged.emit)
         self._tab_bar.tabMoved.connect(self.tabMoved.emit)  # Forward tab drag events
         self._scroll_area.setWidget(self._tab_bar)
+
+        # Make viewport transparent
+        self._scroll_area.viewport().setAutoFillBackground(False)
 
         # Right scroll button
         self._right_scroll_btn = QToolButton(self)
