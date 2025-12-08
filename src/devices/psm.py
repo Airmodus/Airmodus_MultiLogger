@@ -333,11 +333,11 @@ class PSMWidget(ComplexDevice):
         # Show measurement mode and state
         if hasattr(self, 'measure_tab'):
             measure_tab = self.measure_tab
-            if hasattr(measure_tab, 'scan_button') and measure_tab.scan_button.measuring:
+            if hasattr(measure_tab, 'scan') and measure_tab.scan.state == 1:
                 return "Scanning"
-            elif hasattr(measure_tab, 'step_button') and measure_tab.step_button.measuring:
+            elif hasattr(measure_tab, 'step') and measure_tab.step.state == 1:
                 return "Step scan"
-            elif hasattr(measure_tab, 'fixed_button') and measure_tab.fixed_button.measuring:
+            elif hasattr(measure_tab, 'fixed') and measure_tab.fixed.state == 1:
                 return "Fixed mode"
         return "Idle"
 
