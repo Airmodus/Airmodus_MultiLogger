@@ -28,67 +28,35 @@ def _detect_psm2_from_file(filepath: str) -> bool:
         return False  # Default to Retrofit on error
 
 
-def find_todays_psm_file(
-    file_path: str,
-    serial_number: str = "",
-    device_nickname: str = "",
-    file_tag: str = ""
-) -> Optional[str]:
+def find_psm_files_last_24h(file_path: str) -> List[str]:
     """
-    Find today's .dat file for a PSM device.
+    Find ALL PSM .dat files from the last 24 hours (yesterday and today).
+    Handles multiple files per day (e.g., from program restarts).
 
     Args:
         file_path: Directory where .dat files are saved
-        serial_number: Device serial number (optional)
-        device_nickname: Device nickname (optional)
-        file_tag: File tag from settings (optional)
 
     Returns:
-        Path to the most recent matching .dat file, or None if not found
+        List of paths to matching .dat files, sorted chronologically by filename
     """
-    # Get today's date
-    today = datetime.now().strftime("%Y%m%d")
+    from datetime import timedelta
+
+    # Get today's and yesterday's dates
+    now = datetime.now()
+    today = now.strftime("%Y%m%d")
+    yesterday = (now - timedelta(days=1)).strftime("%Y%m%d")
 
     # Search for all PSM filename variants
-    # Current: "PSM" (Retrofit) and "PSM2" (2.0)
-    # Legacy: "PSM Retrofit" and "PSM 2.0"
     device_type_names = ["PSM", "PSM2", "PSM Retrofit", "PSM 2.0"]
-    all_matching_files = []
+    all_matching_files = set()
 
-    for device_type_name in device_type_names:
-        # Build filename pattern with wildcards
-        # Format: YYYYMMDD_HHMMSS[_SerialNumber]_DeviceType[_DeviceNickname][_FileTag].dat
-        pattern_parts = [today, "*"]  # wildcard for timestamp
+    for date_str in [yesterday, today]:
+        for device_type_name in device_type_names:
+            pattern = os.path.join(file_path, f"{date_str}_*{device_type_name}*.dat")
+            all_matching_files.update(glob.glob(pattern))
 
-        if serial_number:
-            pattern_parts.append(f"*{serial_number}*")
-
-        pattern_parts.append(device_type_name)
-
-        if device_nickname:
-            pattern_parts.append(f"*{device_nickname}*")
-
-        if file_tag:
-            pattern_parts.append(f"*{file_tag}*")
-
-        # Create glob pattern
-        pattern = os.path.join(file_path, "_".join(pattern_parts) + ".dat")
-
-        # Find matching files
-        matching_files = glob.glob(pattern)
-
-        if not matching_files:
-            # Try without optional fields
-            simple_pattern = os.path.join(file_path, f"{today}_*{device_type_name}*.dat")
-            matching_files = glob.glob(simple_pattern)
-
-        all_matching_files.extend(matching_files)
-
-    if all_matching_files:
-        # Return most recent file (by modification time)
-        return max(all_matching_files, key=os.path.getmtime)
-
-    return None
+    # Sort by filename (chronological) and filter out tiny files
+    return sorted([f for f in all_matching_files if os.path.getsize(f) > 500])
 
 
 def read_psm_dat_file(filepath: str) -> pd.DataFrame:
@@ -121,11 +89,12 @@ def read_psm_dat_file(filepath: str) -> pd.DataFrame:
             raise ValueError(f"Invalid file format: expected at least 20 columns, got {len(df.columns)}")
 
         # Column indices differ between PSM Retrofit and PSM 2.0
+        # PSM 2.0 has an extra "Vacuum flow" column at index 16, shifting CPC concentration
 
         # Extract column names (handle potential variations)
         timestamp_col = df.columns[0]
         satflow_col = df.columns[3]  # Saturator flow rate (lpm)
-        scan_status_col = df.columns[16 if is_psm2 else 15]  # Scan status
+        scan_status_col = df.columns[15]  # Scan status (same index for both formats)
         concentration_col = df.columns[19 if is_psm2 else 18]  # CPC concentration (1/cm3)
 
         # Create result dataframe with standardized column names
@@ -152,10 +121,17 @@ def detect_scans_from_dat(df: pd.DataFrame) -> List[Dict[str, np.ndarray]]:
     """
     Detect and extract individual scans from .dat file data.
 
-    Scans are detected by transitions in scan_status field:
-    - Scan starts: transition from "9" to ["0", "1", "2"]
-    - Scan continues: scan_status in ["0", "1", "2"]
-    - Scan ends: transition back to "9" or status change
+    Scan status values:
+    - 0 = bottom wait (pause at bottom of scan)
+    - 1 = up scan (saturator flow increasing)
+    - 2 = top wait (pause at top of scan)
+    - 3 = down scan (saturator flow decreasing)
+    - 4 = don't log (skip entirely)
+    - 9 = idle (not scanning)
+
+    Two scans per cycle:
+    - Up scan: status 1 + status 2 (top wait)
+    - Down scan: status 3 + status 0 (bottom wait)
 
     Args:
         df: DataFrame with columns: timestamp, satflow, scan_status, concentration
@@ -168,36 +144,58 @@ def detect_scans_from_dat(df: pd.DataFrame) -> List[Dict[str, np.ndarray]]:
     """
     scans = []
     current_scan = None
-    prev_status = "9"
+    prev_status = None
 
     for idx, row in df.iterrows():
-        scan_status = str(row['scan_status']).strip()
+        scan_status_raw = str(row['scan_status']).strip()
 
-        # Detect scan transition
-        is_scan_active = scan_status in ["0", "1", "2"]
-        status_changed = scan_status != prev_status
+        # Normalize scan status - handle both "1" and "1.0" formats
+        try:
+            scan_status = str(int(float(scan_status_raw)))
+        except (ValueError, TypeError):
+            scan_status = scan_status_raw  # Keep as-is if not a number (e.g., "nan")
 
-        # Start new scan on transition to active scan state
-        if is_scan_active and status_changed:
-            # Finalize previous scan if it exists and has enough data
+        # Skip status 4 entirely (don't log)
+        if scan_status == "4":
+            prev_status = scan_status
+            continue
+
+        # Detect scan start transitions
+        # Up scan starts when transitioning TO status "1"
+        if scan_status == "1" and prev_status != "1":
+            # Finalize previous scan if exists and has enough data
             if current_scan is not None and len(current_scan['satflows']) >= 3:
                 scans.append({
                     'times': np.array(current_scan['times']),
                     'satflows': np.array(current_scan['satflows']),
                     'concentrations': np.array(current_scan['concentrations'])
                 })
+            # Start new UP scan
+            current_scan = {'times': [], 'satflows': [], 'concentrations': [], 'type': 'up'}
 
-            # Initialize new scan
-            current_scan = {
-                'times': [],
-                'satflows': [],
-                'concentrations': []
-            }
+        # Down scan starts when transitioning TO status "3"
+        elif scan_status == "3" and prev_status != "3":
+            # Finalize previous scan if exists and has enough data
+            if current_scan is not None and len(current_scan['satflows']) >= 3:
+                scans.append({
+                    'times': np.array(current_scan['times']),
+                    'satflows': np.array(current_scan['satflows']),
+                    'concentrations': np.array(current_scan['concentrations'])
+                })
+            # Start new DOWN scan
+            current_scan = {'times': [], 'satflows': [], 'concentrations': [], 'type': 'down'}
 
-        # Accumulate data during active scan
-        if current_scan is not None and is_scan_active:
-            # Only add valid data (not NaN)
-            if not pd.isna(row['satflow']) and not pd.isna(row['concentration']):
+        # Accumulate data during scan
+        # Up scan: include status 1 and 2 (top wait)
+        # Down scan: include status 3 and 0 (bottom wait)
+        if current_scan is not None:
+            include_point = False
+            if current_scan['type'] == 'up' and scan_status in ["1", "2"]:
+                include_point = True
+            elif current_scan['type'] == 'down' and scan_status in ["3", "0"]:
+                include_point = True
+
+            if include_point and not pd.isna(row['satflow']) and not pd.isna(row['concentration']):
                 current_scan['times'].append(row['timestamp'])
                 current_scan['satflows'].append(row['satflow'])
                 current_scan['concentrations'].append(row['concentration'])
@@ -220,41 +218,76 @@ def load_historical_scans(
     serial_number: str = "",
     device_nickname: str = "",
     file_tag: str = ""
-) -> Tuple[Optional[str], List[Dict[str, np.ndarray]]]:
+) -> Tuple[Optional[List[str]], List[Dict[str, np.ndarray]]]:
     """
-    High-level function to find, read, and parse today's PSM .dat file.
-    Auto-detects PSM version from file content.
+    Load and merge scans from ALL PSM .dat files in the last 24 hours.
+    Handles multiple files per day and merges them intelligently.
+
+    For overlapping timestamps, prefers data from the file with the longest
+    continuous data range.
 
     Args:
         file_path: Directory where .dat files are saved
-        serial_number: Device serial number (optional)
-        device_nickname: Device nickname (optional)
-        file_tag: File tag from settings (optional)
+        serial_number: Device serial number (unused, kept for compatibility)
+        device_nickname: Device nickname (unused, kept for compatibility)
+        file_tag: File tag from settings (unused, kept for compatibility)
 
     Returns:
-        Tuple of (filepath, scans):
-        - filepath: Path to the loaded file (or None if not found)
-        - scans: List of scan dicts with 'times', 'satflows', 'concentrations'
-
-    Raises:
-        Exception: If file reading or parsing fails
+        Tuple of (filepaths, scans):
+        - filepaths: List of loaded file paths (or None if none found)
+        - scans: Merged list of scan dicts with 'times', 'satflows', 'concentrations'
     """
-    # Find today's file
-    filepath = find_todays_psm_file(
-        file_path=file_path,
-        serial_number=serial_number,
-        device_nickname=device_nickname,
-        file_tag=file_tag
-    )
+    # Find all files from last 24 hours
+    filepaths = find_psm_files_last_24h(file_path)
 
-    if filepath is None:
+    if not filepaths:
         return None, []
 
-    # Read and parse file (auto-detects PSM version)
-    df = read_psm_dat_file(filepath)
-    scans = detect_scans_from_dat(df)
+    # Read scans from each file along with file's data range info
+    file_scans = []  # List of (filepath, scans, row_count)
+    for fp in filepaths:
+        try:
+            df = read_psm_dat_file(fp)
+            scans = detect_scans_from_dat(df)
+            if scans:
+                file_scans.append((fp, scans, len(df)))
+        except Exception as e:
+            print(f"Error reading {fp}: {e}")
+            continue
 
-    return filepath, scans
+    if not file_scans:
+        return filepaths, []
+
+    # Merge scans from all files
+    # Strategy: for each time period, use scans from file with most data (longest continuous range)
+    # Sort file_scans by row count (descending) so files with more data take priority
+    file_scans.sort(key=lambda x: x[2], reverse=True)
+
+    merged_scans = []
+    used_times = set()  # Track scan start times we've already used
+
+    for fp, scans, _ in file_scans:
+        for scan in scans:
+            if len(scan['times']) == 0:
+                continue
+            # Use first timestamp as scan identifier (rounded to minute for fuzzy matching)
+            scan_time = scan['times'][0]
+            if hasattr(scan_time, 'floor'):
+                time_key = scan_time.floor('T')  # Round to minute
+            else:
+                time_key = pd.Timestamp(scan_time).floor('T')
+
+            # Only add if we haven't seen this time period from a better file
+            if time_key not in used_times:
+                # Add source file info to scan
+                scan['source_file'] = os.path.basename(fp)
+                merged_scans.append(scan)
+                used_times.add(time_key)
+
+    # Sort merged scans by time
+    merged_scans.sort(key=lambda s: s['times'][0] if len(s['times']) > 0 else pd.Timestamp.min)
+
+    return filepaths, merged_scans
 
 
 def get_scan_time_range(scans: List[Dict[str, np.ndarray]]) -> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:

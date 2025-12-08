@@ -151,6 +151,12 @@ class PSMWidget(ComplexDevice):
         """Set the app config reference for contour tab historical data loading."""
         if hasattr(self, 'contour_tab'):
             self.contour_tab.app_config = app_config
+            # Connect config change callback so calibration changes are saved
+            self.contour_tab.on_config_changed = lambda: (
+                self.on_config_changed() if hasattr(self, 'on_config_changed') and self.on_config_changed else None
+            )
+            # Trigger auto-load of calibration and historical data now that app_config is set
+            self.contour_tab.initialize_after_config_set()
         # Store app_config reference for CPC dropdown
         self.app_config = app_config
         # Mark dropdown for lazy update instead of updating immediately
