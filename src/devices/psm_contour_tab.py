@@ -343,6 +343,9 @@ class PSMContourTab(QWidget):
         # Connect mouse move signal for crosshair
         self.plot.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
+        # Connect view range change to update file labels on zoom
+        self.plot.sigRangeChanged.connect(self._on_view_range_changed)
+
         plot_layout.addWidget(self.graphics_widget)
         self.plot_widget.setLayout(plot_layout)
 
@@ -505,6 +508,68 @@ class PSMContourTab(QWidget):
             return None
         except Exception:
             return None
+
+    def _on_view_range_changed(self, view_box=None, range_changed=None):
+        """Handle view range changes (zoom/pan) to update file boundary labels visibility."""
+        # Only update if we have scans and file boundaries to show
+        if not hasattr(self, 'scan_buffer') or len(self.scan_buffer) == 0:
+            return
+        if not hasattr(self, '_last_scans_in_range'):
+            return
+
+        # Redraw file boundaries with updated view range
+        try:
+            self._update_file_boundary_labels()
+        except Exception:
+            pass  # Silently ignore errors during updates
+
+    def _update_file_boundary_labels(self):
+        """Update file boundary labels based on current zoom level."""
+        if not hasattr(self, '_last_file_ranges') or not self._last_file_ranges:
+            return
+
+        # Get current view range
+        view_range = self.plot.viewRange()
+        view_x_min, view_x_max = view_range[0]
+        view_width_hours = view_x_max - view_x_min
+
+        # Get plot widget width in pixels
+        plot_width_pixels = self.plot.width() if self.plot.width() > 0 else 800
+
+        # Remove old labels only (keep tick marks)
+        for label in self.file_boundary_labels:
+            self.plot.removeItem(label)
+        self.file_boundary_labels = []
+
+        # Get stored positions
+        y_top = getattr(self, '_last_y_top', self.num_bins if hasattr(self, 'num_bins') else 6)
+
+        for file_name, x_start, x_end in self._last_file_ranges:
+            range_width_hours = x_end - x_start
+
+            # Calculate what fraction of the view this file range occupies
+            view_fraction = range_width_hours / view_width_hours if view_width_hours > 0 else 0
+
+            # Calculate approximate pixel width for this file range
+            range_width_pixels = view_fraction * plot_width_pixels
+
+            # Estimate label width in pixels (~7 pixels per character at 8pt font)
+            base_name = file_name.replace('.dat', '')
+            estimated_label_pixels = len(base_name) * 7
+
+            # Only show label if it fits with some margin
+            if range_width_pixels >= estimated_label_pixels + 10:
+                # Position label centered in file's time range
+                x_center = (x_start + x_end) / 2
+                label = pg.TextItem(
+                    text=base_name,
+                    color='w',
+                    anchor=(0.5, 1)  # Anchor at center-bottom
+                )
+                label.setPos(x_center, y_top)
+                label.setFont(pg.QtGui.QFont('Arial', 8))
+                self.plot.addItem(label)
+                self.file_boundary_labels.append(label)
 
     def _get_cumulative_at_position(self, x, bin_idx):
         """Get cumulative dN/dlogDp below and above the current bin at given x position.
@@ -1572,44 +1637,55 @@ class PSMContourTab(QWidget):
         self.file_boundary_lines = []
         self.file_boundary_labels = []
 
+        # Store scans for later zoom updates
+        self._last_scans_in_range = scans_in_range
+
         if not scans_in_range:
+            self._last_file_ranges = []
             return
 
         # Find file boundaries (where source_file changes)
         current_file = None
-        file_ranges = []  # List of (file_name, start_time, end_time)
+        file_ranges_ts = []  # List of (file_name, start_time, end_time) in timestamps
 
         for ts, scan in scans_in_range:
             source_file = scan.get('source_file', 'unknown')
             if source_file != current_file:
                 # New file started
-                if current_file is not None and file_ranges:
+                if current_file is not None and file_ranges_ts:
                     # Update end time of previous file
-                    file_ranges[-1] = (file_ranges[-1][0], file_ranges[-1][1], ts)
+                    file_ranges_ts[-1] = (file_ranges_ts[-1][0], file_ranges_ts[-1][1], ts)
                 # Start new file range
-                file_ranges.append((source_file, ts, ts))
+                file_ranges_ts.append((source_file, ts, ts))
                 current_file = source_file
             else:
                 # Update end time of current file
-                if file_ranges:
-                    file_ranges[-1] = (file_ranges[-1][0], file_ranges[-1][1], ts)
+                if file_ranges_ts:
+                    file_ranges_ts[-1] = (file_ranges_ts[-1][0], file_ranges_ts[-1][1], ts)
 
         # Draw vertical tick marks at file boundaries
         start_hour = time_24h_ago.hour + time_24h_ago.minute / 60
         y_top = y_min + y_height
 
+        # Store y_top for label updates on zoom
+        self._last_y_top = y_top
+
         # Tick extends from plot top upward
         tick_height = y_height * 0.03
         y_tick_bottom = y_top
         y_tick_top = y_top + tick_height
-        y_label = y_top + tick_height + (y_height * 0.01)
 
-        for i, (file_name, start_ts, end_ts) in enumerate(file_ranges):
+        # Convert file ranges to x-coordinates and store for zoom updates
+        file_ranges_x = []  # List of (file_name, x_start, x_end) in plot coordinates
+
+        for i, (file_name, start_ts, end_ts) in enumerate(file_ranges_ts):
             # Calculate x positions
             hours_start = (start_ts - time_24h_ago).total_seconds() / 3600
             hours_end = (end_ts - time_24h_ago).total_seconds() / 3600
             x_start = start_hour + hours_start
             x_end = start_hour + hours_end
+
+            file_ranges_x.append((file_name, x_start, x_end))
 
             # Draw vertical tick at file start (skip first file at very beginning)
             if i > 0 or hours_start > 0.01:  # Only if not at the very start
@@ -1621,22 +1697,11 @@ class PSMContourTab(QWidget):
                 self.plot.addItem(tick)
                 self.file_boundary_lines.append(tick)
 
-            # Always show full filename
-            base_name = file_name.replace('.dat', '')
-            display_name = base_name
+        # Store file ranges in x-coordinates for zoom-based label updates
+        self._last_file_ranges = file_ranges_x
 
-            if display_name:
-                # Position label centered in file's time range, right above plot
-                x_center = (x_start + x_end) / 2
-                label = pg.TextItem(
-                    text=display_name,
-                    color='w',
-                    anchor=(0.5, 1)  # Anchor at center-bottom
-                )
-                label.setPos(x_center, y_top)
-                label.setFont(pg.QtGui.QFont('Arial', 8))
-                self.plot.addItem(label)
-                self.file_boundary_labels.append(label)
+        # Draw initial labels using the zoom-aware method
+        self._update_file_boundary_labels()
 
     def _apply_scan_averaging(self, data_matrix: np.ndarray, n: int) -> np.ndarray:
         """
