@@ -308,8 +308,8 @@ class PSMContourTab(QWidget):
         self.image_item = pg.ImageItem()
         self.plot.addItem(self.image_item)
 
-        # Use standard CET-R4 colormap for data
-        self.data_cmap = pg.colormap.get('CET-R4')
+        # Use colormap from settings (default: CET-R4)
+        self.data_cmap = pg.colormap.get(self.current_colormap)
 
         # Create colorbar (will show actual data range, not gaps)
         self.colorbar = pg.ColorBarItem(
@@ -550,19 +550,29 @@ class PSMContourTab(QWidget):
 
     def _set_time_window(self, hours):
         """Set the time window for the contour plot."""
+        old_hours = self.time_window_hours
         self.time_window_hours = hours
-        self._render_contour()
+        self._save_contour_settings()
+
+        # If increasing the time window, need to reload historical data
+        if hours > old_hours:
+            self._historical_data_loaded = False
+            self._load_historical_data()
+        else:
+            self._render_contour()
 
     def _set_colormap(self, cmap_name):
         """Set the colormap for the contour plot."""
         self.current_colormap = cmap_name
         self.data_cmap = pg.colormap.get(cmap_name)
         self.colorbar.setColorMap(self.data_cmap)
+        self._save_contour_settings()
         self._render_contour()
 
     def _toggle_crosshair(self, enabled):
         """Toggle crosshair visibility."""
         self.crosshair_enabled = enabled
+        self._save_contour_settings()
         if not enabled:
             # Hide crosshair elements
             if hasattr(self, 'vLine'):
@@ -578,7 +588,36 @@ class PSMContourTab(QWidget):
         Called by PSMWidget after setting app_config.
         This triggers auto-load of calibration and historical data.
         """
+        # Load saved contour settings
+        self._load_contour_settings()
         self._try_autoload_calibration()
+
+    def _load_contour_settings(self):
+        """Load saved contour plot settings from device config."""
+        try:
+            extra = self.device_config.extra_params
+            self.time_window_hours = extra.get('contour_time_window', 24)
+            self.current_colormap = extra.get('contour_colormap', 'CET-R4')
+            self.crosshair_enabled = extra.get('contour_crosshair', True)
+
+            # Apply colormap if plot exists
+            if hasattr(self, 'data_cmap'):
+                self.data_cmap = pg.colormap.get(self.current_colormap)
+                if hasattr(self, 'colorbar'):
+                    self.colorbar.setColorMap(self.data_cmap)
+        except Exception:
+            pass  # Use defaults
+
+    def _save_contour_settings(self):
+        """Save contour plot settings to device config."""
+        try:
+            self.device_config.extra_params['contour_time_window'] = self.time_window_hours
+            self.device_config.extra_params['contour_colormap'] = self.current_colormap
+            self.device_config.extra_params['contour_crosshair'] = self.crosshair_enabled
+            if self.on_config_changed:
+                self.on_config_changed()
+        except Exception:
+            pass
 
     def _try_autoload_calibration(self):
         """Try to auto-load calibration file from saved parameter."""
@@ -866,7 +905,7 @@ class PSMContourTab(QWidget):
 
         # --- Data actions ---
         reload_action = menu.addAction("Reload historical data")
-        reload_action.setToolTip("Reload scan data from .dat files from the last 24 hours")
+        reload_action.setToolTip("Reload scan data from .dat files")
         reload_action.triggered.connect(lambda: (setattr(self, '_historical_data_loaded', False), self._load_historical_data()))
 
         clear_buffer_action = menu.addAction("Clear scan buffer")
@@ -1582,28 +1621,9 @@ class PSMContourTab(QWidget):
                 self.plot.addItem(tick)
                 self.file_boundary_lines.append(tick)
 
-            # Parse filename for label
+            # Always show full filename
             base_name = file_name.replace('.dat', '')
-            parts = base_name.split('_')
-
-            # Determine label based on available width
-            range_width = x_end - x_start
-            display_name = None
-
-            if range_width >= 3.0:
-                display_name = base_name
-            elif range_width >= 1.0:
-                if len(parts) >= 2 and len(parts[1]) == 6:
-                    time_str = parts[1]
-                    display_name = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
-                else:
-                    display_name = base_name
-            elif range_width >= 0.4:
-                if len(parts) >= 2 and len(parts[1]) == 6:
-                    time_str = parts[1]
-                    display_name = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
-                else:
-                    display_name = f"#{i + 1}"
+            display_name = base_name
 
             if display_name:
                 # Position label centered in file's time range, right above plot
@@ -1661,12 +1681,13 @@ class PSMContourTab(QWidget):
             file_path = self.app_config.data_settings.file_path
             file_tag = self.app_config.data_settings.file_tag
 
-            # Load historical scans from ALL .dat files in last 24 hours
+            # Load historical scans from ALL .dat files in time window
             filepaths, scans = load_historical_scans(
                 file_path=file_path,
                 serial_number=serial_number,
                 device_nickname=device_nickname,
-                file_tag=file_tag
+                file_tag=file_tag,
+                hours=self.time_window_hours
             )
 
             if filepaths is None or len(filepaths) == 0:

@@ -29,29 +29,35 @@ def _detect_psm2_from_file(filepath: str) -> bool:
         return False  # Default to Retrofit on error
 
 
-def find_psm_files_last_24h(file_path: str) -> List[str]:
+def find_psm_files_last_24h(file_path: str, hours: int = 24) -> List[str]:
     """
-    Find ALL PSM .dat files from the last 24 hours (yesterday and today).
+    Find ALL PSM .dat files from the specified time window.
     Handles multiple files per day (e.g., from program restarts).
 
     Args:
         file_path: Directory where .dat files are saved
+        hours: Number of hours to look back (default 24, max 48 covers 3 days)
 
     Returns:
         List of paths to matching .dat files, sorted chronologically by filename
     """
     from datetime import timedelta
 
-    # Get today's and yesterday's dates
+    # Get dates to search based on hours parameter
     now = datetime.now()
-    today = now.strftime("%Y%m%d")
-    yesterday = (now - timedelta(days=1)).strftime("%Y%m%d")
+    dates_to_search = set()
+
+    # Calculate how many days back we need to search
+    days_back = (hours // 24) + 1  # +1 to include partial days
+    for i in range(days_back + 1):
+        date_str = (now - timedelta(days=i)).strftime("%Y%m%d")
+        dates_to_search.add(date_str)
 
     # Search for all PSM filename variants
     device_type_names = ["PSM", "PSM2", "PSM Retrofit", "PSM 2.0"]
     all_matching_files = set()
 
-    for date_str in [yesterday, today]:
+    for date_str in dates_to_search:
         for device_type_name in device_type_names:
             pattern = os.path.join(file_path, f"{date_str}_*{device_type_name}*.dat")
             all_matching_files.update(glob.glob(pattern))
@@ -218,10 +224,11 @@ def load_historical_scans(
     file_path: str,
     serial_number: str = "",
     device_nickname: str = "",
-    file_tag: str = ""
+    file_tag: str = "",
+    hours: int = 24
 ) -> Tuple[Optional[List[str]], List[Dict[str, np.ndarray]]]:
     """
-    Load and merge scans from ALL PSM .dat files in the last 24 hours.
+    Load and merge scans from ALL PSM .dat files in the specified time window.
     Handles multiple files per day and merges them intelligently.
 
     For overlapping timestamps, prefers data from the file with the longest
@@ -232,14 +239,15 @@ def load_historical_scans(
         serial_number: Device serial number (unused, kept for compatibility)
         device_nickname: Device nickname (unused, kept for compatibility)
         file_tag: File tag from settings (unused, kept for compatibility)
+        hours: Number of hours to look back (default 24)
 
     Returns:
         Tuple of (filepaths, scans):
         - filepaths: List of loaded file paths (or None if none found)
         - scans: Merged list of scan dicts with 'times', 'satflows', 'concentrations'
     """
-    # Find all files from last 24 hours
-    filepaths = find_psm_files_last_24h(file_path)
+    # Find all files from the specified time window
+    filepaths = find_psm_files_last_24h(file_path, hours=hours)
 
     if not filepaths:
         return None, []
