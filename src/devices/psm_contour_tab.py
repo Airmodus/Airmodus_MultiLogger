@@ -301,6 +301,9 @@ class PSMContourTab(QWidget):
         self.plot.setLabel('left', 'Particle Diameter (nm)')
         self.plot.showGrid(x=True, y=True, alpha=0.3)
 
+        # Add extra padding at top for crosshair values overlay
+        self.plot.getViewBox().setDefaultPadding(padding=0.08)
+
         # Create image item for contour
         self.image_item = pg.ImageItem()
         self.plot.addItem(self.image_item)
@@ -332,18 +335,10 @@ class PSMContourTab(QWidget):
         self.value_label = pg.TextItem(text="", color='w', anchor=(0, 0))
         value_font = pg.QtGui.QFont()
         value_font.setStyleHint(pg.QtGui.QFont.Monospace)
-        value_font.setPointSize(10)
+        value_font.setPointSize(8)
         self.value_label.setFont(value_font)
         self.plot.addItem(self.value_label, ignoreBounds=True)
         self.value_label.hide()
-
-        # Statistics overlay label (bottom-right corner)
-        self.stats_label = pg.TextItem(text="", color=(180, 180, 180), anchor=(1, 1))
-        stats_font = pg.QtGui.QFont()
-        stats_font.setStyleHint(pg.QtGui.QFont.Monospace)
-        stats_font.setPointSize(9)
-        self.stats_label.setFont(stats_font)
-        self.plot.addItem(self.stats_label, ignoreBounds=True)
 
         # Connect mouse move signal for crosshair
         self.plot.scene().sigMouseMoved.connect(self._on_mouse_moved)
@@ -1517,19 +1512,6 @@ class PSMContourTab(QWidget):
             # Update colorbar range (don't include the "gap" value)
             self.colorbar.setLevels((min_z, max_z))
 
-            # Update statistics overlay
-            if hasattr(self, 'stats_label') and len(scans_in_range) > 0:
-                first_ts = scans_in_range[0][0]
-                last_ts = scans_in_range[-1][0]
-                time_range_str = f"{first_ts.strftime('%H:%M')} - {last_ts.strftime('%H:%M')}"
-                conc_min = 10 ** min_z if min_z > 0 else 0
-                conc_max = 10 ** max_z if max_z > 0 else 0
-                stats_text = f"Scans: {len(scans_in_range)}\nRange: {time_range_str}\nConc: {conc_min:.0f} - {conc_max:.0f}"
-                self.stats_label.setText(stats_text)
-                # Position in bottom-right
-                view_range = self.plot.viewRange()
-                self.stats_label.setPos(view_range[0][1], view_range[1][0])
-
             # Add file boundary markers (pass bin index coordinates)
             self._draw_file_boundaries(scans_in_range, time_window_ago, pos_y, height)
 
@@ -1537,7 +1519,7 @@ class PSMContourTab(QWidget):
             logging.error(f"Error rendering contour: {e}")
 
     def _draw_file_boundaries(self, scans_in_range, time_24h_ago, y_min, y_height):
-        """Draw horizontal line segments at top of plot showing each file's time range.
+        """Draw vertical tick marks at file boundaries showing where files start/end.
 
         Args:
             y_min: Y position (bin index, typically 0)
@@ -1573,69 +1555,66 @@ class PSMContourTab(QWidget):
                 if file_ranges:
                     file_ranges[-1] = (file_ranges[-1][0], file_ranges[-1][1], ts)
 
-        # Draw horizontal line segments at top of plot for each file (in bin index coordinates)
+        # Draw vertical tick marks at file boundaries
         start_hour = time_24h_ago.hour + time_24h_ago.minute / 60
         y_top = y_min + y_height
 
-        # Position line right at the plot top
-        y_line = y_top
-        # Label position slightly above the line
-        y_label = y_top + (y_height * 0.02)
+        # Tick extends from plot top upward
+        tick_height = y_height * 0.03
+        y_tick_bottom = y_top
+        y_tick_top = y_top + tick_height
+        y_label = y_top + tick_height + (y_height * 0.01)
 
         for i, (file_name, start_ts, end_ts) in enumerate(file_ranges):
-            # Calculate x positions (hours since 24h ago, adjusted to clock time)
+            # Calculate x positions
             hours_start = (start_ts - time_24h_ago).total_seconds() / 3600
             hours_end = (end_ts - time_24h_ago).total_seconds() / 3600
             x_start = start_hour + hours_start
             x_end = start_hour + hours_end
 
-            # Draw horizontal line above plot spanning file's time range
-            line = pg.PlotCurveItem(
-                x=[x_start, x_end],
-                y=[y_line, y_line],
-                pen=pg.mkPen(color=(255, 255, 255, 180), width=2)
-            )
-            self.plot.addItem(line)
-            self.file_boundary_lines.append(line)
+            # Draw vertical tick at file start (skip first file at very beginning)
+            if i > 0 or hours_start > 0.01:  # Only if not at the very start
+                tick = pg.PlotCurveItem(
+                    x=[x_start, x_start],
+                    y=[y_tick_bottom, y_tick_top],
+                    pen=pg.mkPen(color=(255, 255, 255, 180), width=1)
+                )
+                self.plot.addItem(tick)
+                self.file_boundary_lines.append(tick)
 
-            # Determine label detail based on available width
-            # Format: YYYYMMDD_HHMMSS_DeviceType_Tag.dat
-            range_width = x_end - x_start
-            display_name = None
-
-            # Parse filename parts
+            # Parse filename for label
             base_name = file_name.replace('.dat', '')
             parts = base_name.split('_')
 
+            # Determine label based on available width
+            range_width = x_end - x_start
+            display_name = None
+
             if range_width >= 3.0:
-                # Wide range (3+ hours): show full filename
                 display_name = base_name
             elif range_width >= 1.0:
-                # Medium range (1-3 hours): show HH:MM:SS
                 if len(parts) >= 2 and len(parts[1]) == 6:
                     time_str = parts[1]
                     display_name = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
                 else:
                     display_name = base_name
             elif range_width >= 0.4:
-                # Narrow range (24min - 1hour): show HH:MM:SS
                 if len(parts) >= 2 and len(parts[1]) == 6:
                     time_str = parts[1]
                     display_name = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
                 else:
                     display_name = f"#{i + 1}"
-            # else: Very narrow range - no label
 
             if display_name:
-                # Add file name label centered on the horizontal line
+                # Position label centered in file's time range, right above plot
                 x_center = (x_start + x_end) / 2
                 label = pg.TextItem(
                     text=display_name,
                     color='w',
                     anchor=(0.5, 1)  # Anchor at center-bottom
                 )
-                label.setPos(x_center, y_label)
-                label.setFont(pg.QtGui.QFont('Arial', 9))
+                label.setPos(x_center, y_top)
+                label.setFont(pg.QtGui.QFont('Arial', 8))
                 self.plot.addItem(label)
                 self.file_boundary_labels.append(label)
 
