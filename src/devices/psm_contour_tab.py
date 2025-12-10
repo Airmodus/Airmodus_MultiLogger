@@ -151,6 +151,7 @@ class PSMContourTab(QWidget):
         self.time_window_hours = 24  # Default: 24 hours (options: 1, 6, 12, 24, 48)
         self.current_colormap = 'CET-R4'  # Default colormap
         self.crosshair_enabled = True  # Show crosshair by default
+        self.contour_10hz_enabled = False  # 10Hz contour mode disabled by default (experimental)
 
         # Custom time axis for contour plot
         self.time_axis = None
@@ -648,6 +649,11 @@ class PSMContourTab(QWidget):
             if hasattr(self, 'value_label'):
                 self.value_label.hide()
 
+    def _toggle_10hz_contour(self, enabled):
+        """Toggle 10Hz contour mode."""
+        self.contour_10hz_enabled = enabled
+        self._save_contour_settings()
+
     def initialize_after_config_set(self):
         """
         Initialize contour tab after app_config is set.
@@ -665,6 +671,7 @@ class PSMContourTab(QWidget):
             self.time_window_hours = extra.get('contour_time_window', 24)
             self.current_colormap = extra.get('contour_colormap', 'CET-R4')
             self.crosshair_enabled = extra.get('contour_crosshair', True)
+            self.contour_10hz_enabled = extra.get('contour_10hz_enabled', False)
 
             # Apply colormap if plot exists
             if hasattr(self, 'data_cmap'):
@@ -680,6 +687,7 @@ class PSMContourTab(QWidget):
             self.device_config.extra_params['contour_time_window'] = self.time_window_hours
             self.device_config.extra_params['contour_colormap'] = self.current_colormap
             self.device_config.extra_params['contour_crosshair'] = self.crosshair_enabled
+            self.device_config.extra_params['contour_10hz_enabled'] = self.contour_10hz_enabled
             if self.on_config_changed:
                 self.on_config_changed()
         except Exception:
@@ -967,6 +975,13 @@ class PSMContourTab(QWidget):
         crosshair_action.setToolTip("Show crosshair and values when hovering over the plot")
         crosshair_action.triggered.connect(self._toggle_crosshair)
 
+        # --- 10Hz contour toggle ---
+        hz10_action = menu.addAction("10Hz contour mode (experimental)")
+        hz10_action.setCheckable(True)
+        hz10_action.setChecked(self.contour_10hz_enabled)
+        hz10_action.setToolTip("Use 10Hz data for live contour updates (requires 10Hz logging enabled)")
+        hz10_action.triggered.connect(self._toggle_10hz_contour)
+
         menu.addSeparator()
 
         # --- Data actions ---
@@ -1059,11 +1074,16 @@ class PSMContourTab(QWidget):
         """Check if 10Hz mode should be used for live inversion.
 
         Returns True only if:
+        - contour_10hz_enabled is True (user setting)
         - data_holder is available
         - 10Hz logging is enabled in PSM config
         - A CPC is connected
         - CPC widget has valid ten_hz_data
         """
+        # Check if 10Hz contour mode is enabled (user toggle)
+        if not self.contour_10hz_enabled:
+            return False
+
         if data_holder is None:
             return False
 
@@ -1547,9 +1567,8 @@ class PSMContourTab(QWidget):
 
             if abs(dlogDp) > 0.001 and max_det_eff > 0:
                 # Map to output array - bin i-1 because we skip first bin
-                # Output bins go from smallest diameter (index 0) to largest
-                # i=1 corresponds to largest diameter particles, i=num_bins-1 to smallest
-                output_idx = self.num_bins - i - 1  # Correct mapping: i=5->0, i=1->4
+                # Output bins go from smallest diameter to largest
+                output_idx = self.num_bins - i  # Reverse order for display
                 if 0 <= output_idx < self.num_bins:
                     dN_dlogDp[output_idx] = dN_val / abs(dlogDp) / max_det_eff
 
