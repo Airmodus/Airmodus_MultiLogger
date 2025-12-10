@@ -171,7 +171,7 @@ class PlotManager:
                         )
 
                         # Update auxiliary displays (e.g., PSM contour plot)
-                        device_widget.update_auxiliary_displays()
+                        device_widget.update_auxiliary_displays(self.data_holder)
 
                         # scale x-axis range if Follow is on
                         if self.config.plot_settings.follow:

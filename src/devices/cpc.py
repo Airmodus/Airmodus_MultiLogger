@@ -334,6 +334,8 @@ class CPCWidget(ComplexDevice):
                 serial_number = parsed['data']
                 if device_config.serial_number != serial_number:
                     device_config.serial_number = serial_number
+                    # Update GUI display
+                    self._update_device_settings_display()
                     # Trigger config save
                     if hasattr(self, 'on_config_changed'):
                         self.on_config_changed()
@@ -392,8 +394,8 @@ class CPCWidget(ComplexDevice):
         """
         try:
             # Split command and data
-            message_string = message
-            parts = message.split(" ", 1)
+            message_string = message.strip()
+            parts = message_string.split(" ", 1)
             if len(parts) < 2:
                 return {
                     'type': 'unknown',
@@ -669,6 +671,10 @@ class CPCWidget(ComplexDevice):
                     self.connection.send_message(":SET:TAVG 1")
 
     # App Integration Methods
+
+    def supports_idn_inquiry(self):
+        """CPC supports *IDN? identity inquiry."""
+        return True
 
     @classmethod
     def get_default_extra_params(cls, device_type: int) -> dict:

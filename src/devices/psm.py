@@ -325,8 +325,8 @@ class PSMWidget(ComplexDevice):
         # update pressure values
         self.status_tab.pressure_inlet.change_value(str(current_list[9]) + " kPa")
         self.status_tab.pressure_critical_orifice.change_value(str(current_list[12]) + " kPa")
-        # update vacuum flow if PSM 2.0
-        if self.is_psm2:
+        # update vacuum flow if PSM 2.0 (check hasattr in case widget created before firmware known)
+        if self.is_psm2 and hasattr(self.status_tab, 'flow_vacuum'):
             self.status_tab.flow_vacuum.change_value(str(current_list[13]) + " lpm")
         # liquid level values are updated in PSMWidget's update_notes()
 
@@ -421,6 +421,8 @@ class PSMWidget(ComplexDevice):
                 serial_number = parsed['data']
                 if self.device_config.serial_number != serial_number:
                     self.device_config.serial_number = serial_number
+                    # Update GUI display
+                    self._update_device_settings_display()
                     if hasattr(self, 'on_config_changed') and self.on_config_changed:
                         self.on_config_changed()
                 if self.dev_id in data_holder.idn_inquiry_devices:
@@ -526,8 +528,8 @@ class PSMWidget(ComplexDevice):
         """
         try:
             # Split command and data
-            message_string = message
-            parts = message.split(" ", 1)
+            message_string = message.strip()
+            parts = message_string.split(" ", 1)
             if len(parts) < 2:
                 return {
                     'type': 'unknown',
@@ -598,9 +600,12 @@ class PSMWidget(ComplexDevice):
                 self.current_data.total_errors = total_errors
                 self.current_data.liquid_errors = liquid_errors
 
-                # Update GUI
-                self.update_values(data)
+                # Update mode color FIRST (critical for status bar display)
+                # This must happen before update_values in case it throws
                 self.measure_tab.change_mode_color(command)
+
+                # Update GUI status tab values
+                self.update_values(data)
 
                 has_errors = (total_errors + liquid_errors) > 0
 
@@ -745,13 +750,11 @@ class PSMWidget(ComplexDevice):
                 }
 
         except Exception as e:
-            # On parsing error, reset mode colors
-            try:
-                self.measure_tab.scan.change_color(0)
-                self.measure_tab.step.change_color(0)
-                self.measure_tab.fixed.change_color(0)
-            except Exception:
-                pass  # Widget may not exist yet
+            # Log which message caused the exception
+            logging.warning(f"PSM parse_message exception: {e}, message: {message[:100] if message else 'None'}")
+
+            # Don't reset mode colors on parsing errors - let them persist
+            # from the last valid measurement message
 
             return {
                 'type': 'error',
@@ -867,6 +870,10 @@ class PSMWidget(ComplexDevice):
 
     # App Integration Methods
 
+    def supports_idn_inquiry(self):
+        """PSM supports *IDN? identity inquiry."""
+        return True
+
     @classmethod
     def get_default_extra_params(cls, device_type: int) -> dict:
         """Return default extra_params for PSM devices."""
@@ -901,13 +908,13 @@ class PSMWidget(ComplexDevice):
             except (ValueError, AttributeError):
                 pass
 
-    def update_auxiliary_displays(self):
+    def update_auxiliary_displays(self, data_holder=None):
         """Update PSM contour plot."""
         import logging
         import traceback
         if hasattr(self, 'contour_tab') and self.is_connected:
             try:
-                self.contour_tab.update_contour(self.current_data)
+                self.contour_tab.update_contour(self.current_data, data_holder)
             except Exception as e:
                 logging.error(f"Error updating PSM contour plot: {e}")
                 traceback.print_exc()

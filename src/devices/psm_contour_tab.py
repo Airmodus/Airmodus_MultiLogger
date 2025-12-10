@@ -134,6 +134,7 @@ class PSMContourTab(QWidget):
         # Scan detection state
         self._prev_scan_status = "9"
         self._current_scan = None  # Dict with 'times', 'satflows', 'concentrations'
+        self._prev_saturator_flow = None  # For 10Hz saturator flow interpolation
 
         # Scan buffer (stores completed scans)
         self.scan_buffer = []  # List of dicts: {'time': float, 'bin_centers': array, 'dN_dlogDp': array}
@@ -1021,6 +1022,7 @@ class PSMContourTab(QWidget):
         """Clear the scan buffer and reset plot."""
         self.scan_buffer = []
         self._current_scan = None
+        self._prev_saturator_flow = None  # Reset 10Hz interpolation state
         self._render_contour()
 
     def _export_png(self):
@@ -1053,10 +1055,57 @@ class PSMContourTab(QWidget):
             except Exception as e:
                 logging.error(f"Error exporting PNG: {e}")
 
-    def update_contour(self, current_data):
+    def _should_use_10hz(self, data_holder) -> bool:
+        """Check if 10Hz mode should be used for live inversion.
+
+        Returns True only if:
+        - data_holder is available
+        - 10Hz logging is enabled in PSM config
+        - A CPC is connected
+        - CPC widget has valid ten_hz_data
         """
-        Update contour plot with new data point.
+        if data_holder is None:
+            return False
+
+        # Check if 10Hz logging is enabled in PSM config
+        if not self.device_config.extra_params.get('10_hz', False):
+            return False
+
+        # Get connected CPC ID
+        cpc_id = self.device_config.extra_params.get('connected_cpc', 'None')
+        if cpc_id == 'None':
+            return False
+
+        try:
+            cpc_id = int(cpc_id)
+        except (ValueError, TypeError):
+            return False
+
+        # Get CPC widget
+        cpc_widget = data_holder.device_widgets.get(cpc_id)
+        if cpc_widget is None or not hasattr(cpc_widget, 'ten_hz_data'):
+            return False
+
+        ten_hz_data = cpc_widget.ten_hz_data
+        if ten_hz_data is None or len(ten_hz_data) != 10:
+            return False
+
+        # Check at least some values are valid
+        valid_count = sum(1 for v in ten_hz_data if not np.isnan(float(v)))
+        return valid_count > 0
+
+    def update_contour(self, current_data, data_holder=None):
+        """
+        Update contour plot with new data point(s).
         Called every second from plot_manager.
+
+        When 10Hz is enabled and available:
+        - Gets 10 concentration values from CPC's ten_hz_data
+        - Interpolates saturator flow from previous to current (linear)
+        - Adds 10 data points per call instead of 1
+
+        When 10Hz is disabled or unavailable:
+        - Falls back to 1Hz behavior (single point per call)
 
         Scan status values:
         - 0 = bottom wait (end of down scan)
@@ -1072,10 +1121,19 @@ class PSMContourTab(QWidget):
 
         Args:
             current_data: PSMData dataclass instance
+            data_holder: DataHolder for accessing connected CPC widget (optional)
         """
         if not self.calibration_loaded:
             return
 
+        # Dispatch based on 10Hz availability
+        if self._should_use_10hz(data_holder):
+            self._update_contour_10hz(current_data, data_holder)
+        else:
+            self._update_contour_1hz(current_data)
+
+    def _update_contour_1hz(self, current_data):
+        """Handle 1Hz data collection for contour plot (original behavior)."""
         # Normalize scan status
         scan_status_raw = str(current_data.scan_status).strip()
         try:
@@ -1135,6 +1193,88 @@ class PSMContourTab(QWidget):
         self._update_scan_progress(scan_status, current_data.saturator_flow)
 
         # Update previous status
+        self._prev_scan_status = scan_status
+
+    def _update_contour_10hz(self, current_data, data_holder):
+        """Handle 10Hz data collection for contour plot.
+
+        Collects 10 concentration values from CPC's ten_hz_data buffer
+        and interpolates saturator flow from previous to current value.
+        """
+        # Get CPC widget and 10Hz data
+        cpc_id = int(self.device_config.extra_params.get('connected_cpc'))
+        cpc_widget = data_holder.device_widgets.get(cpc_id)
+        ten_hz_data = cpc_widget.ten_hz_data
+
+        current_flow = current_data.saturator_flow
+
+        # Normalize scan status
+        scan_status_raw = str(current_data.scan_status).strip()
+        try:
+            scan_status = str(int(float(scan_status_raw)))
+        except (ValueError, TypeError):
+            scan_status = scan_status_raw
+
+        # Skip status 4 (don't log)
+        if scan_status == "4":
+            self._prev_scan_status = scan_status
+            self._prev_saturator_flow = current_flow
+            return
+
+        # Detect scan start transitions
+        if scan_status == "1" and self._prev_scan_status != "1":
+            if self._current_scan is not None:
+                self._finalize_scan()
+            self._current_scan = {
+                'times': [], 'satflows': [], 'concentrations': [], 'type': 'up'
+            }
+            self._prev_saturator_flow = None  # Reset on new scan
+
+        elif scan_status == "3" and self._prev_scan_status != "3":
+            if self._current_scan is not None:
+                self._finalize_scan()
+            self._current_scan = {
+                'times': [], 'satflows': [], 'concentrations': [], 'type': 'down'
+            }
+            self._prev_saturator_flow = None  # Reset on new scan
+
+        # Accumulate data during scan
+        if self._current_scan is not None:
+            include_point = False
+            if self._current_scan['type'] == 'up' and scan_status in ["1", "2"]:
+                include_point = True
+            elif self._current_scan['type'] == 'down' and scan_status in ["3", "0"]:
+                include_point = True
+
+            if include_point and not np.isnan(current_flow):
+                # Interpolate saturator flow for 10 points
+                if self._prev_saturator_flow is None:
+                    # First point in scan - use current flow for all
+                    flows = np.full(10, current_flow)
+                else:
+                    # Linear interpolation: index 0 is oldest (just after prev), index 9 is current
+                    flows = np.linspace(self._prev_saturator_flow, current_flow, 10)
+
+                # Add 10 data points
+                base_time = pd.Timestamp.now()
+                for i in range(10):
+                    try:
+                        conc_float = float(ten_hz_data[i])
+                    except (ValueError, TypeError):
+                        continue
+
+                    if not np.isnan(conc_float):
+                        # Time offset: index 0 is -900ms, index 9 is now (0ms)
+                        time_offset = pd.Timedelta(milliseconds=(i - 9) * 100)
+                        self._current_scan['times'].append(base_time + time_offset)
+                        self._current_scan['satflows'].append(flows[i])
+                        self._current_scan['concentrations'].append(conc_float)
+
+        # Store current flow for next interpolation
+        self._prev_saturator_flow = current_flow
+
+        # Update scan progress UI
+        self._update_scan_progress(scan_status, current_flow)
         self._prev_scan_status = scan_status
 
     def _update_scan_progress(self, scan_status: str, current_satflow: float):

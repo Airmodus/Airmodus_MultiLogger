@@ -435,6 +435,7 @@ class BrowserStyleTabBar(QWidget):
     # Forward signals from inner tab bar
     currentChanged = pyqtSignal(int)
     tabMoved = pyqtSignal(int, int)  # (from_index, to_index) - emitted when user drags a tab
+    tabBarClicked = pyqtSignal(int)  # Emitted when any tab is clicked (even if already selected)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -471,6 +472,7 @@ class BrowserStyleTabBar(QWidget):
         self._tab_bar.setObjectName("mainDeviceTabBar")  # Unique name for specific styling
         self._tab_bar.currentChanged.connect(self.currentChanged.emit)
         self._tab_bar.tabMoved.connect(self.tabMoved.emit)  # Forward tab drag events
+        self._tab_bar.tabBarClicked.connect(self.tabBarClicked.emit)  # Forward click events
         self._scroll_area.setWidget(self._tab_bar)
 
         # Make viewport transparent

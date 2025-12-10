@@ -653,12 +653,15 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
         """
         pass
 
-    def update_auxiliary_displays(self):
+    def update_auxiliary_displays(self, data_holder=None):
         """
         Update auxiliary displays beyond main plots (contour plots, etc.).
 
         Called during plot updates for connected devices.
         Override in devices with additional display elements.
+
+        Args:
+            data_holder: DataHolder for accessing other devices (optional)
 
         Override example:
             PSM: Update contour plot with current_data
@@ -947,6 +950,8 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
                 serial_number = parsed['data']
                 if self.device_config.serial_number != serial_number:
                     self.device_config.serial_number = serial_number
+                    # Update GUI display
+                    self._update_device_settings_display()
                     # Trigger config change callback if available
                     if hasattr(self, 'on_config_changed') and self.on_config_changed:
                         self.on_config_changed()
@@ -957,6 +962,8 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
                     short_id = self._get_unique_short_id(serial_number, data_holder)
                     if short_id:
                         self.device_config.device_nickname = f"{self.device_config.device_type_name} {short_id}"
+                        # Also update GUI display for nickname
+                        self._update_device_settings_display()
                         if hasattr(self, 'on_config_changed') and self.on_config_changed:
                             self.on_config_changed()
 

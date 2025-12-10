@@ -10,6 +10,7 @@ class SerialDeviceConnection():
         self.timeout = 0.2
         self.baud_rate = 115200
         self._connecting = False  # Flag to prevent duplicate connection attempts
+        self._connected = False  # Flag to track successful connection (thread-safe)
         self._connection_thread = None
         self._pending_timers = []  # Track pending message timers for cancellation
         self.disable_dtr = False  # Set True for Arduino devices to prevent auto-reset on connect
@@ -49,7 +50,9 @@ class SerialDeviceConnection():
             try:
                 self.connect()  # Existing blocking connect
                 success = hasattr(self, 'connection') and self.connection.is_open
+                self._connected = success  # Set flag for thread-safe checking
             except Exception as e:
+                self._connected = False
                 logging.debug(f"[SERIAL CONNECT ASYNC] Failed to connect to {self.serial_port}: {e}")
             finally:
                 self._connecting = False
@@ -70,6 +73,7 @@ class SerialDeviceConnection():
     def close(self):
         # Cancel all pending message timers first
         self._cancel_pending_timers()
+        self._connected = False  # Mark as disconnected
         # if connection exist, it is closed
         try:
             # Try to close with the port that was last used (needed if the port has been changed)

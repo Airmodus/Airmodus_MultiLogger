@@ -3,6 +3,7 @@ from PyQt5.QtCore import QTimer, pyqtSignal, QObject
 from PyQt5.QtGui import QIcon
 from time import time
 import traceback
+import os
 from serial.tools import list_ports
 from serial import Serial
 import logging
@@ -63,7 +64,9 @@ class DeviceManager(QObject):
             was_connected = hasattr(connection, 'connection') and connection.connection.is_open
 
             # If was connected but port is no longer available, close connection
-            if was_connected and port not in com_port_list:
+            # Also check if port exists on filesystem (for manual/virtual ports like pty)
+            port_still_exists = os.path.exists(port) if port else False
+            if was_connected and port not in com_port_list and not port_still_exists:
                 try:
                     connection.close()
                 except Exception as e:
@@ -71,13 +74,24 @@ class DeviceManager(QObject):
 
             connected = False
 
-            # Only try to connect if port is in the available port list
-            # This prevents false "connected" status when port doesn't exist
-            if port and port in com_port_list:
-                # Check if already connected
+            # Check if port is available - either in scanned list or exists on filesystem
+            # This allows manual/virtual ports (like pty simulators) to work
+            port_exists = os.path.exists(port) if port else False
+            port_available = port and (port in com_port_list or port_exists)
+
+            if port_available:
+                # Check if already connected using the _connected flag (thread-safe)
                 try:
-                    if hasattr(connection, 'connection') and connection.connection.is_open:
+                    # Use _connected flag which is set by connect_async thread
+                    if hasattr(connection, '_connected') and connection._connected:
                         connected = True
+                    else:
+                        # Fallback to is_open check
+                        has_conn = hasattr(connection, 'connection')
+                        is_open = connection.connection.is_open if has_conn else False
+                        if has_conn and is_open:
+                            connected = True
+                            connection._connected = True  # Sync the flag
                 except Exception:
                     pass
 

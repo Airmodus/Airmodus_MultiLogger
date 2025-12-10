@@ -212,6 +212,7 @@ class MainWindow(QMainWindow):
         """)
         self.device_tab_bar.currentChanged.connect(self._on_tab_changed)
         self.device_tab_bar.tabMoved.connect(self._on_tab_moved)
+        self.device_tab_bar.tabBarClicked.connect(self._on_tab_clicked)
 
         tab_bar_container_layout.addWidget(self.device_tab_bar, stretch=1)
 
@@ -298,6 +299,14 @@ class MainWindow(QMainWindow):
             saved = device_widget.device_config.extra_params.get('last_tab_index', 0)
             if 0 <= saved < device_widget.count():
                 device_widget.setCurrentIndex(saved)
+
+    def _on_tab_clicked(self, index):
+        """Handle tab click - ensure close button visibility is updated.
+
+        This is needed because currentChanged doesn't fire when clicking
+        an already-selected tab.
+        """
+        self._update_close_button_visibility()
 
     def _on_tab_moved(self, from_index, to_index):
         """Handle user drag-drop tab reordering - sync QStackedWidget and protect Main plot.
@@ -556,6 +565,11 @@ class MainWindow(QMainWindow):
         if widget_index >= 0:
             self.device_tabs.removeWidget(widget)
             self.device_tab_bar.removeTab(widget_index)
+
+        # Update close button visibility after tab removal
+        # Use immediate update plus deferred update to handle Qt's async tab state changes
+        self._update_close_button_visibility()
+        QTimer.singleShot(0, self._update_close_button_visibility)
 
         # Clear data holder
         self.data_holder.clear_for_device(dev_id)
