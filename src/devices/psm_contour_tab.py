@@ -1547,9 +1547,11 @@ class PSMContourTab(QWidget):
 
             if abs(dlogDp) > 0.001 and max_det_eff > 0:
                 # Map to output array - bin i-1 because we skip first bin
-                # Output bins go from smallest diameter to largest
-                output_idx = self.num_bins - i  # Reverse order for display
-                dN_dlogDp[output_idx] = dN_val / abs(dlogDp) / max_det_eff
+                # Output bins go from smallest diameter (index 0) to largest
+                # i=1 corresponds to largest diameter particles, i=num_bins-1 to smallest
+                output_idx = self.num_bins - i - 1  # Correct mapping: i=5->0, i=1->4
+                if 0 <= output_idx < self.num_bins:
+                    dN_dlogDp[output_idx] = dN_val / abs(dlogDp) / max_det_eff
 
         return dN_dlogDp
 
