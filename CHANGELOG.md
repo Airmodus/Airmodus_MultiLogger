@@ -1,5 +1,10 @@
 # Airmodus MultiLogger - Software change log
 
+### 0.11.2 - 2025.12.12
+- changed DTR disable to RTS disable (esp32 reboot problem)
+- set main plot value when adding device (multi-value devices)
+- added send_read_commands() function to AFCWidget
+
 ### 0.11.1 - 2025.12.05
 - AFM device type (WIP)
 

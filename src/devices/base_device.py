@@ -187,6 +187,9 @@ class BaseDevice(QTabWidget, metaclass=QABCMeta):
                 # Trigger config save
                 if hasattr(self, 'on_config_changed'):
                     self.on_config_changed()
+            
+            # Set initial value to selected item
+            update_main_plot_value(self.main_plot_dropdown.currentIndex())
 
             self.main_plot_dropdown.currentIndexChanged.connect(update_main_plot_value)
             form_layout.addRow("Main Plot Value:", self.main_plot_dropdown)

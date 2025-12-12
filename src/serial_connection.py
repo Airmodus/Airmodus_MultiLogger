@@ -20,18 +20,16 @@ class SerialDeviceConnection():
         self.baud_rate = baud_rate
     
     # open serial connection
-    def connect(self, disable_dtr=False):
+    def connect(self):
         try: # Try to close with the port that was last used (needed if the port has been changed)
             self.connection.close()
         except: # if fails (i.e. port has not been open) continue normally
             pass
-        if disable_dtr: # disable DTR to prevent device reboot on disconnect
-            self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout, dsrdtr=False, dtr=False)
-        else:
-            self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout) #, rtscts=True)
+        self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout) #, rtscts=True)
+        self.connection.setRTS(False)
         print("Connected to %s" % self.serial_port)
 
-    def connect_async(self, callback=None, disable_dtr=False):
+    def connect_async(self, callback=None):
         """
         Attempt connection in background thread (non-blocking).
 
@@ -46,7 +44,7 @@ class SerialDeviceConnection():
         def _connect_worker():
             success = False
             try:
-                self.connect(disable_dtr=disable_dtr)
+                self.connect()
                 success = hasattr(self, 'connection') and self.connection.is_open
             except Exception as e:
                 logging.debug(f"[SERIAL CONNECT ASYNC] Failed to connect to {self.serial_port}: {e}")

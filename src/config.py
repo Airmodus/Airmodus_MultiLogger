@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, Q
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
 
 # current version number displayed in the GUI (Major.Minor.Patch or Breaking.Feature.Fix)
-version_number = "0.11.1"
+version_number = "0.11.2"
 
 # Define instrument types
 CPC = 1

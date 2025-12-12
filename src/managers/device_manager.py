@@ -93,10 +93,7 @@ class DeviceManager(QObject):
                         if connection.serial_port != port:
                             connection.set_port(port)
                         # Start background connection - next cycle will detect success
-                        if device_type in [AFM, AFC]:
-                            connection.connect_async(disable_dtr=True)
-                        else:
-                            connection.connect_async()
+                        connection.connect_async()
 
             # Handle connection state changes
             if device_widget:

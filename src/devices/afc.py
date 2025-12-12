@@ -36,6 +36,10 @@ class AFCWidget(ComplexDevice):
         """AFC has a single flow plot."""
         return ['']
     
+    def send_read_commands(self, dev_conn, device_config):
+        """Send AFC read command :MEAS:ALL to get all relevant values."""
+        dev_conn.send_message(":MEAS:ALL")
+
     def get_read_command(self):
         """AFC read command :MEAS:ALL requests all relevant values."""
         return ":MEAS:ALL"
