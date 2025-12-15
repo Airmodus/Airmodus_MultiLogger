@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QFileDialog, QMenu, QSizePolicy, QCheckBox,
                               QLineEdit, QSpinBox, QProgressBar, QGraphicsOpacityEffect,
                               QWidgetAction, QActionGroup)
-from PyQt5.QtCore import Qt, QPoint, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt5.QtCore import Qt, QPoint, QTimer, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal
 from PyQt5.QtGui import QIcon, QIntValidator
 import pyqtgraph as pg
 from scipy.interpolate import interp1d
@@ -82,6 +82,69 @@ class BinAxisItem(pg.AxisItem):
         return labels
 
 
+class HistoricalDataLoader(QThread):
+    """
+    Worker thread for loading historical scan data without blocking the UI.
+    """
+    # Signals for communicating with main thread
+    progress = pyqtSignal(int, int, str)  # current, total, message
+    scan_loaded = pyqtSignal(dict)  # individual scan data
+    finished_loading = pyqtSignal(list, list)  # filepaths, all scans
+    error = pyqtSignal(str)  # error message
+
+    def __init__(self, file_path, serial_number, device_nickname, file_tag, hours):
+        super().__init__()
+        self.file_path = file_path
+        self.serial_number = serial_number
+        self.device_nickname = device_nickname
+        self.file_tag = file_tag
+        self.hours = hours
+        self._cancelled = False
+
+    def cancel(self):
+        """Cancel the loading operation."""
+        self._cancelled = True
+
+    def run(self):
+        """Load historical scans in background thread."""
+        try:
+            self.progress.emit(0, 0, "Finding data files...")
+
+            # Load historical scans
+            filepaths, scans = load_historical_scans(
+                file_path=self.file_path,
+                serial_number=self.serial_number,
+                device_nickname=self.device_nickname,
+                file_tag=self.file_tag,
+                hours=self.hours
+            )
+
+            if self._cancelled:
+                return
+
+            if filepaths is None or len(filepaths) == 0:
+                self.error.emit("No data files found")
+                return
+
+            if not scans:
+                self.error.emit(f"No scans in {len(filepaths)} file(s)")
+                return
+
+            # Emit progress for each scan
+            total = len(scans)
+            for i, scan in enumerate(scans):
+                if self._cancelled:
+                    return
+                self.progress.emit(i + 1, total, f"Processing scan {i + 1}/{total}")
+                self.scan_loaded.emit(scan)
+
+            self.finished_loading.emit(filepaths, scans)
+
+        except Exception as e:
+            logging.error(f"Error in historical data loader: {e}")
+            self.error.emit(str(e))
+
+
 class PSMContourTab(QWidget):
     """
     PSM Contour Plot Tab Widget
@@ -124,6 +187,7 @@ class PSMContourTab(QWidget):
         self.plot_initialized = False
         self._historical_data_loaded = False  # Track if we've loaded historical data
         self._loading_in_progress = False  # Track if loading is currently happening
+        self._loader_thread = None  # Background thread for loading historical data
 
         # Calibration data
         self.calibration_df = None
@@ -182,15 +246,10 @@ class PSMContourTab(QWidget):
         # when app_config is available
 
     def showEvent(self, event):
-        """Override showEvent to lazily load historical data when tab becomes visible."""
+        """Override showEvent - historical data is loaded manually via button."""
         super().showEvent(event)
-        # Load historical data on first show (if calibration is loaded)
-        # Only load if this widget is actually visible to the user (not just being initialized)
-        if self.calibration_loaded and not self._historical_data_loaded and self.isVisible():
-            self._historical_data_loaded = True
-            # Defer to next event loop to avoid blocking tab switch
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(100, self._load_historical_data)
+        # Historical data loading is now manual (via Load History button)
+        # to avoid freezing the UI on tab switch
 
     def _create_calibration_prompt(self):
         """Create the initial calibration file prompt view."""
@@ -283,6 +342,36 @@ class PSMContourTab(QWidget):
         top_bar.addWidget(self.scan_counter_label)
 
         top_bar.addSpacing(10)
+
+        # Load History button
+        self.load_history_btn = QPushButton("Load History")
+        self.load_history_btn.setFixedHeight(26)
+        self.load_history_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4a4a4a;
+                color: white;
+                border: 1px solid #666;
+                border-radius: 3px;
+                padding: 2px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #5a5a5a;
+            }
+            QPushButton:pressed {
+                background-color: #3a3a3a;
+            }
+            QPushButton:disabled {
+                background-color: #333;
+                color: #666;
+            }
+        """)
+        self.load_history_btn.setToolTip("Load historical scan data from .dat files")
+        self.load_history_btn.setToolTipDuration(10000)
+        self.load_history_btn.clicked.connect(self._start_historical_data_load)
+        top_bar.addWidget(self.load_history_btn)
+
+        top_bar.addSpacing(5)
 
         # Settings button
         self.settings_btn = QPushButton("⚙")
@@ -631,7 +720,7 @@ class PSMContourTab(QWidget):
         # If increasing the time window, need to reload historical data
         if hours > old_hours:
             self._historical_data_loaded = False
-            self._load_historical_data()
+            self._start_historical_data_load()
         else:
             self._render_contour()
 
@@ -849,20 +938,8 @@ class PSMContourTab(QWidget):
             if not auto_load and self.on_config_changed:
                 self.on_config_changed()
 
-            # Auto-load historical data after calibration loads
-            # Use QTimer to defer and avoid blocking
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(100, self._load_historical_data_if_ready)
-
         except Exception:
             pass  # Silently handle calibration loading errors
-
-    def _load_historical_data_if_ready(self):
-        """Load historical data if calibration and app_config are ready, but only when tab is visible."""
-        # Only load when tab is actually visible (lazy loading)
-        if self.calibration_loaded and self.app_config and not self._historical_data_loaded and self.isVisible():
-            self._historical_data_loaded = True
-            self._load_historical_data()
 
     def _diameter_to_flow(self, diameters: np.ndarray) -> np.ndarray:
         """Convert particle diameters to saturator flow rates using calibration."""
@@ -1067,7 +1144,7 @@ class PSMContourTab(QWidget):
         # --- Data actions ---
         reload_action = menu.addAction("Reload historical data")
         reload_action.setToolTip("Reload scan data from .dat files")
-        reload_action.triggered.connect(lambda: (setattr(self, '_historical_data_loaded', False), self._load_historical_data()))
+        reload_action.triggered.connect(lambda: (setattr(self, '_historical_data_loaded', False), self._start_historical_data_load()))
 
         clear_buffer_action = menu.addAction("Clear scan buffer")
         clear_buffer_action.setToolTip("Clear all stored scans (historical and live) and reset the contour plot")
@@ -1701,7 +1778,8 @@ class PSMContourTab(QWidget):
                 if 0 <= output_idx < self.num_bins:
                     dN_dlogDp[output_idx] = dN_val / abs(dlogDp) / max_det_eff
 
-        return dN_dlogDp
+        # Flip array so index 0 = smallest diameter, matching bin_limits_dp ordering
+        return np.flip(dN_dlogDp)
 
     def _step_inversion(self, binned_concentrations: np.ndarray) -> np.ndarray:
         """
@@ -2008,87 +2086,96 @@ class PSMContourTab(QWidget):
         averaged = df.T.rolling(n, min_periods=1).mean().T
         return averaged.values
 
-    def _load_historical_data(self):
+    def _start_historical_data_load(self):
         """
-        Load historical scan data from today's .dat file.
-        Called automatically after calibration loads, or manually from settings menu.
+        Start loading historical scan data in a background thread.
+        Called when user clicks the Load History button.
         """
         if not self.calibration_loaded:
+            self.file_label.setText("Load calibration file first")
             return
 
         if self._loading_in_progress:
             return
 
+        # Get device information from config
+        serial_number = self.device_config.serial_number
+        device_nickname = self.device_config.device_nickname
+
+        # Get file path from global config
+        if not self.app_config:
+            self.file_label.setText("Configuration not ready")
+            return
+
+        file_path = self.app_config.data_settings.file_path
+        file_tag = self.app_config.data_settings.file_tag
+
+        # Cancel any existing loader thread
+        if self._loader_thread is not None and self._loader_thread.isRunning():
+            self._loader_thread.cancel()
+            self._loader_thread.wait()
+
         self._loading_in_progress = True
         self._show_loading_overlay()
+        self.load_history_btn.setEnabled(False)
+        self.load_history_btn.setText("Loading...")
 
+        # Clear existing buffer before loading historical data
+        self.scan_buffer = []
+        self._pending_scans = []  # Collect scans for batch processing
+
+        # Create and start loader thread
+        self._loader_thread = HistoricalDataLoader(
+            file_path=file_path,
+            serial_number=serial_number,
+            device_nickname=device_nickname,
+            file_tag=file_tag,
+            hours=self.time_window_hours
+        )
+
+        # Connect signals
+        self._loader_thread.progress.connect(self._on_loading_progress)
+        self._loader_thread.scan_loaded.connect(self._on_scan_loaded)
+        self._loader_thread.finished_loading.connect(self._on_loading_finished)
+        self._loader_thread.error.connect(self._on_loading_error)
+
+        # Start the thread
+        self._loader_thread.start()
+
+    def _on_loading_progress(self, current: int, total: int, message: str):
+        """Handle progress updates from the loader thread."""
+        if hasattr(self, 'loading_label'):
+            self.loading_label.setText(message)
+        if total > 0 and hasattr(self, 'scan_progress_bar'):
+            self.scan_progress_bar.setRange(0, total)
+            self.scan_progress_bar.setValue(current)
+
+    def _on_scan_loaded(self, scan_data: dict):
+        """Handle a single scan loaded from the background thread."""
+        # Collect scans for batch processing (processing happens in main thread after all loaded)
+        self._pending_scans.append(scan_data)
+
+    def _on_loading_finished(self, filepaths: list, scans: list):
+        """Handle completion of historical data loading."""
         try:
-            # Get device information from config
-            serial_number = self.device_config.serial_number
-            device_nickname = self.device_config.device_nickname
-
-            # Get file path from global config
-            if not self.app_config:
-                self._loading_in_progress = False
-                self._hide_loading_overlay()
-                return
-
-            file_path = self.app_config.data_settings.file_path
-            file_tag = self.app_config.data_settings.file_tag
-
-            # Load historical scans from ALL .dat files in time window
-            filepaths, scans = load_historical_scans(
-                file_path=file_path,
-                serial_number=serial_number,
-                device_nickname=device_nickname,
-                file_tag=file_tag,
-                hours=self.time_window_hours
-            )
-
-            if filepaths is None or len(filepaths) == 0:
-                self.file_label.setText("No data files found")
-                self._loading_in_progress = False
-                self._hide_loading_overlay()
-                return
-
-            if not scans:
-                self.file_label.setText(f"No scans in {len(filepaths)} file(s)")
-                self._loading_in_progress = False
-                self._hide_loading_overlay()
-                return
-
             # Store loaded file paths
             self.loaded_file_path = filepaths
 
-            # Update loading label with progress
+            # Process all pending scans in main thread
             if hasattr(self, 'loading_label'):
-                self.loading_label.setText(f"Processing {len(scans)} scans...")
-                from PyQt5.QtWidgets import QApplication
-                QApplication.processEvents()
+                self.loading_label.setText("Processing scans...")
 
-            # Clear existing buffer before loading historical data
-            self.scan_buffer = []
-
-            # Process each scan
-            for i, scan_data in enumerate(scans):
+            for i, scan_data in enumerate(self._pending_scans):
                 try:
                     self._process_historical_scan(scan_data)
-                    # Update progress occasionally
-                    if i % 20 == 0 and hasattr(self, 'loading_label'):
-                        self.loading_label.setText(f"Processing scan {i+1}/{len(scans)}...")
-                        from PyQt5.QtWidgets import QApplication
-                        QApplication.processEvents()
                 except Exception as e:
                     logging.error(f"Error processing scan {i+1}: {e}")
 
-            # Get time range and update label with full info
-            start_time, end_time = get_scan_time_range(scans)
-            if start_time and end_time:
-                # Show file info in label (scan count shown in counter)
-                if len(filepaths) == 1:
-                    self.file_label.setText(f"File: {os.path.basename(filepaths[0])}")
-                else:
-                    self.file_label.setText(f"{len(filepaths)} files loaded")
+            # Update file label
+            if len(filepaths) == 1:
+                self.file_label.setText(f"File: {os.path.basename(filepaths[0])}")
+            else:
+                self.file_label.setText(f"{len(filepaths)} files loaded")
 
             # Update scan counter
             if hasattr(self, 'scan_counter_label'):
@@ -2097,11 +2184,29 @@ class PSMContourTab(QWidget):
             # Render contour with loaded data
             self._render_contour()
 
+            self._historical_data_loaded = True
+
         except Exception as e:
-            logging.error(f"Error loading historical data: {e}")
+            logging.error(f"Error processing loaded data: {e}")
         finally:
             self._loading_in_progress = False
             self._hide_loading_overlay()
+            self.load_history_btn.setEnabled(True)
+            self.load_history_btn.setText("Load History")
+            self._pending_scans = []
+            if hasattr(self, 'scan_progress_bar'):
+                self.scan_progress_bar.setValue(0)
+
+    def _on_loading_error(self, error_message: str):
+        """Handle errors from the loader thread."""
+        self.file_label.setText(error_message)
+        self._loading_in_progress = False
+        self._hide_loading_overlay()
+        self.load_history_btn.setEnabled(True)
+        self.load_history_btn.setText("Load History")
+        self._pending_scans = []
+        if hasattr(self, 'scan_progress_bar'):
+            self.scan_progress_bar.setValue(0)
 
     def _process_historical_scan(self, scan_data: Dict[str, np.ndarray]):
         """
