@@ -113,9 +113,9 @@ class MockCO2Responses:
 
 
 class MockAFMResponses:
-    """Mock responses for Air Flow Meter (simple device)."""
+    """Mock responses for Airmodus Flow Meter (simple device)."""
 
-    IDN = b"*IDN Air Flow Meter,PSN:AFM-001,FW:1.0.0\r"
+    IDN = b"*IDN Airmodus Flow Meter,PSN:AFM-001,FW:1.0.0\r"
 
     # Auto-pushed data
     DATA_NORMAL = b"1.25,25.3,1013.2\r"  # Flow L/min, Temp°C, Pressure mbar

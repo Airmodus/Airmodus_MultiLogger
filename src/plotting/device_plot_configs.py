@@ -751,7 +751,7 @@ class AFMPlotConfig(BasePlotConfig):
         """Store all AFM values."""
         afm_data = self.device.current_data
         plot_data[str(dev_id)+':f'][time_counter] = afm_data.flow
-        plot_data[str(dev_id)+':sf'][time_counter] = afm_data.saturator_flow
+        plot_data[str(dev_id)+':sf'][time_counter] = afm_data.standard_flow
         plot_data[str(dev_id)+':rh'][time_counter] = afm_data.humidity
         plot_data[str(dev_id)+':t'][time_counter] = afm_data.temperature
         plot_data[str(dev_id)+':p'][time_counter] = afm_data.pressure

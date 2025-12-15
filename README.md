@@ -29,7 +29,7 @@ An .exe version of the software can be downloaded from the repository's [Release
 | **Electrometer** | Voltage Measurement Device | Simple |
 | **CO2 Sensor** | Environmental CO2 Monitoring | Simple |
 | **RHTP** | Relative Humidity, Temperature, Pressure | Simple |
-| **AFM** | Air Flow Meter | Simple |
+| **AFM** | Airmodus Flow Meter | Simple |
 | **TSI CPC** | TSI Condensation Particle Counter | Simple |
 
 **Device Types:**

@@ -53,7 +53,6 @@ class AFCWidget(ComplexDevice):
         """
         try:
             # Split command and data
-            print(message)
             message_string = message
             parts = message.split(" ", 1)
             if len(parts) < 2:

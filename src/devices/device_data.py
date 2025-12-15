@@ -209,7 +209,7 @@ class RHTPData:
 class AFMData:
     """AFM (Airmodus Flow Meter) data structure (5 fields)."""
     flow: float = nan
-    saturator_flow: float = nan
+    standard_flow: float = nan
     humidity: float = nan
     temperature: float = nan
     pressure: float = nan
@@ -218,7 +218,7 @@ class AFMData:
         """Convert to array in order expected by legacy code."""
         return [
             self.flow,
-            self.saturator_flow,
+            self.standard_flow,
             self.humidity,
             self.temperature,
             self.pressure
@@ -239,7 +239,6 @@ class AFCData:
             self.flow,
             self.average_flow,
             self.temperature,
-            self.flow_setpoint,
             self.error_status
         ]
 

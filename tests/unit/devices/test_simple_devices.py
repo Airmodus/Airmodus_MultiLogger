@@ -4,7 +4,7 @@ Unit tests for simple devices - Message parsing and data handling.
 Tests all simple device types:
 - RHTP (Relative Humidity, Temperature, Pressure)
 - CO2 Sensor
-- AFM (Air Flow Meter)
+- AFM (Airmodus Flow Meter)
 - Electrometer
 - TSI CPC
 - Example Device
@@ -201,28 +201,28 @@ class TestCO2Device:
 
 
 # ============================================================================
-# AFM (Air Flow Meter) Tests
+# AFM (Airmodus Flow Meter) Tests
 # ============================================================================
 
 class TestAFMDevice:
-    """Test AFM (Air Flow Meter) device."""
+    """Test AFM (Airmodus Flow Meter) device."""
 
     def test_parse_valid_data(self, afm_widget):
-        """Test parsing valid AFM data (flow, saturator_flow, RH, T, P)."""
+        """Test parsing valid AFM data (flow, standard_flow, RH, T, P)."""
         message = "1.25, 0.8, 45.0, 25.3, 1013.2"
 
         result = afm_widget.parse_message(message, None)
 
         assert result['type'] == 'data'
         assert afm_widget.current_data.flow == 1.25
-        assert afm_widget.current_data.saturator_flow == 0.8
+        assert afm_widget.current_data.standard_flow == 0.8
         assert afm_widget.current_data.humidity == 45.0
         assert afm_widget.current_data.temperature == 25.3
         assert afm_widget.current_data.pressure == 1013.2
 
     def test_parse_idn(self, afm_widget):
         """Test parsing IDN response."""
-        message = "*IDN Air Flow Meter,PSN:AFM-001,FW:1.0.0"
+        message = "*IDN Airmodus Flow Meter,PSN:AFM-001,FW:1.0.0"
 
         result = afm_widget.parse_message(message, None)
 
