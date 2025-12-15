@@ -15,7 +15,8 @@ from typing import Optional, List, Dict
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QFileDialog, QMenu, QSizePolicy, QCheckBox,
                               QLineEdit, QSpinBox, QProgressBar, QGraphicsOpacityEffect,
-                              QWidgetAction, QActionGroup, QComboBox)
+                              QWidgetAction, QActionGroup, QComboBox, QStackedWidget,
+                              QScrollArea, QFrame, QGroupBox, QButtonGroup)
 from PyQt5.QtCore import Qt, QPoint, QTimer, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal, QRegExp
 from PyQt5.QtGui import QIcon, QIntValidator, QRegExpValidator
 import pyqtgraph as pg
@@ -33,6 +34,24 @@ BIN_PRESETS = {
     '12': [1.3, 1.4, 1.5, 1.7, 2, 2.5, 3, 4, 5, 8, 10],
     '14': [1.3, 1.4, 1.5, 1.7, 2, 2.5, 3, 3.5, 4, 5, 6.5, 8, 10],
 }
+
+# Color palette for bin time-series plot (14 distinct colors for max bins)
+BIN_COLORS = [
+    (31, 119, 180),   # Blue
+    (255, 127, 14),   # Orange
+    (44, 160, 44),    # Green
+    (214, 39, 40),    # Red
+    (148, 103, 189),  # Purple
+    (140, 86, 75),    # Brown
+    (227, 119, 194),  # Pink
+    (127, 127, 127),  # Gray
+    (188, 189, 34),   # Olive
+    (23, 190, 207),   # Cyan
+    (255, 187, 120),  # Light orange
+    (152, 223, 138),  # Light green
+    (255, 152, 150),  # Light red
+    (197, 176, 213),  # Light purple
+]
 
 
 class TimeAxisItemForContour(pg.AxisItem):
@@ -258,6 +277,11 @@ class PSMContourTab(QWidget):
         self.file_boundary_lines = []  # List of PlotCurveItem items
         self.file_boundary_labels = []  # List of TextItem items
 
+        # Bin time-series plot state
+        self.selected_bins = set()  # Indices of selected bins for time-series plot
+        self.bin_curves = {}  # bin_index -> PlotCurveItem
+        self.bin_checkboxes = []  # List of QCheckBox widgets
+
         # Create UI
         self.main_layout = QVBoxLayout()
         self.main_layout.setContentsMargins(5, 5, 5, 5)
@@ -309,6 +333,51 @@ class PSMContourTab(QWidget):
 
         # Top bar with controls and settings button
         top_bar = QHBoxLayout()
+
+        # View toggle buttons (Contour / Bin Plot)
+        view_btn_style_active = """
+            QPushButton {
+                background-color: #4a90d9;
+                color: white;
+                border: 1px solid #3a7bc8;
+                border-radius: 3px;
+                padding: 3px 12px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+        """
+        view_btn_style_inactive = """
+            QPushButton {
+                background-color: #3a3a3a;
+                color: #aaa;
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 3px 12px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+                color: white;
+            }
+        """
+
+        self.contour_view_btn = QPushButton("Contour")
+        self.contour_view_btn.setFixedHeight(24)
+        self.contour_view_btn.setStyleSheet(view_btn_style_active)
+        self.contour_view_btn.clicked.connect(lambda: self._switch_view(0))
+        top_bar.addWidget(self.contour_view_btn)
+
+        self.bin_plot_view_btn = QPushButton("Bin Plot")
+        self.bin_plot_view_btn.setFixedHeight(24)
+        self.bin_plot_view_btn.setStyleSheet(view_btn_style_inactive)
+        self.bin_plot_view_btn.clicked.connect(lambda: self._switch_view(1))
+        top_bar.addWidget(self.bin_plot_view_btn)
+
+        # Store styles for later use
+        self._view_btn_style_active = view_btn_style_active
+        self._view_btn_style_inactive = view_btn_style_inactive
+
+        top_bar.addSpacing(15)
 
         # Follow latest toggle - auto-scroll to show newest data
         self.follow_checkbox = QCheckBox("Follow")
@@ -468,7 +537,20 @@ class PSMContourTab(QWidget):
         # Connect view range change to update file labels on zoom
         self.plot.sigRangeChanged.connect(self._on_view_range_changed)
 
-        plot_layout.addWidget(self.graphics_widget)
+        # Create stacked widget to toggle between contour and bin time-series views
+        self.plot_stack = QStackedWidget()
+
+        # Add contour plot as first page (index 0)
+        self.plot_stack.addWidget(self.graphics_widget)
+
+        # Create bin time-series panel and add as second page (index 1)
+        self._create_bin_timeseries_panel()
+        self.plot_stack.addWidget(self.bin_timeseries_widget)
+
+        # Start with contour view
+        self.plot_stack.setCurrentIndex(0)
+
+        plot_layout.addWidget(self.plot_stack)
         self.plot_widget.setLayout(plot_layout)
 
         # Create loading overlay (shown while historical data loads)
@@ -539,6 +621,223 @@ class PSMContourTab(QWidget):
         self.plot_widget.hide()
         self.main_layout.addWidget(self.plot_widget)
 
+    def _create_bin_timeseries_panel(self):
+        """Create the bin time-series panel with selector and plot."""
+        self.bin_timeseries_widget = QWidget()
+        ts_layout = QHBoxLayout(self.bin_timeseries_widget)
+        ts_layout.setContentsMargins(0, 0, 0, 0)
+        ts_layout.setSpacing(5)
+
+        # Bin selector panel (left side)
+        selector_widget = QWidget()
+        selector_widget.setFixedWidth(140)
+        selector_layout = QVBoxLayout(selector_widget)
+        selector_layout.setContentsMargins(5, 5, 5, 5)
+        selector_layout.setSpacing(2)
+
+        # Title label
+        title_label = QLabel("Bin Selection")
+        title_label.setStyleSheet("font-weight: bold; font-size: 11px; color: #aaa;")
+        selector_layout.addWidget(title_label)
+
+        # Scroll area for checkboxes
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: 1px solid #444;
+                background-color: #2a2a2a;
+            }
+        """)
+
+        self.checkbox_container = QWidget()
+        self.checkbox_layout = QVBoxLayout(self.checkbox_container)
+        self.checkbox_layout.setContentsMargins(5, 5, 5, 5)
+        self.checkbox_layout.setSpacing(2)
+        self.checkbox_layout.addStretch()  # Push checkboxes to top
+
+        scroll_area.setWidget(self.checkbox_container)
+        selector_layout.addWidget(scroll_area)
+
+        # Button row for Select All / Clear All
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(5)
+
+        self.select_all_btn = QPushButton("All")
+        self.select_all_btn.setFixedHeight(24)
+        self.select_all_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a;
+                color: white;
+                border: 1px solid #555;
+                border-radius: 3px;
+                font-size: 10px;
+            }
+            QPushButton:hover { background-color: #4a4a4a; }
+        """)
+        self.select_all_btn.clicked.connect(self._select_all_bins)
+        btn_layout.addWidget(self.select_all_btn)
+
+        self.clear_all_btn = QPushButton("Clear")
+        self.clear_all_btn.setFixedHeight(24)
+        self.clear_all_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a;
+                color: white;
+                border: 1px solid #555;
+                border-radius: 3px;
+                font-size: 10px;
+            }
+            QPushButton:hover { background-color: #4a4a4a; }
+        """)
+        self.clear_all_btn.clicked.connect(self._clear_all_bins)
+        btn_layout.addWidget(self.clear_all_btn)
+
+        selector_layout.addLayout(btn_layout)
+        ts_layout.addWidget(selector_widget)
+
+        # Time-series plot (right side)
+        self.bin_plot = pg.PlotWidget()
+        self.bin_plot.setLabel('left', 'dN/dlogDp', units='#/cm³')
+        self.bin_plot.setLabel('bottom', 'Time')
+        self.bin_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.bin_plot.setDownsampling(mode='peak')
+        self.bin_plot.setClipToView(True)
+        self.bin_plot.setBackground('k')
+
+        # Add legend
+        self.bin_plot_legend = self.bin_plot.addLegend(offset=(10, 10))
+
+        ts_layout.addWidget(self.bin_plot, stretch=1)
+
+    def _create_bin_checkboxes(self):
+        """Create or update checkboxes based on current bin limits."""
+        # Clear existing checkboxes
+        for cb in self.bin_checkboxes:
+            self.checkbox_layout.removeWidget(cb)
+            cb.deleteLater()
+        self.bin_checkboxes = []
+        self.selected_bins = set()
+        self.bin_curves = {}
+
+        if not hasattr(self, 'bin_limits_dp') or self.bin_limits_dp is None:
+            return
+
+        # Create checkbox for each bin
+        num_bins = len(self.bin_limits_dp) - 1
+        for i in range(num_bins):
+            lower = self.bin_limits_dp[i]
+            upper = self.bin_limits_dp[i + 1]
+            label = f"{lower:.1f}-{upper:.1f} nm"
+
+            cb = QCheckBox(label)
+            color = BIN_COLORS[i % len(BIN_COLORS)]
+            cb.setStyleSheet(f"""
+                QCheckBox {{
+                    color: rgb({color[0]}, {color[1]}, {color[2]});
+                    font-size: 10px;
+                }}
+                QCheckBox::indicator {{
+                    width: 12px;
+                    height: 12px;
+                }}
+            """)
+            cb.setToolTip(f"Show concentration for particles {lower:.1f}-{upper:.1f} nm")
+            cb.toggled.connect(lambda checked, idx=i: self._on_bin_toggled(idx, checked))
+
+            # Insert before the stretch
+            self.checkbox_layout.insertWidget(self.checkbox_layout.count() - 1, cb)
+            self.bin_checkboxes.append(cb)
+
+    def _on_bin_toggled(self, bin_idx: int, checked: bool):
+        """Handle bin checkbox toggle."""
+        if checked:
+            self.selected_bins.add(bin_idx)
+            # Create curve with color
+            color = BIN_COLORS[bin_idx % len(BIN_COLORS)]
+            pen = pg.mkPen(color=color, width=2)
+            label = self._get_bin_label(bin_idx)
+            curve = self.bin_plot.plot(pen=pen, name=label)
+            self.bin_curves[bin_idx] = curve
+        else:
+            self.selected_bins.discard(bin_idx)
+            if bin_idx in self.bin_curves:
+                self.bin_plot.removeItem(self.bin_curves[bin_idx])
+                del self.bin_curves[bin_idx]
+
+        # Update the time-series plot
+        self._update_bin_timeseries()
+
+    def _get_bin_label(self, bin_idx: int) -> str:
+        """Get label for a bin index."""
+        if hasattr(self, 'bin_limits_dp') and self.bin_limits_dp is not None:
+            if bin_idx < len(self.bin_limits_dp) - 1:
+                lower = self.bin_limits_dp[bin_idx]
+                upper = self.bin_limits_dp[bin_idx + 1]
+                return f"{lower:.1f}-{upper:.1f}"
+        return f"Bin {bin_idx}"
+
+    def _select_all_bins(self):
+        """Select all bin checkboxes."""
+        for cb in self.bin_checkboxes:
+            cb.setChecked(True)
+
+    def _clear_all_bins(self):
+        """Clear all bin checkboxes."""
+        for cb in self.bin_checkboxes:
+            cb.setChecked(False)
+
+    def _update_bin_timeseries(self):
+        """Update time-series curves from scan_buffer."""
+        if len(self.scan_buffer) == 0 or len(self.selected_bins) == 0:
+            return
+
+        try:
+            # Get time window settings (same as contour)
+            now = pd.Timestamp.now()
+            time_window_ago = now - pd.Timedelta(hours=self.time_window_hours)
+
+            # Convert scan times to timestamps and filter
+            def to_timestamp(ts):
+                if isinstance(ts, pd.Timestamp):
+                    return ts
+                elif isinstance(ts, np.datetime64):
+                    return pd.Timestamp(ts)
+                elif hasattr(ts, 'timestamp'):
+                    return pd.Timestamp(ts)
+                return pd.Timestamp(ts)
+
+            # Extract data for each selected bin
+            for bin_idx in self.selected_bins:
+                if bin_idx not in self.bin_curves:
+                    continue
+
+                times = []
+                values = []
+
+                for scan in self.scan_buffer:
+                    ts = to_timestamp(scan['time'])
+                    if ts < time_window_ago:
+                        continue
+
+                    dN_dlogDp = scan.get('dN_dlogDp', [])
+                    if bin_idx < len(dN_dlogDp):
+                        # Use timestamp as x value
+                        times.append(ts.timestamp())
+                        values.append(dN_dlogDp[bin_idx])
+
+                if times and values:
+                    self.bin_curves[bin_idx].setData(x=times, y=values)
+
+            # Update x-axis to show time properly
+            if hasattr(self, 'bin_plot'):
+                axis = self.bin_plot.getAxis('bottom')
+                axis.setStyle(tickTextOffset=5)
+
+        except Exception as e:
+            logging.error(f"Error updating bin time-series: {e}")
+
     def _show_loading_overlay(self):
         """Show loading overlay on the plot."""
         if hasattr(self, 'loading_overlay') and hasattr(self, 'plot_widget'):
@@ -577,6 +876,23 @@ class PSMContourTab(QWidget):
         if enabled:
             # Scroll to show latest data
             self._render_contour()
+
+    def _switch_view(self, index: int):
+        """Switch between contour view (0) and bin plot view (1)."""
+        if not hasattr(self, 'plot_stack'):
+            return
+
+        self.plot_stack.setCurrentIndex(index)
+
+        # Update button styles
+        if index == 0:
+            self.contour_view_btn.setStyleSheet(self._view_btn_style_active)
+            self.bin_plot_view_btn.setStyleSheet(self._view_btn_style_inactive)
+        else:
+            self.contour_view_btn.setStyleSheet(self._view_btn_style_inactive)
+            self.bin_plot_view_btn.setStyleSheet(self._view_btn_style_active)
+            # Update bin time-series when switching to it
+            self._update_bin_timeseries()
 
     def _on_mouse_moved(self, pos):
         """Handle mouse move events to show crosshair and values."""
@@ -921,6 +1237,10 @@ class PSMContourTab(QWidget):
         self.scan_buffer = []
         self._current_scan = None
 
+        # Update bin checkboxes for time-series plot
+        if hasattr(self, 'checkbox_layout'):
+            self._create_bin_checkboxes()
+
     def _try_autoload_calibration(self):
         """Try to auto-load calibration file from saved parameter."""
         try:
@@ -1065,6 +1385,9 @@ class PSMContourTab(QWidget):
                 self._create_plot_view()
                 self.plot_initialized = True
             self.plot_widget.show()
+
+            # Create bin checkboxes for time-series plot
+            self._create_bin_checkboxes()
 
             # Trigger config save for manual calibration load (not auto-load)
             if not auto_load and self.on_config_changed:
@@ -2189,6 +2512,9 @@ class PSMContourTab(QWidget):
 
             # Add file boundary markers (pass bin index coordinates)
             self._draw_file_boundaries(scans_in_range, time_window_ago, pos_y, height)
+
+            # Update bin time-series plot
+            self._update_bin_timeseries()
 
         except Exception as e:
             logging.error(f"Error rendering contour: {e}")
