@@ -607,13 +607,13 @@ class SetWidget(QFrame):
         layout = QVBoxLayout()
         layout.setContentsMargins(8, 8, 8, 8)
         font = self.font()
-        font.setPointSize(14)
+        font.setPointSize(11)
         # create label for widget name
         self.name = name
         self.name_label = QLabel(self.name, objectName="label")
         self.name_label.setAlignment(Qt.AlignCenter)
         self.name_label.setFont(font)
-        self.name_label.setStyleSheet("QLabel { color: #ddd; }")
+        self.name_label.setStyleSheet("QLabel { color: #888; }")
         self.name_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         layout.addWidget(self.name_label, alignment=Qt.AlignCenter)
         # create normal / double spin box for setting value
@@ -631,36 +631,17 @@ class SetWidget(QFrame):
             validator.setLocale(locale)
             self.value_spinbox.setLocale(locale)
         self.value_spinbox.setSuffix(suffix)
-        self.value_spinbox.lineEdit().setReadOnly(True)
         self.value_spinbox.lineEdit().setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.value_spinbox)
-        # add line edit for value input (visible borders with hover/focus)
-        self.value_input = QLineEdit(objectName="line_edit")
-        self.value_input.setPlaceholderText("Enter value")
-        self.value_input.setStyleSheet(EDITABLE_INPUT_STYLE)
-        self.value_input.setValidator(validator)
-        self.value_input.returnPressed.connect(self.value_input_return_pressed)
-        layout.addWidget(self.value_input)
+        self.value_spinbox.setMaximumWidth(180)
+        layout.addWidget(self.value_spinbox, alignment=Qt.AlignCenter)
         # set layout
         self.setLayout(layout)
         # store default stylesheet
         self.stylesheet = self.styleSheet()
         # create error variable for storing error state
         self.error = False
-    # function that handles value text input
-    def value_input_return_pressed(self):
-        value = self.value_input.text()
-        try:
-            if self.is_integer:
-                self.value_spinbox.setValue(int(value))
-            else:
-                self.value_spinbox.setValue(float(value))
-        except Exception as e:
-            logging.error(f"Error setting widget value: {e}")
-        QTimer.singleShot(50, self.clear_input)
-    # function that clears value input line edit after single shot timer
-    def clear_input(self):
-        self.value_input.clear()
+        # Backward compatibility - value_input no longer used
+        self.value_input = None
     def set_red_color(self):
         if self.error == False:
             self.value_spinbox.setStyleSheet(SPINBOX_STYLE + " QSpinBox, QDoubleSpinBox { background-color: red; }")
@@ -711,12 +692,12 @@ class SetStatusWidget(QFrame):
         self._status_indicator.setStyleSheet(STATUS_GRAY)
         main_layout.addWidget(self._status_indicator)
 
-        # Content area
+        # Content area - vertical: header on top, then horizontal sections below
         content_layout = QVBoxLayout()
         content_layout.setSpacing(4)
         content_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Name label (smaller, centered)
+        # Name label at top, centered over both sections
         self.name_label = QLabel(self.name)
         name_font = self.font()
         name_font.setPointSize(11)
@@ -725,23 +706,30 @@ class SetStatusWidget(QFrame):
         self.name_label.setAlignment(Qt.AlignCenter)
         content_layout.addWidget(self.name_label)
 
-        # Values row: Setpoint (small) | Actual (large)
-        values_row = QHBoxLayout()
-        values_row.setSpacing(8)
+        # Grid layout for aligned Set/Actual sections
+        from PyQt5.QtWidgets import QGridLayout
+        values_grid = QGridLayout()
+        values_grid.setSpacing(8)
+        values_grid.setContentsMargins(0, 0, 0, 0)
 
-        # Setpoint section (smaller, gray)
-        setpoint_section = QVBoxLayout()
-        setpoint_section.setSpacing(2)
-
+        # Row 0: Set: | Actual:
         self.setpoint_label = QLabel("Set:")
         setpoint_label_font = self.font()
         setpoint_label_font.setPointSize(10)
         self.setpoint_label.setFont(setpoint_label_font)
         self.setpoint_label.setStyleSheet("QLabel { color: #666; }")
         self.setpoint_label.setAlignment(Qt.AlignCenter)
-        setpoint_section.addWidget(self.setpoint_label)
+        values_grid.addWidget(self.setpoint_label, 0, 0)
 
-        # Create spinbox for setpoint
+        actual_header = QLabel("Actual:")
+        actual_header_font = self.font()
+        actual_header_font.setPointSize(10)
+        actual_header.setFont(actual_header_font)
+        actual_header.setStyleSheet("QLabel { color: #666; }")
+        actual_header.setAlignment(Qt.AlignCenter)
+        values_grid.addWidget(actual_header, 0, 1)
+
+        # Row 1: Spinbox | Actual value
         self.is_integer = integer
         if integer:
             self.value_spinbox = SpinBox(objectName="spin_box", maximum=9999)
@@ -756,38 +744,21 @@ class SetStatusWidget(QFrame):
             validator.setLocale(locale)
             self.value_spinbox.setLocale(locale)
         self.value_spinbox.setSuffix(suffix)
-        self.value_spinbox.lineEdit().setReadOnly(True)
         self.value_spinbox.lineEdit().setAlignment(Qt.AlignCenter)
-        setpoint_section.addWidget(self.value_spinbox)
-
-        values_row.addLayout(setpoint_section, stretch=1)
-
-        # Actual value section (larger, bold)
-        actual_section = QVBoxLayout()
-        actual_section.setSpacing(2)
-
-        actual_header = QLabel("Actual:")
-        actual_header_font = self.font()
-        actual_header_font.setPointSize(10)
-        actual_header.setFont(actual_header_font)
-        actual_header.setStyleSheet("QLabel { color: #666; }")
-        actual_header.setAlignment(Qt.AlignCenter)
-        actual_section.addWidget(actual_header)
+        self.value_spinbox.setMaximumWidth(150)
+        values_grid.addWidget(self.value_spinbox, 1, 0, Qt.AlignCenter)
 
         self.actual_label = QLabel("--")
-        self.actual_label.setAlignment(Qt.AlignCenter)
+        self.actual_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
         actual_font = self.font()
-        actual_font.setPointSize(18)
+        actual_font.setPointSize(24)
         actual_font.setBold(True)
         self.actual_label.setFont(actual_font)
         self.actual_label.setStyleSheet("QLabel { color: #ddd; }")
-        self.actual_label.setMinimumWidth(90)
-        actual_section.addWidget(self.actual_label)
+        self.actual_label.setMinimumWidth(100)
+        values_grid.addWidget(self.actual_label, 1, 1)
 
-        values_row.addLayout(actual_section, stretch=1)
-        content_layout.addLayout(values_row)
-
-        # Delta and trend row
+        # Row 2: (empty) | Delta + trend
         delta_row = QHBoxLayout()
         delta_row.setSpacing(4)
 
@@ -808,16 +779,16 @@ class SetStatusWidget(QFrame):
         self.trend_label.setFixedWidth(20)
         delta_row.addWidget(self.trend_label)
 
-        content_layout.addLayout(delta_row)
+        values_grid.addLayout(delta_row, 2, 1)
 
-        # Input field for manual value entry
-        self.value_input = QLineEdit(objectName="line_edit")
-        self.value_input.setPlaceholderText("Enter value")
-        self.value_input.setStyleSheet(EDITABLE_INPUT_STYLE)
-        self.value_input.setValidator(validator)
-        self.value_input.returnPressed.connect(self.value_input_return_pressed)
-        content_layout.addWidget(self.value_input)
+        # Backward compatibility - value_input no longer used
+        self.value_input = None
 
+        # Set column stretch for equal widths
+        values_grid.setColumnStretch(0, 1)
+        values_grid.setColumnStretch(1, 1)
+
+        content_layout.addLayout(values_grid)
         main_layout.addLayout(content_layout, 1)
         self.setLayout(main_layout)
         self.stylesheet = self.styleSheet()
@@ -851,22 +822,6 @@ class SetStatusWidget(QFrame):
         if self._tooltip_visible and self._tooltip_pos and self.name_label.toolTip():
             QToolTip.showText(self._tooltip_pos, self.name_label.toolTip(), self.name_label)
 
-    def value_input_return_pressed(self):
-        """Handle value input when Enter is pressed."""
-        value = self.value_input.text()
-        try:
-            if self.is_integer:
-                self.value_spinbox.setValue(int(value))
-            else:
-                self.value_spinbox.setValue(float(value))
-        except Exception as e:
-            logging.error(f"Error setting widget value: {e}")
-        QTimer.singleShot(50, self.clear_input)
-
-    def clear_input(self):
-        """Clear the input field."""
-        self.value_input.clear()
-
     def _parse_value(self, value_str):
         """Parse numeric value from string (removes units)."""
         try:
@@ -879,7 +834,7 @@ class SetStatusWidget(QFrame):
     def _calculate_trend(self):
         """Calculate trend based on value history."""
         if len(self._value_history) < 6:
-            return "→"  # Not enough data
+            return ""  # Not enough data
 
         history = list(self._value_history)
         first_half = history[:len(history)//2]
@@ -896,7 +851,7 @@ class SetStatusWidget(QFrame):
             return "↑"
         elif diff < -threshold:
             return "↓"
-        return "→"
+        return ""  # Stable - no arrow
 
     def _update_status_indicator(self, actual, setpoint):
         """Update status indicator color and frame style based on delta."""
@@ -946,7 +901,7 @@ class SetStatusWidget(QFrame):
             # Get setpoint for delta and status
             setpoint = self.value_spinbox.value()
 
-            # Update delta display
+            # Update delta display (actual - setpoint: positive means actual is above target)
             delta = actual - setpoint
             delta_sign = "+" if delta >= 0 else ""
             if self.is_temperature:
@@ -972,7 +927,7 @@ class SetStatusWidget(QFrame):
                 else:
                     self.delta_label.setStyleSheet("QLabel { color: #e74c3c; }")
 
-            # Update trend arrow
+            # Update trend arrow (only shows ↑ or ↓, empty when stable)
             trend = self._calculate_trend()
             self.trend_label.setText(trend)
             if trend == "↑":
@@ -980,7 +935,7 @@ class SetStatusWidget(QFrame):
             elif trend == "↓":
                 self.trend_label.setStyleSheet("QLabel { color: #3498db; }")  # Blue for falling
             else:
-                self.trend_label.setStyleSheet("QLabel { color: #888; }")  # Gray for stable
+                self.trend_label.setStyleSheet("QLabel { color: #888; }")  # Gray (hidden anyway)
 
             # Update status indicator (unless there's an error)
             if not self._has_error:

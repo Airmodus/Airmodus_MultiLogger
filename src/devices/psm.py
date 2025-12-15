@@ -319,11 +319,11 @@ class PSMWidget(ComplexDevice):
         elif inverted_note_bin[3] == "1":
             self.set_tab.drain.update_state(0)
         # 0 = saturator liquid level OK, 1 = saturator liquid level LOW
-        self.status_tab.liquid_saturator.change_color(inverted_note_bin[6])
+        self.control_tab.liquid_saturator.change_color(inverted_note_bin[6])
         if inverted_note_bin[6] == "1":
             liquid_errors += 1
         # 0 = drain liquid level OK, 1 = drain liquid level HIGH
-        self.status_tab.liquid_drain.change_color(inverted_note_bin[0])
+        self.control_tab.liquid_drain.change_color(inverted_note_bin[0])
         if inverted_note_bin[0] == "1":
             liquid_errors += 1
 
@@ -984,9 +984,6 @@ class PSMWidget(ComplexDevice):
 
         # If no CPC is connected
         if connected_cpc_id == 'None':
-            if self.status_tab.flow_cpc.value_label.text() != "Not connected":
-                self.status_tab.flow_cpc.change_color(1)  # red
-                self.status_tab.flow_cpc.change_value("Not connected")
             data_holder.error_status = 1
             data_holder.device_errors[dev_id] = True
         else:
@@ -1004,14 +1001,6 @@ class PSMWidget(ComplexDevice):
                     cpc_sample_flow = float(cpc_settings.measured_cpc_flow) if cpc_settings else 0.0
                     if self.set_tab.set_cpc_sample_flow.value_spinbox.value() != cpc_sample_flow:
                         self.set_tab.set_cpc_sample_flow.value_spinbox.setValue(cpc_sample_flow)
-
-                # Update CPC inlet flow display in Status tab
-                psm_settings = data_holder.get_device_settings(dev_id)
-                if psm_settings:
-                    cpc_flow_str = str(psm_settings.cpc_inlet_flow) + " lpm"
-                    if self.status_tab.flow_cpc.value_label.text() != cpc_flow_str:
-                        self.status_tab.flow_cpc.change_color(0)  # normal
-                        self.status_tab.flow_cpc.change_value(cpc_flow_str)
 
     def perform_pre_plot_calculations(self, data_holder):
         """Calculate PSM dilution-corrected CPC values."""
@@ -1321,11 +1310,6 @@ class PSMControlTab(QWidget):
     def temp_drainage(self):
         """Backward compatible access to drainage temperature indicator."""
         return self.set_drainage_temp
-
-    @property
-    def flow_cpc(self):
-        """Backward compatible access to CPC inlet flow indicator."""
-        return self.set_cpc_inlet_flow
 
 
 class ScanPreviewWidget(QWidget):
@@ -1741,8 +1725,7 @@ class PSMMeasureTab(QWidget):
         layout.setVerticalSpacing(4)
 
         def make_compact(set_widget):
-            """Hide the 'Enter value' input and reduce font size for compact display."""
-            set_widget.value_input.hide()
+            """Reduce font size for compact display."""
             # Reduce label font size for Windows compatibility
             label = set_widget.findChild(QLabel, "label")
             if label:
@@ -1865,7 +1848,6 @@ class PSMMeasureTab(QWidget):
 
         self.step_time = SetWidget("Step time", " s", integer=True)
         self.step_time.value_spinbox.setValue(30)
-        self.step_time.value_input.hide()  # Compact
         layout.addWidget(self.step_time)
 
         self.steps = StepsWidget()
@@ -1884,7 +1866,6 @@ class PSMMeasureTab(QWidget):
 
         self.set_flow = SetWidget("Saturator flow", " lpm")
         self.set_flow.value_spinbox.setValue(1.9)
-        self.set_flow.value_input.hide()  # Compact
         layout.addWidget(self.set_flow)
 
         layout.addStretch()

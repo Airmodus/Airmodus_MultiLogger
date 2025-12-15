@@ -85,16 +85,16 @@ def setup_cpc_connections(widget, device_config, connection, app):
     widget.set_tab.command_widget.command_input.returnPressed.connect(
         lambda: command_entered(device_id, app.data_holder.device_widgets, app.config))
 
-    # Set points
+    # Set points - stepChanged for arrows, editingFinished for typed values
     widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(
         lambda value: connection.send_set_val(value, ":SET:TEMP:SAT "))
-    widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(
-        lambda: connection.send_set_val(float(widget.set_tab.set_saturator_temp.value_input.text()), ":SET:TEMP:SAT "))
+    widget.set_tab.set_saturator_temp.value_spinbox.editingFinished.connect(
+        lambda: connection.send_set_val(widget.set_tab.set_saturator_temp.value_spinbox.value(), ":SET:TEMP:SAT "))
 
     widget.set_tab.set_condenser_temp.value_spinbox.stepChanged.connect(
         lambda value: connection.send_set_val(value, ":SET:TEMP:CON "))
-    widget.set_tab.set_condenser_temp.value_input.returnPressed.connect(
-        lambda: connection.send_set_val(float(widget.set_tab.set_condenser_temp.value_input.text()), ":SET:TEMP:CON "))
+    widget.set_tab.set_condenser_temp.value_spinbox.editingFinished.connect(
+        lambda: connection.send_set_val(widget.set_tab.set_condenser_temp.value_spinbox.value(), ":SET:TEMP:CON "))
 
     # Averaging time with special formatting
     def send_averaging_time(value: float):
@@ -102,8 +102,8 @@ def setup_cpc_connections(widget, device_config, connection, app):
         connection.send_set_val(output, ":SET:TAVG ")
 
     widget.set_tab.set_averaging_time.value_spinbox.stepChanged.connect(send_averaging_time)
-    widget.set_tab.set_averaging_time.value_input.returnPressed.connect(
-        lambda: send_averaging_time(float(widget.set_tab.set_averaging_time.value_input.text())))
+    widget.set_tab.set_averaging_time.value_spinbox.editingFinished.connect(
+        lambda: send_averaging_time(widget.set_tab.set_averaging_time.value_spinbox.value()))
 
     # Pulse quality
     widget.pulse_quality.history_time_select.currentIndexChanged.connect(
@@ -161,9 +161,9 @@ def setup_psm_connections(widget, device_config, connection, app):
             lambda value, cmd=command: connection.send_set_val(value, cmd))
         set_widget.value_spinbox.stepChanged.connect(
             lambda: psm_update(device_id, app.data_holder.device_widgets))
-        set_widget.value_input.returnPressed.connect(
-            lambda cmd=command, attr=attr_name: connection.send_set_val(float(getattr(widget.set_tab, attr).value_input.text()), cmd))
-        set_widget.value_input.returnPressed.connect(
+        set_widget.value_spinbox.editingFinished.connect(
+            lambda cmd=command, attr=attr_name: connection.send_set_val(getattr(widget.set_tab, attr).value_spinbox.value(), cmd))
+        set_widget.value_spinbox.editingFinished.connect(
             lambda: psm_update(device_id, app.data_holder.device_widgets))
 
     # CPC inlet flow
@@ -171,28 +171,28 @@ def setup_psm_connections(widget, device_config, connection, app):
         lambda value: psm_flow_send(widget, value))
     widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
-    widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(
-        lambda: psm_flow_send(widget, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
-    widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(
+    widget.set_tab.set_cpc_inlet_flow.value_spinbox.editingFinished.connect(
+        lambda: psm_flow_send(widget, widget.set_tab.set_cpc_inlet_flow.value_spinbox.value()))
+    widget.set_tab.set_cpc_inlet_flow.value_spinbox.editingFinished.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
 
     # CPC sample flow
     widget.set_tab.set_cpc_sample_flow.value_spinbox.stepChanged.connect(
         lambda value: cpc_flow_send(widget, value, app.data_holder.device_widgets))
-    widget.set_tab.set_cpc_sample_flow.value_input.returnPressed.connect(
-        lambda: cpc_flow_send(widget, float(widget.set_tab.set_cpc_sample_flow.value_input.text()), app.data_holder.device_widgets))
+    widget.set_tab.set_cpc_sample_flow.value_spinbox.editingFinished.connect(
+        lambda: cpc_flow_send(widget, widget.set_tab.set_cpc_sample_flow.value_spinbox.value(), app.data_holder.device_widgets))
 
     # CO flow (PSM Retrofit only) - Save to extra_params
     from config import PSM
     if device_type == PSM:
         widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(
             lambda: psm_update(device_id, app.data_holder.device_widgets))
-        widget.set_tab.set_co_flow.value_input.returnPressed.connect(
+        widget.set_tab.set_co_flow.value_spinbox.editingFinished.connect(
             lambda: psm_update(device_id, app.data_holder.device_widgets))
         widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(
             lambda value: device_config.extra_params.update({'co_flow': str(round(value, 3))}))
-        widget.set_tab.set_co_flow.value_input.returnPressed.connect(
-            lambda: device_config.extra_params.update({'co_flow': widget.set_tab.set_co_flow.value_input.text()}))
+        widget.set_tab.set_co_flow.value_spinbox.editingFinished.connect(
+            lambda: device_config.extra_params.update({'co_flow': str(round(widget.set_tab.set_co_flow.value_spinbox.value(), 3))}))
 
     # Command input
     widget.set_tab.command_widget.command_input.returnPressed.connect(
