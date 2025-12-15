@@ -1205,6 +1205,11 @@ class PSMContourTab(QWidget):
         if not hasattr(self, '_last_file_ranges') or not self._last_file_ranges:
             return
 
+        # Get stored y_top - if None or not set, skip (will be set by next render)
+        y_top = getattr(self, '_last_y_top', None)
+        if y_top is None:
+            return
+
         # Get current view range
         view_range = self.plot.viewRange()
         view_x_min, view_x_max = view_range[0]
@@ -1217,9 +1222,6 @@ class PSMContourTab(QWidget):
         for label in self.file_boundary_labels:
             self.plot.removeItem(label)
         self.file_boundary_labels = []
-
-        # Get stored positions
-        y_top = getattr(self, '_last_y_top', self.num_bins if hasattr(self, 'num_bins') else 6)
 
         for file_name, x_start, x_end in self._last_file_ranges:
             range_width_hours = x_end - x_start
@@ -1422,6 +1424,12 @@ class PSMContourTab(QWidget):
         # Clear scan buffer since bin structure changed
         self.scan_buffer = []
         self._current_scan = None
+
+        # Clear stale file boundary state to avoid positioning issues
+        # when historical data is reloaded with new bin configuration
+        self._last_file_ranges = []
+        self._last_y_top = None
+        self._last_scans_in_range = None
 
         # Update bin checkboxes for time-series plot
         if hasattr(self, 'checkbox_layout'):
@@ -2588,6 +2596,11 @@ class PSMContourTab(QWidget):
                 self.plot.removeItem(label)
             self.file_boundary_lines = []
             self.file_boundary_labels = []
+            # Clear stale state to prevent _update_file_boundary_labels from
+            # using outdated positions when new data is loaded
+            self._last_file_ranges = []
+            self._last_y_top = None
+            self._last_scans_in_range = None
             return
 
         try:
