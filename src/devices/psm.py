@@ -1531,8 +1531,14 @@ class PSMMeasureTab(QWidget):
         layout.setVerticalSpacing(4)
 
         def make_compact(set_widget):
-            """Hide the 'Enter value' input to save space."""
+            """Hide the 'Enter value' input and reduce font size for compact display."""
             set_widget.value_input.hide()
+            # Reduce label font size for Windows compatibility
+            label = set_widget.findChild(QLabel, "label")
+            if label:
+                font = label.font()
+                font.setPointSize(12)  # Smaller font to prevent text overflow
+                label.setFont(font)
             return set_widget
 
         # Flow range (side by side)

@@ -105,18 +105,24 @@ class HistoricalDataLoader(QThread):
         """Cancel the loading operation."""
         self._cancelled = True
 
+    def _emit_progress(self, current, total, message):
+        """Progress callback for load_historical_scans."""
+        if not self._cancelled:
+            self.progress.emit(current, total, message)
+
     def run(self):
         """Load historical scans in background thread."""
         try:
             self.progress.emit(0, 0, "Finding data files...")
 
-            # Load historical scans
+            # Load historical scans with progress callback
             filepaths, scans = load_historical_scans(
                 file_path=self.file_path,
                 serial_number=self.serial_number,
                 device_nickname=self.device_nickname,
                 file_tag=self.file_tag,
-                hours=self.hours
+                hours=self.hours,
+                progress_callback=self._emit_progress
             )
 
             if self._cancelled:
@@ -130,12 +136,14 @@ class HistoricalDataLoader(QThread):
                 self.error.emit(f"No scans in {len(filepaths)} file(s)")
                 return
 
-            # Emit progress for each scan
+            # Emit progress for scan processing phase
             total = len(scans)
+            self.progress.emit(0, total, f"Found {total} scans, preparing...")
+
             for i, scan in enumerate(scans):
                 if self._cancelled:
                     return
-                self.progress.emit(i + 1, total, f"Processing scan {i + 1}/{total}")
+                self.progress.emit(i + 1, total, f"Preparing scan {i + 1}/{total}")
                 self.scan_loaded.emit(scan)
 
             self.finished_loading.emit(filepaths, scans)
@@ -452,10 +460,41 @@ class PSMContourTab(QWidget):
         self.loading_overlay.setStyleSheet("background-color: rgba(0, 0, 0, 0.7);")
         loading_layout = QVBoxLayout(self.loading_overlay)
         loading_layout.setAlignment(Qt.AlignCenter)
+
+        # Loading label
         self.loading_label = QLabel("Loading historical data...")
         self.loading_label.setStyleSheet("color: white; font-size: 16px; font-weight: bold;")
         self.loading_label.setAlignment(Qt.AlignCenter)
         loading_layout.addWidget(self.loading_label)
+
+        # Progress bar for loading overlay
+        self.loading_progress_bar = QProgressBar()
+        self.loading_progress_bar.setFixedWidth(300)
+        self.loading_progress_bar.setFixedHeight(20)
+        self.loading_progress_bar.setRange(0, 100)
+        self.loading_progress_bar.setValue(0)
+        self.loading_progress_bar.setTextVisible(True)
+        self.loading_progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #666;
+                border-radius: 5px;
+                background-color: #333;
+                text-align: center;
+                color: white;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+                border-radius: 4px;
+            }
+        """)
+        loading_layout.addWidget(self.loading_progress_bar, alignment=Qt.AlignCenter)
+
+        # Detail label for current operation
+        self.loading_detail_label = QLabel("")
+        self.loading_detail_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        self.loading_detail_label.setAlignment(Qt.AlignCenter)
+        loading_layout.addWidget(self.loading_detail_label)
+
         self.loading_overlay.hide()
 
         # Hide initially
@@ -2120,6 +2159,15 @@ class PSMContourTab(QWidget):
         self.load_history_btn.setEnabled(False)
         self.load_history_btn.setText("Loading...")
 
+        # Reset progress indicators
+        if hasattr(self, 'loading_progress_bar'):
+            self.loading_progress_bar.setRange(0, 0)  # Indeterminate initially
+            self.loading_progress_bar.setValue(0)
+        if hasattr(self, 'loading_label'):
+            self.loading_label.setText("Loading...")
+        if hasattr(self, 'loading_detail_label'):
+            self.loading_detail_label.setText("Finding data files...")
+
         # Clear existing buffer before loading historical data
         self.scan_buffer = []
         self._pending_scans = []  # Collect scans for batch processing
@@ -2144,8 +2192,28 @@ class PSMContourTab(QWidget):
 
     def _on_loading_progress(self, current: int, total: int, message: str):
         """Handle progress updates from the loader thread."""
+        # Update overlay progress bar and labels
+        if hasattr(self, 'loading_progress_bar'):
+            if total > 0:
+                self.loading_progress_bar.setRange(0, total)
+                self.loading_progress_bar.setValue(current)
+                self.loading_progress_bar.setFormat(f"{current}/{total}")
+            else:
+                # Indeterminate progress
+                self.loading_progress_bar.setRange(0, 0)
+
         if hasattr(self, 'loading_label'):
-            self.loading_label.setText(message)
+            # Main status message
+            if total > 0:
+                self.loading_label.setText(f"Loading: {current}/{total}")
+            else:
+                self.loading_label.setText("Loading...")
+
+        if hasattr(self, 'loading_detail_label'):
+            # Detail message (file name, etc)
+            self.loading_detail_label.setText(message)
+
+        # Also update top bar progress
         if total > 0 and hasattr(self, 'scan_progress_bar'):
             self.scan_progress_bar.setRange(0, total)
             self.scan_progress_bar.setValue(current)

@@ -305,7 +305,8 @@ def load_historical_scans(
     serial_number: str = "",
     device_nickname: str = "",
     file_tag: str = "",
-    hours: int = 24
+    hours: int = 24,
+    progress_callback: Optional[callable] = None
 ) -> Tuple[Optional[List[str]], List[Dict[str, np.ndarray]]]:
     """
     Load and merge scans from ALL PSM .dat files in the specified time window.
@@ -320,6 +321,7 @@ def load_historical_scans(
         device_nickname: Device nickname (unused, kept for compatibility)
         file_tag: File tag from settings (unused, kept for compatibility)
         hours: Number of hours to look back (default 24)
+        progress_callback: Optional callback(current, total, message) for progress updates
 
     Returns:
         Tuple of (filepaths, scans):
@@ -327,15 +329,25 @@ def load_historical_scans(
         - scans: Merged list of scan dicts with 'times', 'satflows', 'concentrations'
     """
     # Find all files from the specified time window
+    if progress_callback:
+        progress_callback(0, 0, "Finding data files...")
+
     filepaths = find_psm_files_last_24h(file_path, hours=hours)
 
     if not filepaths:
         return None, []
 
+    if progress_callback:
+        progress_callback(0, len(filepaths), f"Found {len(filepaths)} file(s)")
+
     # Read scans from each file along with file's data range info
     file_scans = []  # List of (filepath, scans, row_count)
-    for fp in filepaths:
+    for i, fp in enumerate(filepaths):
         try:
+            filename = os.path.basename(fp)
+            if progress_callback:
+                progress_callback(i, len(filepaths), f"Reading: {filename}")
+
             df = read_psm_dat_file(fp)
             scans = detect_scans_from_dat(df)
             if scans:
@@ -343,6 +355,9 @@ def load_historical_scans(
         except Exception as e:
             logging.error(f"Error reading {fp}: {e}")
             continue
+
+    if progress_callback:
+        progress_callback(len(filepaths), len(filepaths), "Merging scans...")
 
     if not file_scans:
         return filepaths, []
