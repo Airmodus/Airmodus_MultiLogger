@@ -15,12 +15,24 @@ from typing import Optional, List, Dict
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QFileDialog, QMenu, QSizePolicy, QCheckBox,
                               QLineEdit, QSpinBox, QProgressBar, QGraphicsOpacityEffect,
-                              QWidgetAction, QActionGroup)
-from PyQt5.QtCore import Qt, QPoint, QTimer, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal
-from PyQt5.QtGui import QIcon, QIntValidator
+                              QWidgetAction, QActionGroup, QComboBox)
+from PyQt5.QtCore import Qt, QPoint, QTimer, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal, QRegExp
+from PyQt5.QtGui import QIcon, QIntValidator, QRegExpValidator
 import pyqtgraph as pg
 from scipy.interpolate import interp1d
 from dat_file_reader import load_historical_scans, get_scan_time_range
+
+
+# PSM 2.0 bin presets (inner limits only - min/max added from calibration)
+# Same presets as the original PSM Inversion Tool
+BIN_PRESETS = {
+    '4':  [1.5, 2.5, 5],
+    '6':  [1.5, 1.7, 2.5, 5, 8],
+    '8':  [1.3, 1.5, 1.7, 2.5, 3, 5, 8],
+    '10': [1.3, 1.5, 1.7, 2.5, 3, 4, 5, 8, 10],
+    '12': [1.3, 1.4, 1.5, 1.7, 2, 2.5, 3, 4, 5, 8, 10],
+    '14': [1.3, 1.4, 1.5, 1.7, 2, 2.5, 3, 3.5, 4, 5, 6.5, 8, 10],
+}
 
 
 class TimeAxisItemForContour(pg.AxisItem):
@@ -203,6 +215,10 @@ class PSMContourTab(QWidget):
         self.bin_centers_dp = None  # Diameter bin centers (6 values)
         self.bin_limits_flow = None  # Saturator flow bin edges (7 values)
         self.detection_efficiency = None  # Detection efficiency interpolator
+
+        # Bin configuration (from settings)
+        self.bin_preset = '6'  # Default: 6 bins (matches original hardcoded default)
+        self.custom_bin_limits = None  # Only used when bin_preset == 'custom'
 
         # Scan detection state
         self._prev_scan_status = "9"
@@ -494,6 +510,28 @@ class PSMContourTab(QWidget):
         self.loading_detail_label.setStyleSheet("color: #aaa; font-size: 11px;")
         self.loading_detail_label.setAlignment(Qt.AlignCenter)
         loading_layout.addWidget(self.loading_detail_label)
+
+        # Cancel button
+        loading_layout.addSpacing(15)
+        self.loading_cancel_btn = QPushButton("Cancel")
+        self.loading_cancel_btn.setFixedSize(100, 30)
+        self.loading_cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #666;
+                color: white;
+                border: 1px solid #888;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #777;
+            }
+            QPushButton:pressed {
+                background-color: #555;
+            }
+        """)
+        self.loading_cancel_btn.clicked.connect(self._cancel_loading)
+        loading_layout.addWidget(self.loading_cancel_btn, alignment=Qt.AlignCenter)
 
         self.loading_overlay.hide()
 
@@ -807,6 +845,8 @@ class PSMContourTab(QWidget):
             self.current_colormap = extra.get('contour_colormap', 'CET-R4')
             self.crosshair_enabled = extra.get('contour_crosshair', True)
             self.contour_10hz_enabled = extra.get('contour_10hz_enabled', False)
+            self.bin_preset = extra.get('contour_bin_preset', '6')
+            self.custom_bin_limits = extra.get('contour_custom_bins', None)
 
             # Apply colormap if plot exists
             if hasattr(self, 'data_cmap'):
@@ -823,10 +863,63 @@ class PSMContourTab(QWidget):
             self.device_config.extra_params['contour_colormap'] = self.current_colormap
             self.device_config.extra_params['contour_crosshair'] = self.crosshair_enabled
             self.device_config.extra_params['contour_10hz_enabled'] = self.contour_10hz_enabled
+            self.device_config.extra_params['contour_bin_preset'] = self.bin_preset
+            self.device_config.extra_params['contour_custom_bins'] = self.custom_bin_limits
             if self.on_config_changed:
                 self.on_config_changed()
         except Exception:
             pass
+
+    def _apply_bin_change(self, preset: str, limits_text: str):
+        """Apply bin configuration change."""
+        self.bin_preset = preset
+
+        if preset == 'custom':
+            if limits_text.strip():
+                try:
+                    limits = [float(x) for x in limits_text.split()]
+                    limits.sort()
+                    limits = list(dict.fromkeys(limits))  # Remove duplicates
+                    self.custom_bin_limits = limits if limits else None
+                except ValueError:
+                    return  # Invalid input
+            else:
+                self.custom_bin_limits = None
+
+        self._save_contour_settings()
+
+        # Recalculate bins if calibration is loaded
+        if self.calibration_loaded and self.calibration_df is not None:
+            self._recalculate_bins()
+            self._render_contour()
+
+    def _get_current_inner_limits(self):
+        """Get the inner bin limits based on current settings."""
+        if self.bin_preset == 'custom' and self.custom_bin_limits:
+            return self.custom_bin_limits
+        elif self.bin_preset in BIN_PRESETS:
+            return BIN_PRESETS[self.bin_preset]
+        else:
+            return BIN_PRESETS['6']  # Default fallback
+
+    def _recalculate_bins(self):
+        """Recalculate bins from current settings."""
+        min_diameter = self.calibration_df['cal_diameter'].min()
+        max_diameter = self.calibration_df['cal_diameter'].max()
+
+        inner_limits = self._get_current_inner_limits()
+
+        # Filter to limits within calibration range
+        inner_limits_in_range = [x for x in inner_limits if min_diameter < x < max_diameter]
+        self.bin_limits_dp = np.array([min_diameter] + inner_limits_in_range + [max_diameter])
+
+        self.num_bins = len(self.bin_limits_dp) - 1
+        self.bin_centers_dp = self._geom_means(self.bin_limits_dp)
+        self.bin_limits_flow = self._calculate_flow_bins(self.bin_limits_dp)
+
+        # Clear scan buffer since bin structure changed
+        self.scan_buffer = []
+        self._current_scan = None
 
     def _try_autoload_calibration(self):
         """Try to auto-load calibration file from saved parameter."""
@@ -931,8 +1024,8 @@ class PSMContourTab(QWidget):
             min_diameter = self.calibration_df['cal_diameter'].min()
             max_diameter = self.calibration_df['cal_diameter'].max()
 
-            # Fixed PSM 2.0 6-bin limits (intermediate values between min and max)
-            fixed_inner_limits = [1.5, 1.7, 2.5, 5.0, 8.0]
+            # Get inner bin limits from settings (or defaults)
+            fixed_inner_limits = self._get_current_inner_limits()
 
             # Build bin limits array: min_dp + inner limits within range + max_dp
             inner_limits_in_range = [x for x in fixed_inner_limits if min_diameter < x < max_diameter]
@@ -1181,10 +1274,6 @@ class PSMContourTab(QWidget):
         menu.addSeparator()
 
         # --- Data actions ---
-        reload_action = menu.addAction("Reload historical data")
-        reload_action.setToolTip("Reload scan data from .dat files")
-        reload_action.triggered.connect(lambda: (setattr(self, '_historical_data_loaded', False), self._start_historical_data_load()))
-
         clear_buffer_action = menu.addAction("Clear scan buffer")
         clear_buffer_action.setToolTip("Clear all stored scans (historical and live) and reset the contour plot")
         clear_buffer_action.triggered.connect(self._clear_scan_buffer)
@@ -1206,6 +1295,81 @@ class PSMContourTab(QWidget):
         clear_action = menu.addAction("Clear calibration")
         clear_action.setToolTip("Remove the current calibration and return to calibration file selection")
         clear_action.triggered.connect(self._clear_calibration)
+
+        menu.addSeparator()
+
+        # --- Advanced settings submenu ---
+        advanced_menu = menu.addMenu("Advanced")
+        advanced_menu.setToolTipsVisible(True)
+
+        # Bin selection widget
+        bin_widget = QWidget()
+        bin_widget.setStyleSheet("QWidget { background: transparent; }")
+        bin_layout = QVBoxLayout(bin_widget)
+        bin_layout.setContentsMargins(10, 5, 10, 5)
+        bin_layout.setSpacing(5)
+
+        # Row 1: Dropdown
+        row1 = QHBoxLayout()
+        bin_label = QLabel("Number of bins:")
+        row1.addWidget(bin_label)
+
+        bin_combo = QComboBox()
+        bin_combo.addItems(['4', '6', '8', '10', '12', '14', 'custom'])
+        bin_combo.setCurrentText(self.bin_preset)
+        bin_combo.setFixedWidth(80)
+        row1.addWidget(bin_combo)
+        row1.addStretch()
+        bin_layout.addLayout(row1)
+
+        # Row 2: Bin limits display/edit
+        row2 = QHBoxLayout()
+        limits_label = QLabel("Limits:")
+        row2.addWidget(limits_label)
+
+        limits_edit = QLineEdit()
+        limits_edit.setFixedWidth(200)
+        limits_edit.setValidator(QRegExpValidator(QRegExp("[0-9. ]+")))
+
+        # Show current limits
+        if self.bin_preset == 'custom' and self.custom_bin_limits:
+            limits_edit.setText(" ".join(str(x) for x in self.custom_bin_limits))
+            limits_edit.setReadOnly(False)
+        elif self.bin_preset in BIN_PRESETS:
+            limits_edit.setText(" ".join(str(x) for x in BIN_PRESETS[self.bin_preset]))
+            limits_edit.setReadOnly(True)
+            limits_edit.setStyleSheet("QLineEdit { color: gray; }")
+
+        row2.addWidget(limits_edit)
+        bin_layout.addLayout(row2)
+
+        # Connect signals
+        def on_preset_changed(preset):
+            self.bin_preset = preset
+            if preset == 'custom':
+                limits_edit.setReadOnly(False)
+                limits_edit.setStyleSheet("")
+                if self.custom_bin_limits:
+                    limits_edit.setText(" ".join(str(x) for x in self.custom_bin_limits))
+                else:
+                    limits_edit.setText("")
+                    limits_edit.setPlaceholderText("e.g. 1.5 1.7 2.5 5 8")
+            else:
+                limits_edit.setReadOnly(True)
+                limits_edit.setStyleSheet("QLineEdit { color: gray; }")
+                limits_edit.setText(" ".join(str(x) for x in BIN_PRESETS[preset]))
+            self._apply_bin_change(preset, limits_edit.text())
+
+        def on_limits_edited():
+            if self.bin_preset == 'custom':
+                self._apply_bin_change('custom', limits_edit.text())
+
+        bin_combo.currentTextChanged.connect(on_preset_changed)
+        limits_edit.editingFinished.connect(on_limits_edited)
+
+        bin_action = QWidgetAction(advanced_menu)
+        bin_action.setDefaultWidget(bin_widget)
+        advanced_menu.addAction(bin_action)
 
         # Show menu at button position
         menu.exec_(self.settings_btn.mapToGlobal(QPoint(0, self.settings_btn.height())))
@@ -2273,6 +2437,38 @@ class PSMContourTab(QWidget):
         self.load_history_btn.setEnabled(True)
         self.load_history_btn.setText("Load History")
         self._pending_scans = []
+        if hasattr(self, 'scan_progress_bar'):
+            self.scan_progress_bar.setValue(0)
+
+    def _cancel_loading(self):
+        """Cancel the historical data loading."""
+        if self._loader_thread is not None and self._loader_thread.isRunning():
+            # Signal the thread to cancel
+            self._loader_thread.cancel()
+
+            # Update UI to show cancelling
+            if hasattr(self, 'loading_label'):
+                self.loading_label.setText("Cancelling...")
+            if hasattr(self, 'loading_cancel_btn'):
+                self.loading_cancel_btn.setEnabled(False)
+                self.loading_cancel_btn.setText("Cancelling...")
+
+            # Wait for thread to finish (with timeout)
+            self._loader_thread.wait(2000)  # 2 second timeout
+
+        # Clean up
+        self._loading_in_progress = False
+        self._hide_loading_overlay()
+        self.load_history_btn.setEnabled(True)
+        self.load_history_btn.setText("Load History")
+        self._pending_scans = []
+        self.file_label.setText("Loading cancelled")
+
+        # Reset cancel button state
+        if hasattr(self, 'loading_cancel_btn'):
+            self.loading_cancel_btn.setEnabled(True)
+            self.loading_cancel_btn.setText("Cancel")
+
         if hasattr(self, 'scan_progress_bar'):
             self.scan_progress_bar.setValue(0)
 

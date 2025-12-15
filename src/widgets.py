@@ -1,5 +1,5 @@
-from PyQt5.QtGui import QPalette, QIntValidator, QDoubleValidator, QCursor
-from PyQt5.QtCore import Qt, pyqtSignal, QLocale, QTimer, QSize
+from PyQt5.QtGui import QPalette, QIntValidator, QDoubleValidator, QCursor, QPainter, QColor, QPen, QBrush
+from PyQt5.QtCore import Qt, pyqtSignal, QLocale, QTimer, QSize, QRectF, QPropertyAnimation, pyqtProperty, QEasingCurve
 from PyQt5.QtWidgets import (QLabel, QWidget, QVBoxLayout, QLineEdit, QPushButton,
                              QSpinBox, QDoubleSpinBox, QTextEdit, QHBoxLayout,
                              QSizePolicy, QSplitter, QTabBar, QStyleFactory, QApplication,
@@ -77,23 +77,34 @@ class CommandWidget(QWidget):
 
 # status indicator widget
 # used in CPCStatusTab and PSMStatusTab
-class IndicatorWidget(QWidget):
+class IndicatorWidget(QFrame):
     def __init__(self, name, *args, **kwargs):
         super().__init__()
+        # Add subtle border to separate items
+        self.setFrameStyle(QFrame.StyledPanel)
+        self.setStyleSheet("QFrame { border: 1px solid #555; border-radius: 4px; background: transparent; }")
+
         layout = QVBoxLayout() # create widget layout
+        layout.setContentsMargins(6, 6, 6, 6)
         self.name = name # save name
         self.ok_error_indicators = ["Laser power", "Saturator liquid level", "Drain liquid level", "Pulse quality"]
         self.value_label = QLabel(self.name + "\n", objectName="label") # create value label
 
-        self.default_color = self.value_label.styleSheet() # save default color
+        self.default_color = "QLabel { background-color: transparent; border: none; }"
+        self.value_label.setStyleSheet(self.default_color)
 
         font = self.font() # get current global font
-        font.setPointSize(16) # set font size
+        font.setPointSize(14) # set font size
         self.value_label.setFont(font) # apply font to value label
         self.value_label.setAlignment(Qt.AlignCenter) # center label
+        self.value_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)  # Natural size
 
-        layout.addWidget(self.value_label) # add value label to layout
+        layout.addWidget(self.value_label, alignment=Qt.AlignCenter) # add value label to layout, centered
         self.setLayout(layout) # apply layout
+
+    def setToolTip(self, tooltip):
+        """Set tooltip on the label only, not the whole widget."""
+        self.value_label.setToolTip(tooltip)
     # change indicator value, called by main window's update_values function
     def change_value(self, value):
         self.value_label.setText(self.name + "\n" + value)
@@ -152,6 +163,163 @@ class ToggleButton(QPushButton):
             self.setChecked(int(state)) # set button checked state
             self.toggle() # toggle button
 
+
+class ToggleSwitch(QWidget):
+    """Modern toggle switch widget with sliding animation.
+
+    A pill-shaped switch with a sliding knob that animates between
+    ON (green) and OFF (gray) states.
+    """
+
+    # Signal emitted when toggle state changes
+    toggled = pyqtSignal(bool)
+    # Clicked signal for backward compatibility with ToggleButton
+    clicked = pyqtSignal()
+
+    def __init__(self, name, tooltip="", *args, **kwargs):
+        super().__init__()
+        self.name = name
+        self.state = 0
+        self._knob_position = 0.0  # 0.0 = left (OFF), 1.0 = right (ON)
+
+        # Create specific command messages for drying toggle (same as ToggleButton)
+        if self.name == "Drying":
+            self.messages = {0: ":SET:RUN", 1: ":SET:DRY"}
+
+        # Colors
+        self._track_color_on = QColor("#4CAF50")  # Green
+        self._track_color_off = QColor("#9E9E9E")  # Gray
+        self._knob_color = QColor("#FFFFFF")  # White
+        self._text_color = QColor("#CCCCCC")  # Light gray text (visible on dark background)
+
+        # Dimensions
+        self._track_width = 50
+        self._track_height = 26
+        self._knob_margin = 3
+        self._knob_diameter = self._track_height - (2 * self._knob_margin)
+
+        # Animation
+        self._animation = QPropertyAnimation(self, b"knobPosition")
+        self._animation.setDuration(150)  # 150ms animation
+        self._animation.setEasingCurve(QEasingCurve.InOutQuad)
+
+        # Set tooltip if provided
+        if tooltip:
+            self.setToolTip(tooltip)
+
+        # Set fixed size for the switch area
+        self.setMinimumHeight(40)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        # Enable mouse tracking for hover effects
+        self.setCursor(Qt.PointingHandCursor)
+
+    def get_knob_position(self):
+        return self._knob_position
+
+    def set_knob_position(self, pos):
+        self._knob_position = pos
+        self.update()  # Trigger repaint
+
+    # Property for animation
+    knobPosition = pyqtProperty(float, get_knob_position, set_knob_position)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Calculate layout - center the switch and label
+        total_height = self.height()
+        switch_y = (total_height - self._track_height) // 2
+
+        # Draw track (pill shape)
+        track_rect = QRectF(10, switch_y, self._track_width, self._track_height)
+
+        # Interpolate track color based on knob position
+        r = int(self._track_color_off.red() + (self._track_color_on.red() - self._track_color_off.red()) * self._knob_position)
+        g = int(self._track_color_off.green() + (self._track_color_on.green() - self._track_color_off.green()) * self._knob_position)
+        b = int(self._track_color_off.blue() + (self._track_color_on.blue() - self._track_color_off.blue()) * self._knob_position)
+        track_color = QColor(r, g, b)
+
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(track_color))
+        painter.drawRoundedRect(track_rect, self._track_height / 2, self._track_height / 2)
+
+        # Draw knob (circle)
+        knob_x = 10 + self._knob_margin + self._knob_position * (self._track_width - self._knob_diameter - 2 * self._knob_margin)
+        knob_y = switch_y + self._knob_margin
+        knob_rect = QRectF(knob_x, knob_y, self._knob_diameter, self._knob_diameter)
+
+        # Add subtle shadow to knob
+        shadow_rect = QRectF(knob_x + 1, knob_y + 1, self._knob_diameter, self._knob_diameter)
+        painter.setBrush(QBrush(QColor(0, 0, 0, 30)))
+        painter.drawEllipse(shadow_rect)
+
+        # Draw knob
+        painter.setBrush(QBrush(self._knob_color))
+        painter.drawEllipse(knob_rect)
+
+        # Draw label text
+        painter.setPen(QPen(self._text_color))
+        font = self.font()
+        font.setPointSize(12)
+        painter.setFont(font)
+
+        text_x = 10 + self._track_width + 10  # After switch + padding
+        text_rect = QRectF(text_x, 0, self.width() - text_x, total_height)
+
+        # Show state text with name
+        state_text = "ON" if self.state else "OFF"
+        display_text = f"{self.name}: {state_text}"
+        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, display_text)
+
+        painter.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.toggle()
+
+    def toggle(self):
+        """Toggle the switch state with animation."""
+        self.state = 1 - self.state  # Toggle between 0 and 1
+
+        # Animate knob position
+        self._animation.stop()
+        self._animation.setStartValue(self._knob_position)
+        self._animation.setEndValue(float(self.state))
+        self._animation.start()
+
+        # Emit signals
+        self.toggled.emit(bool(self.state))
+        self.clicked.emit()  # For backward compatibility with ToggleButton
+
+    def update_state(self, state):
+        """Update state from external source (e.g., device feedback)."""
+        if state != self.state:
+            if str(state) == 'nan':
+                return
+            new_state = int(state)
+            if new_state != self.state:
+                self.state = new_state
+                # Animate to new position
+                self._animation.stop()
+                self._animation.setStartValue(self._knob_position)
+                self._animation.setEndValue(float(self.state))
+                self._animation.start()
+
+    def isChecked(self):
+        """Return whether switch is ON (for compatibility with ToggleButton)."""
+        return bool(self.state)
+
+    def setChecked(self, checked):
+        """Set switch state (for compatibility with ToggleButton)."""
+        new_state = 1 if checked else 0
+        if new_state != self.state:
+            self.state = new_state
+            self._knob_position = float(self.state)
+            self.update()
+
+
 class StartButton(QPushButton):
     def __init__(self, name, *args, **kwargs):
         super().__init__()
@@ -175,10 +343,57 @@ class StartButton(QPushButton):
                 self.setStyleSheet(self.stylesheet)
                 self.state = 0
 
+# Stylesheet for custom +/- spinbox buttons
+SPINBOX_STYLE = """
+    QSpinBox, QDoubleSpinBox {
+        background-color: transparent;
+        color: #ddd;
+        border: 1px solid #555;
+        border-radius: 4px;
+        padding: 2px;
+        padding-right: 25px;
+    }
+    QSpinBox::up-button, QDoubleSpinBox::up-button {
+        subcontrol-origin: border;
+        subcontrol-position: top right;
+        background-color: #3a3a3a;
+        border: 1px solid #555;
+        border-top-right-radius: 3px;
+        width: 22px;
+    }
+    QSpinBox::down-button, QDoubleSpinBox::down-button {
+        subcontrol-origin: border;
+        subcontrol-position: bottom right;
+        background-color: #3a3a3a;
+        border: 1px solid #555;
+        border-bottom-right-radius: 3px;
+        width: 22px;
+    }
+    QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+    QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+        background-color: #4a4a4a;
+    }
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+        image: none;
+        width: 0;
+        height: 0;
+    }
+    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+        image: none;
+        width: 0;
+        height: 0;
+    }
+"""
+
 # custom spin box class with signal for value change
 # https://stackoverflow.com/questions/47874952/qspinbox-signal-for-arrow-buttons
 class SpinBox(QSpinBox):
     stepChanged = pyqtSignal(int)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setStyleSheet(SPINBOX_STYLE)
+
     # override stepBy function to emit signal when value changes
     def stepBy(self, step):
         value = self.value() # store cur value before change
@@ -186,8 +401,37 @@ class SpinBox(QSpinBox):
         if self.value() != value: # check if val actually changed
             self.stepChanged.emit(self.value()) # emit custom signal
 
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        # Draw +/- on buttons
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Get button areas (approximate positions)
+        button_width = 22
+        button_height = self.height() // 2
+        right_edge = self.width() - 1
+
+        # Draw + on up button
+        painter.setPen(QPen(QColor("#aaa"), 2))
+        plus_center_x = right_edge - button_width // 2
+        plus_center_y = button_height // 2
+        painter.drawLine(plus_center_x - 4, plus_center_y, plus_center_x + 4, plus_center_y)
+        painter.drawLine(plus_center_x, plus_center_y - 4, plus_center_x, plus_center_y + 4)
+
+        # Draw - on down button
+        minus_center_y = button_height + button_height // 2
+        painter.drawLine(plus_center_x - 4, minus_center_y, plus_center_x + 4, minus_center_y)
+
+        painter.end()
+
 class DoubleSpinBox(QDoubleSpinBox):
     stepChanged = pyqtSignal(float)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setStyleSheet(SPINBOX_STYLE)
+
     # override stepBy function to emit signal when value changes
     def stepBy(self, step):
         value = self.value() # store cur value before change
@@ -195,19 +439,49 @@ class DoubleSpinBox(QDoubleSpinBox):
         if self.value() != value: # check if value actually changed
             self.stepChanged.emit(self.value()) # emit custom signal
 
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        # Draw +/- on buttons
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Get button areas (approximate positions)
+        button_width = 22
+        button_height = self.height() // 2
+        right_edge = self.width() - 1
+
+        # Draw + on up button
+        painter.setPen(QPen(QColor("#aaa"), 2))
+        plus_center_x = right_edge - button_width // 2
+        plus_center_y = button_height // 2
+        painter.drawLine(plus_center_x - 4, plus_center_y, plus_center_x + 4, plus_center_y)
+        painter.drawLine(plus_center_x, plus_center_y - 4, plus_center_x, plus_center_y + 4)
+
+        # Draw - on down button
+        minus_center_y = button_height + button_height // 2
+        painter.drawLine(plus_center_x - 4, minus_center_y, plus_center_x + 4, minus_center_y)
+
+        painter.end()
+
 # used in CPCSetTab and PSMSetTab
-class SetWidget(QWidget):
+class SetWidget(QFrame):
     def __init__(self, name, suffix, *args, integer=False, **kwargs):
         super().__init__()
+        # Outer border, transparent background for inner elements
+        self.setFrameStyle(QFrame.StyledPanel)
+        self.setStyleSheet("QFrame { border: 1px solid #555; border-radius: 4px; } QLabel { background: transparent; border: none; }")
+
         layout = QVBoxLayout()
+        layout.setContentsMargins(6, 6, 6, 6)
         font = self.font() # get current global font
-        font.setPointSize(16) # set font size
+        font.setPointSize(14) # set font size
         # create label for widget name
         self.name = name
-        name_label = QLabel(self.name, objectName="label")
-        name_label.setAlignment(Qt.AlignCenter)
-        name_label.setFont(font) # apply font to label
-        layout.addWidget(name_label)
+        self.name_label = QLabel(self.name, objectName="label")
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self.name_label.setFont(font) # apply font to label
+        self.name_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)  # Natural size
+        layout.addWidget(self.name_label, alignment=Qt.AlignCenter)
         # create normal / double spin box for setting value
         self.is_integer = integer
         if integer: # if value is integer, use spin box (int)
@@ -226,9 +500,10 @@ class SetWidget(QWidget):
         self.value_spinbox.lineEdit().setReadOnly(True) # make line edit read only
         self.value_spinbox.lineEdit().setAlignment(Qt.AlignCenter) # align text in line edit
         layout.addWidget(self.value_spinbox) # add widget to layout
-        # add line edit for value input
+        # add line edit for value input (subtle styling)
         self.value_input = QLineEdit(objectName="line_edit")
         self.value_input.setPlaceholderText("Enter value")
+        self.value_input.setStyleSheet("QLineEdit { background-color: transparent; color: #ccc; border: none; border-bottom: 1px solid #555; }")
         self.value_input.setValidator(validator) # set validator, only allow int or float
         self.value_input.returnPressed.connect(self.value_input_return_pressed)
         layout.addWidget(self.value_input)
@@ -260,6 +535,131 @@ class SetWidget(QWidget):
         if self.error == True:
             self.value_spinbox.setStyleSheet(self.stylesheet)
             self.error = False
+
+    def setToolTip(self, tooltip):
+        """Set tooltip on the label only, not the whole widget."""
+        self.name_label.setToolTip(tooltip)
+
+
+class SetStatusWidget(QFrame):
+    """Combined setpoint control and actual value display widget.
+
+    Shows a setpoint spinbox with input field, plus a small indicator
+    displaying the actual measured value side-by-side.
+    """
+    def __init__(self, name, suffix, actual_name=None, *args, integer=False, **kwargs):
+        super().__init__()
+        self.name = name
+        self.actual_name = actual_name or name
+
+        # Outer border, transparent background for inner elements
+        self.setFrameStyle(QFrame.StyledPanel)
+        self.setStyleSheet("QFrame { border: 1px solid #555; border-radius: 4px; } QLabel { background: transparent; border: none; }")
+
+        layout = QVBoxLayout()
+        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 6, 6)
+
+        font = self.font()
+        font.setPointSize(14)
+
+        # Label for widget name
+        self.name_label = QLabel(self.name, objectName="label")
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self.name_label.setFont(font)
+        self.name_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)  # Natural size
+        layout.addWidget(self.name_label, alignment=Qt.AlignCenter)
+
+        # Horizontal layout for spinbox and actual value
+        value_row = QHBoxLayout()
+        value_row.setSpacing(8)
+
+        # Create spinbox for setpoint (same as SetWidget)
+        self.is_integer = integer
+        if integer:
+            self.value_spinbox = SpinBox(objectName="spin_box", maximum=9999)
+            validator = QIntValidator()
+        else:
+            if "decimals" in kwargs:
+                self.value_spinbox = DoubleSpinBox(objectName="double_spin_box", singleStep=0.1, maximum=9999, decimals=kwargs["decimals"])
+            else:
+                self.value_spinbox = DoubleSpinBox(objectName="double_spin_box", singleStep=0.1, maximum=9999)
+            locale = QLocale(QLocale.C)
+            validator = QDoubleValidator()
+            validator.setLocale(locale)
+            self.value_spinbox.setLocale(locale)
+        self.value_spinbox.setSuffix(suffix)
+        self.value_spinbox.lineEdit().setReadOnly(True)
+        self.value_spinbox.lineEdit().setAlignment(Qt.AlignCenter)
+        value_row.addWidget(self.value_spinbox, stretch=2)
+
+        # Actual value indicator (compact)
+        self.actual_label = QLabel("Act: --")
+        self.actual_label.setAlignment(Qt.AlignCenter)
+        actual_font = self.font()
+        actual_font.setPointSize(12)
+        self.actual_label.setFont(actual_font)
+        self.actual_label.setStyleSheet("QLabel { color: #666; padding: 2px; }")
+        self.actual_label.setMinimumWidth(70)
+        value_row.addWidget(self.actual_label, stretch=1)
+
+        layout.addLayout(value_row)
+
+        # Input field for manual value entry (subtle styling)
+        self.value_input = QLineEdit(objectName="line_edit")
+        self.value_input.setPlaceholderText("Enter value")
+        self.value_input.setStyleSheet("QLineEdit { background-color: transparent; color: #ccc; border: none; border-bottom: 1px solid #555; }")
+        self.value_input.setValidator(validator)
+        self.value_input.returnPressed.connect(self.value_input_return_pressed)
+        layout.addWidget(self.value_input)
+
+        self.setLayout(layout)
+        self.stylesheet = self.styleSheet()
+        self.error = False
+
+    def value_input_return_pressed(self):
+        """Handle value input when Enter is pressed."""
+        value = self.value_input.text()
+        try:
+            if self.is_integer:
+                self.value_spinbox.setValue(int(value))
+            else:
+                self.value_spinbox.setValue(float(value))
+        except Exception as e:
+            logging.error(f"Error setting widget value: {e}")
+        QTimer.singleShot(50, self.clear_input)
+
+    def clear_input(self):
+        """Clear the input field."""
+        self.value_input.clear()
+
+    def change_value(self, value):
+        """Update the actual value display (called by device update)."""
+        self.actual_label.setText(f"Act: {value}")
+
+    def set_red_color(self):
+        """Set error color on spinbox."""
+        if self.error == False:
+            self.value_spinbox.setStyleSheet("QDoubleSpinBox { background-color : red }")
+            self.error = True
+
+    def set_default_color(self):
+        """Reset spinbox to default color."""
+        if self.error == True:
+            self.value_spinbox.setStyleSheet(self.stylesheet)
+            self.error = False
+
+    def change_color(self, bit):
+        """Change color based on error bit (for compatibility with IndicatorWidget)."""
+        if int(bit) == 1:
+            self.actual_label.setStyleSheet("QLabel { background-color : red; color: white; padding: 2px; }")
+        else:
+            self.actual_label.setStyleSheet("QLabel { color: #666; padding: 2px; }")
+
+    def setToolTip(self, tooltip):
+        """Set tooltip on the label only, not the whole widget."""
+        self.name_label.setToolTip(tooltip)
+
 
 class TabConfirmationPopup(QWidget):
     """
@@ -726,6 +1126,6 @@ class BrowserStyleTabBar(QWidget):
 
 
 __all__ = [
-    'SetWidget', 'SpinBox', 'DoubleSpinBox', 'ToggleButton', 'StartButton', 'IndicatorWidget',
+    'SetWidget', 'SetStatusWidget', 'SpinBox', 'DoubleSpinBox', 'ToggleButton', 'ToggleSwitch', 'StartButton', 'IndicatorWidget',
     'CommandWidget', 'FloatTextEdit', 'StepsWidget', 'TabConfirmationPopup', 'BrowserStyleTabBar'
 ]

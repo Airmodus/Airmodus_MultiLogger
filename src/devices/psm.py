@@ -2,7 +2,7 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtWidgets import (QSplitter, QTabWidget, QGridLayout, QWidget,
     QSizePolicy, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QStackedWidget,
-    QComboBox, QCheckBox, QPushButton)
+    QComboBox, QCheckBox, QPushButton, QScrollArea, QFrame)
 from numpy import nan
 import numpy as np
 import logging
@@ -38,7 +38,9 @@ from config import PSM, PSM_ERRORS
 from widgets import (
     CommandWidget,
     SetWidget,
+    SetStatusWidget,
     ToggleButton,
+    ToggleSwitch,
     IndicatorWidget,
     StepsWidget
 )
@@ -70,28 +72,28 @@ class PSMWidget(ComplexDevice):
         # create contour plot tab for PSM (next to Plot tab)
         self.contour_tab = PSMContourTab(self.device_config, self.is_psm2)
         self.addTab(self.contour_tab, "Contour")
-        # create set tab for PSM (pass is_psm2 to determine UI)
-        self.set_tab = PSMSetTab(self.is_psm2)
-        self.addTab(self.set_tab, "Set")
-        # create status tab for PSM
-        self.status_tab = PSMStatusTab(self.is_psm2)
-        self.addTab(self.status_tab, "Status")
+        # create combined control tab for PSM (merges Set and Status tabs)
+        self.control_tab = PSMControlTab(self.is_psm2)
+        self.addTab(self.control_tab, "Control")
+        # Backward compatibility aliases
+        self.set_tab = self.control_tab
+        self.status_tab = self.control_tab
         # create mode tab for PSM
         self.measure_tab = PSMMeasureTab()
         self.addTab(self.measure_tab, "Measure")
 
         # create list of PSM status widgets, used in update_errors
         self.psm_status_widgets = [
-            self.status_tab.temp_growth_tube, self.status_tab.temp_saturator,
-            self.status_tab.flow_saturator, self.status_tab.temp_heater,
-            self.status_tab.temp_inlet, "mix1_press", "mix2_press",
-            self.status_tab.pressure_inlet, self.status_tab.flow_excess,
-            "drain_level", self.status_tab.temp_cabin, self.status_tab.temp_drainage,
-            self.status_tab.pressure_critical_orifice, "mfc_temp"
+            self.control_tab.temp_growth_tube, self.control_tab.temp_saturator,
+            self.control_tab.flow_saturator, self.control_tab.temp_heater,
+            self.control_tab.temp_inlet, "mix1_press", "mix2_press",
+            self.control_tab.pressure_inlet, self.control_tab.flow_excess,
+            "drain_level", self.control_tab.temp_cabin, self.control_tab.temp_drainage,
+            self.control_tab.pressure_critical_orifice, "mfc_temp"
         ]
         # if PSM 2.0, add vacuum flow widget to list
         if self.is_psm2:
-            self.psm_status_widgets.append(self.status_tab.flow_vacuum)
+            self.psm_status_widgets.append(self.control_tab.flow_vacuum)
 
         # PSM-specific flags
         self.needs_settings_fetch = True  # Fetch settings on initial connection
@@ -1017,105 +1019,289 @@ class PSMWidget(ComplexDevice):
             self.plot_config.calculate_connected_cpc_values(data_holder)
 
 
-class PSMSetTab(QSplitter):
+class PSMControlTab(QWidget):
+    """Combined control tab merging Set and Status functionality.
+
+    Compact layout designed to fit on one screen without scrolling.
+    """
     def __init__(self, is_psm2: bool, *args, **kwargs):
         super().__init__()
-        # split tab vertically
-        self.setOrientation(Qt.Vertical)
 
-        # horizontal splitter containing upper half of tab - set widgets
-        upper_splitter = QSplitter(Qt.Horizontal)
-        self.set_growth_tube_temp = SetWidget("Growth tube T", " °C")
-        upper_splitter.addWidget(self.set_growth_tube_temp)
-        self.set_saturator_temp = SetWidget("Saturator T", " °C")
-        upper_splitter.addWidget(self.set_saturator_temp)
-        self.set_inlet_temp = SetWidget("Inlet T", " °C")
-        upper_splitter.addWidget(self.set_inlet_temp)
-        self.set_heater_temp = SetWidget("Heater T", " °C")
-        upper_splitter.addWidget(self.set_heater_temp)
-        self.set_drainage_temp = SetWidget("Drainage T", " °C")
-        upper_splitter.addWidget(self.set_drainage_temp)
-        # horizontal splitter containing middle half of tab - set widgets
-        middle_splitter = QSplitter(Qt.Horizontal)
-        self.set_cpc_inlet_flow = SetWidget("CPC inlet flow rate\n(used in dilution correction)", " lpm", decimals=3)
-        middle_splitter.addWidget(self.set_cpc_inlet_flow)
-        self.set_cpc_sample_flow = SetWidget("CPC sample flow rate\n(used in concentration calculation)", " lpm", decimals=3)
-        middle_splitter.addWidget(self.set_cpc_sample_flow)
+        # Scroll area for when content exceeds screen (e.g., Serial Commands expanded)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        content_widget = QWidget()
+        main_layout = QVBoxLayout(content_widget)
+        main_layout.setSpacing(6)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+
+        # === TEMPERATURES GROUP ===
+        temp_group = QGroupBox("🌡️ Temperatures")
+        temp_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #e67e22;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                color: #e67e22;
+            }
+        """)
+        temp_layout = QGridLayout()
+        temp_layout.setSpacing(4)
+
+        # Row 0: Growth tube, Saturator, Inlet (setpoint + actual)
+        self.set_growth_tube_temp = SetStatusWidget("Growth tube T", " °C")
+        self.set_growth_tube_temp.setToolTip("Growth tube temperature - controls particle growth conditions")
+        temp_layout.addWidget(self.set_growth_tube_temp, 0, 0)
+        self.set_saturator_temp = SetStatusWidget("Saturator T", " °C")
+        self.set_saturator_temp.setToolTip("Saturator temperature - controls working fluid vapor saturation")
+        temp_layout.addWidget(self.set_saturator_temp, 0, 1)
+        self.set_inlet_temp = SetStatusWidget("Inlet T", " °C")
+        self.set_inlet_temp.setToolTip("Inlet temperature - aerosol sample inlet heating")
+        temp_layout.addWidget(self.set_inlet_temp, 0, 2)
+
+        # Row 1: Heater, Drainage (setpoint + actual), Cabin (read-only)
+        self.set_heater_temp = SetStatusWidget("Heater T", " °C")
+        self.set_heater_temp.setToolTip("Heater temperature - preheater for incoming flow")
+        temp_layout.addWidget(self.set_heater_temp, 1, 0)
+        self.set_drainage_temp = SetStatusWidget("Drainage T", " °C")
+        self.set_drainage_temp.setToolTip("Drainage temperature - excess liquid drainage heating")
+        temp_layout.addWidget(self.set_drainage_temp, 1, 1)
+        self.temp_cabin = IndicatorWidget("Cabin T")
+        self.temp_cabin.setToolTip("Cabin temperature - internal instrument temperature (read-only)")
+        temp_layout.addWidget(self.temp_cabin, 1, 2)
+
+        temp_group.setLayout(temp_layout)
+        main_layout.addWidget(temp_group)
+
+        # === FLOW RATES GROUP ===
+        flow_group = QGroupBox("💨 Flow Rates")
+        flow_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #3498db;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                color: #3498db;
+            }
+        """)
+        flow_layout = QGridLayout()
+        flow_layout.setSpacing(4)
+
+        # Row 0: Setpoint flows
+        self.set_cpc_inlet_flow = SetStatusWidget("CPC inlet", " lpm", decimals=3)
+        self.set_cpc_inlet_flow.setToolTip("CPC inlet flow - used in dilution correction")
+        flow_layout.addWidget(self.set_cpc_inlet_flow, 0, 0)
+
+        self.set_cpc_sample_flow = SetWidget("CPC sample", " lpm", decimals=3)
+        self.set_cpc_sample_flow.setToolTip("CPC sample flow - used in concentration calculation")
+        flow_layout.addWidget(self.set_cpc_sample_flow, 0, 1)
+
         # CO flow rate widget - always created, visibility updated when firmware received
-        self.set_co_flow = SetWidget("CO flow rate", " lpm", decimals=3)
-        middle_splitter.addWidget(self.set_co_flow)
+        self.set_co_flow = SetWidget("CO flow", " lpm", decimals=3)
+        self.set_co_flow.setToolTip("Cut-off flow rate for PSM Retrofit")
+        flow_layout.addWidget(self.set_co_flow, 0, 2)
         if is_psm2:
-            self.set_co_flow.hide()  # Hide initially for PSM 2.0
-        # horizontal splitter containing lower half of tab - mode widgets
-        lower_splitter = QSplitter(Qt.Horizontal)
-        self.autofill = ToggleButton("Autofill")
-        lower_splitter.addWidget(self.autofill)
-        self.drain = ToggleButton("Drain")
-        lower_splitter.addWidget(self.drain)
-        self.drying = ToggleButton("Drying")
-        lower_splitter.addWidget(self.drying)
-        # set splitter's relative widget sizes and add to tab
-        upper_splitter.setSizes([1000, 1000, 1000, 1000, 1000])
-        self.addWidget(upper_splitter)
-        middle_splitter.setSizes([1000, 1000, 1000])
-        self.addWidget(middle_splitter)
-        lower_splitter.setSizes([1000, 1000, 1000])
-        self.addWidget(lower_splitter)
-        # add line edit for command input
+            self.set_co_flow.hide()
+
+        # Row 1: Read-only flow indicators (first two)
+        self.flow_saturator = IndicatorWidget("Saturator")
+        self.flow_saturator.setToolTip("Saturator flow - saturated air flow rate")
+        flow_layout.addWidget(self.flow_saturator, 1, 0)
+        self.flow_excess = IndicatorWidget("Excess")
+        self.flow_excess.setToolTip("Excess flow - excess sample flow rate")
+        flow_layout.addWidget(self.flow_excess, 1, 1)
+
+        # Row 2: Read-only flow indicators (inlet + vacuum for PSM 2.0)
+        self.flow_inlet = IndicatorWidget("Inlet")
+        self.flow_inlet.setToolTip("Inlet flow - total sample inlet flow rate")
+        flow_layout.addWidget(self.flow_inlet, 2, 0)
+
+        if is_psm2:
+            self.flow_vacuum = IndicatorWidget("Vacuum")
+            self.flow_vacuum.setToolTip("Vacuum flow - vacuum pump flow rate")
+            flow_layout.addWidget(self.flow_vacuum, 2, 1)
+
+        flow_group.setLayout(flow_layout)
+        main_layout.addWidget(flow_group)
+
+        # === CONTROLS, PRESSURES & LIQUID LEVELS (combined row) ===
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+
+        # Liquid Controls (vertical stacked toggles)
+        controls_group = QGroupBox("🎛️ Controls")
+        controls_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #27ae60;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                color: #27ae60;
+            }
+        """)
+        controls_layout = QVBoxLayout()
+        controls_layout.setSpacing(2)
+        controls_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.autofill = ToggleSwitch("Autofill", "Automatically refill saturator liquid when low")
+        controls_layout.addWidget(self.autofill)
+
+        self.drain = ToggleSwitch("Drain", "Enable liquid drainage from the system")
+        controls_layout.addWidget(self.drain)
+
+        self.drying = ToggleSwitch("Drying", "Run drying cycle to remove moisture")
+        controls_layout.addWidget(self.drying)
+
+        controls_group.setLayout(controls_layout)
+        status_row.addWidget(controls_group, 1)  # Equal stretch
+
+        # Pressures
+        pressure_group = QGroupBox("📊 Pressures")
+        pressure_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #9b59b6;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                color: #9b59b6;
+            }
+        """)
+        pressure_layout = QVBoxLayout()
+        pressure_layout.setSpacing(4)
+        pressure_layout.setContentsMargins(4, 4, 4, 4)
+        self.pressure_inlet = IndicatorWidget("Inlet")
+        self.pressure_inlet.setToolTip("Inlet pressure - sample inlet pressure")
+        pressure_layout.addWidget(self.pressure_inlet)
+        if is_psm2:
+            self.pressure_critical_orifice = IndicatorWidget("Vacuum line")
+            self.pressure_critical_orifice.setToolTip("Vacuum line pressure - vacuum system pressure")
+        else:
+            self.pressure_critical_orifice = IndicatorWidget("Crit. orifice")
+            self.pressure_critical_orifice.setToolTip("Critical orifice pressure - flow control orifice pressure")
+        pressure_layout.addWidget(self.pressure_critical_orifice)
+        pressure_group.setLayout(pressure_layout)
+        status_row.addWidget(pressure_group, 1)  # Equal stretch
+
+        # Liquid Levels
+        liquid_level_group = QGroupBox("💧 Levels")
+        liquid_level_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #1abc9c;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                color: #1abc9c;
+            }
+        """)
+        liquid_level_layout = QVBoxLayout()
+        liquid_level_layout.setSpacing(4)
+        liquid_level_layout.setContentsMargins(4, 4, 4, 4)
+        self.liquid_saturator = IndicatorWidget("Saturator")
+        self.liquid_saturator.setToolTip("Saturator liquid level - working fluid reservoir level")
+        liquid_level_layout.addWidget(self.liquid_saturator)
+        self.liquid_drain = IndicatorWidget("Drain")
+        self.liquid_drain.setToolTip("Drain liquid level - excess liquid drain level")
+        liquid_level_layout.addWidget(self.liquid_drain)
+        liquid_level_group.setLayout(liquid_level_layout)
+        status_row.addWidget(liquid_level_group, 1)  # Equal stretch
+
+        main_layout.addLayout(status_row)
+
+        # === SERIAL COMMANDS GROUP (Collapsible) ===
+        self.commands_group = QGroupBox("📡 Serial Commands")
+        self.commands_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #7f8c8d;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                color: #7f8c8d;
+            }
+        """)
+        self.commands_group.setCheckable(True)
+        self.commands_group.setChecked(False)
+        commands_layout = QVBoxLayout()
+        commands_layout.setContentsMargins(4, 4, 4, 4)
+
         self.command_widget = CommandWidget("PSM")
-        self.addWidget(self.command_widget)
-        # set relative sizes in tab splitter
-        self.setSizes([1000, 1000, 1000, 1000])
-    
-class PSMStatusTab(QWidget):
-    def __init__(self, is_psm2: bool, *args, **kwargs):
-        super().__init__()
+        commands_layout.addWidget(self.command_widget)
 
-        layout = QGridLayout() # create layout
+        self.commands_group.setLayout(commands_layout)
+        self.commands_group.toggled.connect(self._on_commands_toggled)
+        self.command_widget.setVisible(False)
 
-        # temperature indicators
-        self.temp_growth_tube = IndicatorWidget("Growth tube temperature")
-        layout.addWidget(self.temp_growth_tube, 0, 0)
-        self.temp_saturator = IndicatorWidget("Saturator temperature")
-        layout.addWidget(self.temp_saturator, 1, 0)
-        self.temp_inlet = IndicatorWidget("Inlet temperature")
-        layout.addWidget(self.temp_inlet, 2, 0)
-        self.temp_heater = IndicatorWidget("Heater temperature")
-        layout.addWidget(self.temp_heater, 3, 0)
-        self.temp_drainage = IndicatorWidget("Drainage temperature")
-        layout.addWidget(self.temp_drainage, 4, 0)
-        self.temp_cabin = IndicatorWidget("Cabin temperature")
-        layout.addWidget(self.temp_cabin, 0, 1)
+        main_layout.addWidget(self.commands_group)
+        main_layout.addStretch()
 
-        # flow indicators
-        self.flow_cpc = IndicatorWidget("CPC inlet flow")
-        layout.addWidget(self.flow_cpc, 1, 1)
-        self.flow_saturator = IndicatorWidget("Saturator flow")
-        layout.addWidget(self.flow_saturator, 2, 1)
-        self.flow_excess = IndicatorWidget("Excess flow")
-        layout.addWidget(self.flow_excess, 3, 1)
-        self.flow_inlet = IndicatorWidget("Inlet flow")
-        layout.addWidget(self.flow_inlet, 4, 1)
-        if is_psm2:  # PSM 2.0 only - add vacuum flow indicator
-            self.flow_vacuum = IndicatorWidget("Vacuum flow")
-            layout.addWidget(self.flow_vacuum, 4, 2)
+        # Set up scroll area
+        scroll_area.setWidget(content_widget)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(scroll_area)
 
-        # pressure indicators
-        self.pressure_inlet = IndicatorWidget("Inlet pressure")
-        layout.addWidget(self.pressure_inlet, 0, 2)
-        if is_psm2:  # PSM 2.0 - vacuum line pressure
-            self.pressure_critical_orifice = IndicatorWidget("Vacuum line pressure")
-        else:  # Retrofit - critical orifice pressure
-            self.pressure_critical_orifice = IndicatorWidget("Critical orifice pressure")
-        layout.addWidget(self.pressure_critical_orifice, 1, 2)
+    def _on_commands_toggled(self, checked):
+        """Show/hide command widget content when group is toggled."""
+        self.command_widget.setVisible(checked)
 
-        # liquid level indicators
-        self.liquid_saturator = IndicatorWidget("Saturator liquid level")
-        layout.addWidget(self.liquid_saturator, 2, 2)
-        self.liquid_drain = IndicatorWidget("Drain liquid level")
-        layout.addWidget(self.liquid_drain, 3, 2)
+    # Backward compatibility properties for status tab access patterns
+    # These expose the actual value indicators from SetStatusWidgets
+    @property
+    def temp_growth_tube(self):
+        """Backward compatible access to growth tube temperature indicator."""
+        return self.set_growth_tube_temp
 
-        self.setLayout(layout)
+    @property
+    def temp_saturator(self):
+        """Backward compatible access to saturator temperature indicator."""
+        return self.set_saturator_temp
+
+    @property
+    def temp_inlet(self):
+        """Backward compatible access to inlet temperature indicator."""
+        return self.set_inlet_temp
+
+    @property
+    def temp_heater(self):
+        """Backward compatible access to heater temperature indicator."""
+        return self.set_heater_temp
+
+    @property
+    def temp_drainage(self):
+        """Backward compatible access to drainage temperature indicator."""
+        return self.set_drainage_temp
+
+    @property
+    def flow_cpc(self):
+        """Backward compatible access to CPC inlet flow indicator."""
+        return self.set_cpc_inlet_flow
 
 
 class ScanPreviewWidget(QWidget):

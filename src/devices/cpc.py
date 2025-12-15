@@ -5,14 +5,17 @@ import logging
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
 from PyQt5.QtWidgets import (QTabWidget, QGridLayout, QLabel, QWidget,
     QPushButton, QComboBox, QGraphicsRectItem, QTableWidget, QTableWidgetItem,
-    QTextEdit, QCheckBox, QHeaderView, QLineEdit)
+    QTextEdit, QCheckBox, QHeaderView, QLineEdit, QVBoxLayout, QHBoxLayout,
+    QGroupBox, QScrollArea, QFrame)
 from config import CPC, CPC_ERRORS
 from ui_helpers import GuidedComboBox
 
 from widgets import (
     CommandWidget,
     SetWidget,
+    SetStatusWidget,
     ToggleButton,
+    ToggleSwitch,
     IndicatorWidget,
 )
 from plots.device_plots import SinglePlot
@@ -37,12 +40,12 @@ class CPCWidget(ComplexDevice):
         # create plot widget (first tab)
         self.plot_tab = SinglePlot(device_type=CPC)
         self.addTab(self.plot_tab, "Plot")
-        # create set tab widget for cpc settings
-        self.set_tab = CPCSetTab()
-        self.addTab(self.set_tab, "Set")
-        # create status tab widget showing CPC values
-        self.status_tab = CPCStatusTab()
-        self.addTab(self.status_tab, "Status")
+        # create combined control tab (merges Set and Status tabs)
+        self.control_tab = CPCControlTab()
+        self.addTab(self.control_tab, "Control")
+        # Backward compatibility aliases
+        self.set_tab = self.control_tab
+        self.status_tab = self.control_tab
         # create database/ACTRIS tab for database settings and status
         self.database_tab = CPCDatabaseTab(device_config)
         self.addTab(self.database_tab, "ACTRIS")
@@ -52,11 +55,11 @@ class CPCWidget(ComplexDevice):
 
         # create list of widget references for updating gui with cpc system status
         self.cpc_status_widgets = [
-            self.status_tab.temp_optics, self.status_tab.temp_saturator,
-            self.status_tab.temp_condenser, self.status_tab.pres_inlet,
-            self.status_tab.pres_nozzle, self.status_tab.laser_power,
-            self.status_tab.liquid_level, self.status_tab.temp_cabin,
-            self.status_tab.pres_critical_orifice, self.status_tab.pulse_quality
+            self.control_tab.temp_optics, self.control_tab.temp_saturator,
+            self.control_tab.temp_condenser, self.control_tab.pres_inlet,
+            self.control_tab.pres_nozzle, self.control_tab.laser_power,
+            self.control_tab.liquid_level, self.control_tab.temp_cabin,
+            self.control_tab.pres_critical_orifice, self.control_tab.pulse_quality
         ]
 
         # Plot configuration (composition over inheritance)
@@ -702,8 +705,260 @@ class CPCWidget(ComplexDevice):
             self.database_tab.update_global_connection_status()
 
 
+class CPCControlTab(QWidget):
+    """Combined control tab merging Set and Status functionality.
+
+    Compact layout designed to fit on one screen without scrolling.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+        # Scroll area for when content exceeds screen
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        content_widget = QWidget()
+        main_layout = QVBoxLayout(content_widget)
+        main_layout.setSpacing(6)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+
+        # === TEMPERATURES GROUP ===
+        temp_group = QGroupBox("\U0001F321 Temperatures")
+        temp_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #e67e22;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                color: #e67e22;
+            }
+        """)
+        temp_layout = QGridLayout()
+        temp_layout.setSpacing(4)
+
+        # Row 0: Saturator T, Condenser T (setpoint + actual), Optics T (read-only)
+        self.set_saturator_temp = SetStatusWidget("Saturator T", " °C")
+        self.set_saturator_temp.setToolTip("Saturator temperature setpoint and actual value")
+        temp_layout.addWidget(self.set_saturator_temp, 0, 0)
+
+        self.set_condenser_temp = SetStatusWidget("Condenser T", " °C")
+        self.set_condenser_temp.setToolTip("Condenser temperature setpoint and actual value")
+        temp_layout.addWidget(self.set_condenser_temp, 0, 1)
+
+        # Row 1: Cabin T, Optics T (read-only)
+        self.temp_cabin = IndicatorWidget("Cabin T")
+        self.temp_cabin.setToolTip("Cabin temperature (read-only)")
+        temp_layout.addWidget(self.temp_cabin, 1, 0)
+
+        self.temp_optics = IndicatorWidget("Optics T")
+        self.temp_optics.setToolTip("Optics temperature (read-only)")
+        temp_layout.addWidget(self.temp_optics, 1, 1)
+
+        temp_group.setLayout(temp_layout)
+        main_layout.addWidget(temp_group)
+
+        # === PRESSURES GROUP ===
+        pressure_group = QGroupBox("\U0001F4CA Pressures")
+        pressure_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #9b59b6;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                color: #9b59b6;
+            }
+        """)
+        pressure_layout = QGridLayout()
+        pressure_layout.setSpacing(4)
+
+        # Row 0: Inlet, Nozzle
+        self.pres_inlet = IndicatorWidget("Inlet")
+        self.pres_inlet.setToolTip("Inlet pressure")
+        pressure_layout.addWidget(self.pres_inlet, 0, 0)
+
+        self.pres_nozzle = IndicatorWidget("Nozzle")
+        self.pres_nozzle.setToolTip("Nozzle pressure")
+        pressure_layout.addWidget(self.pres_nozzle, 0, 1)
+
+        # Row 1: Critical orifice, Cabin
+        self.pres_critical_orifice = IndicatorWidget("Critical orifice")
+        self.pres_critical_orifice.setToolTip("Critical orifice pressure")
+        pressure_layout.addWidget(self.pres_critical_orifice, 1, 0)
+
+        self.pres_cabin = IndicatorWidget("Cabin")
+        self.pres_cabin.setToolTip("Cabin pressure")
+        pressure_layout.addWidget(self.pres_cabin, 1, 1)
+
+        pressure_group.setLayout(pressure_layout)
+        main_layout.addWidget(pressure_group)
+
+        # === CONTROLS, STATUS & SETTINGS (combined row) ===
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+
+        # Controls Group (toggles)
+        controls_group = QGroupBox("\U0001F39B Controls")
+        controls_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #27ae60;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                color: #27ae60;
+            }
+        """)
+        controls_layout = QVBoxLayout()
+        controls_layout.setSpacing(2)
+        controls_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.autofill = ToggleSwitch("Autofill", "Automatically refill liquid when low")
+        controls_layout.addWidget(self.autofill)
+
+        self.water_removal = ToggleSwitch("Water removal", "Enable water removal cycle")
+        controls_layout.addWidget(self.water_removal)
+
+        self.drain = ToggleSwitch("Drain", "Enable liquid drainage")
+        controls_layout.addWidget(self.drain)
+
+        controls_group.setLayout(controls_layout)
+        status_row.addWidget(controls_group, 1)  # stretch factor 1
+
+        # Status Group (indicators)
+        status_group = QGroupBox("\U00002139 Status")
+        status_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #17a2b8;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                color: #17a2b8;
+            }
+        """)
+        status_layout = QVBoxLayout()
+        status_layout.setSpacing(2)
+        status_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.laser_power = IndicatorWidget("Laser power")
+        self.laser_power.setToolTip("Laser power status")
+        status_layout.addWidget(self.laser_power)
+
+        self.liquid_level = IndicatorWidget("Liquid level")
+        self.liquid_level.setToolTip("Saturator liquid level")
+        status_layout.addWidget(self.liquid_level)
+
+        self.pulse_quality = IndicatorWidget("Pulse quality")
+        self.pulse_quality.setToolTip("Pulse quality status")
+        status_layout.addWidget(self.pulse_quality)
+
+        status_group.setLayout(status_layout)
+        status_row.addWidget(status_group, 1)  # stretch factor 1
+
+        # Settings Group
+        settings_group = QGroupBox("\U00002699 Settings")
+        settings_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #6c757d;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                color: #6c757d;
+            }
+        """)
+        settings_layout = QVBoxLayout()
+        settings_layout.setSpacing(4)
+        settings_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.set_averaging_time = SetWidget("Averaging time", " s")
+        self.set_averaging_time.setToolTip("Data averaging time in seconds")
+        settings_layout.addWidget(self.set_averaging_time)
+
+        settings_group.setLayout(settings_layout)
+        status_row.addWidget(settings_group, 1)  # stretch factor 1
+
+        main_layout.addLayout(status_row)
+
+        # === SERIAL COMMANDS GROUP (collapsible) ===
+        self.commands_group = QGroupBox("Serial Commands")
+        self.commands_group.setCheckable(True)
+        self.commands_group.setChecked(False)
+        self.commands_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #555;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                color: #aaa;
+            }
+            QGroupBox::indicator {
+                width: 13px;
+                height: 13px;
+            }
+        """)
+        commands_layout = QVBoxLayout()
+        commands_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.command_widget = CommandWidget("CPC")
+        commands_layout.addWidget(self.command_widget)
+
+        self.commands_group.setLayout(commands_layout)
+        self.commands_group.toggled.connect(self._toggle_commands)
+        self.command_widget.setVisible(False)
+        main_layout.addWidget(self.commands_group)
+
+        # Add stretch at end
+        main_layout.addStretch()
+
+        scroll_area.setWidget(content_widget)
+
+        # Set scroll area as main layout
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(scroll_area)
+
+    def _toggle_commands(self, checked):
+        """Toggle visibility of serial commands section."""
+        self.command_widget.setVisible(checked)
+
+    # === Backward compatibility properties ===
+    @property
+    def temp_saturator(self):
+        """Alias for backward compatibility with status tab."""
+        return self.set_saturator_temp
+
+    @property
+    def temp_condenser(self):
+        """Alias for backward compatibility with status tab."""
+        return self.set_condenser_temp
+
+
 # set tab widget containing settings and message input
-# used in CPCWidget
+# used in CPCWidget (kept for backward compatibility)
 class CPCSetTab(QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__()

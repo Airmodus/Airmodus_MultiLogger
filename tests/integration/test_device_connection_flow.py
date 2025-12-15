@@ -166,7 +166,7 @@ class TestPSMConnectionFlow:
         assert psm.needs_settings_fetch is True
 
         # Call send_read_commands (simulates connection established)
-        psm.send_read_commands(mock_serial_connection, None)
+        psm.send_read_commands(mock_serial_connection, psm.device_config)
 
         # Should send :SYST:PRNT immediately
         mock_serial_connection.send_message.assert_called_once_with(":SYST:PRNT")

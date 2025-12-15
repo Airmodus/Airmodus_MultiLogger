@@ -378,8 +378,8 @@ class TestCPCPlotConfiguration:
         """Test CPC has concentration and raw concentration plot keys."""
         plot_keys = cpc_widget.get_plot_keys()
 
-        # CPC should have '' (main) and ':raw' (raw concentration) keys
-        assert '' in plot_keys
+        # CPC should have ':conc' (concentration) and ':raw' (raw concentration) keys
+        assert ':conc' in plot_keys
         assert ':raw' in plot_keys
         assert len(plot_keys) == 2
 
