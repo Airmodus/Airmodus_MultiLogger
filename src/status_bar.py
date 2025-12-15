@@ -454,7 +454,7 @@ class MultiLoggerStatusBar(QStatusBar):
         # Count warnings and errors for summary
         error_count = sum(1 for has_error in self.data_holder.device_errors.values() if has_error)
         disconnected_count = sum(1 for dev_id, widget in self.device_widgets.items()
-                                  if hasattr(widget, '_is_connected') and not widget._is_connected)
+                                  if hasattr(widget, '_connected') and not widget._connected)
 
         # Update summary indicator
         total_issues = error_count + disconnected_count

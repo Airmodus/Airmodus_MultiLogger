@@ -1108,7 +1108,7 @@ class PSMControlTab(QWidget):
         flow_layout.setSpacing(4)
 
         # Row 0: Setpoint flows
-        self.set_cpc_inlet_flow = SetStatusWidget("CPC inlet", " lpm", decimals=3, is_temperature=False)
+        self.set_cpc_inlet_flow = SetWidget("CPC inlet", " lpm", decimals=3)
         self.set_cpc_inlet_flow.setToolTip("CPC inlet flow - used in dilution correction")
         flow_layout.addWidget(self.set_cpc_inlet_flow, 0, 0)
 

@@ -613,6 +613,7 @@ class SetWidget(QFrame):
         self.name_label = QLabel(self.name, objectName="label")
         self.name_label.setAlignment(Qt.AlignCenter)
         self.name_label.setFont(font)
+        self.name_label.setStyleSheet("QLabel { color: #ddd; }")
         self.name_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         layout.addWidget(self.name_label, alignment=Qt.AlignCenter)
         # create normal / double spin box for setting value
