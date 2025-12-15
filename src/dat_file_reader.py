@@ -117,7 +117,7 @@ def _calculate_concentration_psm(satflow: float, excess_flow: float, cpc_conc: f
     return cpc_conc * dilution_correction / poly_correction
 
 
-def read_psm_dat_file(filepath: str) -> pd.DataFrame:
+def read_psm_dat_file(filepath: str, progress_callback: Optional[callable] = None) -> pd.DataFrame:
     """
     Read PSM .dat file and extract relevant columns.
     Auto-detects PSM version (2.0 vs Retrofit) from file header.
@@ -127,6 +127,7 @@ def read_psm_dat_file(filepath: str) -> pd.DataFrame:
 
     Args:
         filepath: Path to .dat file
+        progress_callback: Optional callback(current, total, message) for progress updates
 
     Returns:
         DataFrame with columns: timestamp, satflow, scan_status, concentration_psm
@@ -138,12 +139,20 @@ def read_psm_dat_file(filepath: str) -> pd.DataFrame:
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"File not found: {filepath}")
 
+    filename = os.path.basename(filepath)
+
     try:
         # Auto-detect PSM version from header
         is_psm2 = _detect_psm2_from_file(filepath)
 
+        if progress_callback:
+            progress_callback(0, 100, f"Reading {filename}...")
+
         # Read CSV file
         df = pd.read_csv(filepath)
+
+        if progress_callback:
+            progress_callback(30, 100, f"Processing {len(df)} rows...")
 
         # Validate minimum columns
         if len(df.columns) < 16:
@@ -171,8 +180,12 @@ def read_psm_dat_file(filepath: str) -> pd.DataFrame:
 
         # Check if we need to calculate concentration_psm for rows where it's missing
         missing_conc_mask = result['concentration_psm'].isna()
+        missing_count = missing_conc_mask.sum()
 
-        if missing_conc_mask.any() and len(df.columns) > cpc_conc_col_idx:
+        if missing_count > 0 and len(df.columns) > cpc_conc_col_idx:
+            if progress_callback:
+                progress_callback(40, 100, f"Calculating {missing_count} concentrations...")
+
             # Read additional columns needed for calculation
             excess_flow = pd.to_numeric(df[excess_flow_col], errors='coerce')
             cpc_conc = pd.to_numeric(df.iloc[:, cpc_conc_col_idx], errors='coerce')
@@ -182,7 +195,8 @@ def read_psm_dat_file(filepath: str) -> pd.DataFrame:
                 vacuum_flow = pd.to_numeric(df.iloc[:, vacuum_flow_col_idx], errors='coerce')
 
             # Calculate concentration_psm for rows where it's missing
-            for idx in result[missing_conc_mask].index:
+            missing_indices = result[missing_conc_mask].index.tolist()
+            for i, idx in enumerate(missing_indices):
                 calculated_conc = _calculate_concentration_psm(
                     satflow=result.loc[idx, 'satflow'],
                     excess_flow=excess_flow.loc[idx],
@@ -192,11 +206,22 @@ def read_psm_dat_file(filepath: str) -> pd.DataFrame:
                 )
                 result.loc[idx, 'concentration_psm'] = calculated_conc
 
+                # Report progress every 500 rows
+                if progress_callback and i % 500 == 0:
+                    pct = 40 + int(50 * i / len(missing_indices))
+                    progress_callback(pct, 100, f"Calculating row {i}/{missing_count}...")
+
+        if progress_callback:
+            progress_callback(90, 100, f"Parsing timestamps...")
+
         # Parse timestamps
         result['timestamp'] = pd.to_datetime(result['timestamp'], format='%Y.%m.%d %H:%M:%S', errors='coerce')
 
         # Remove rows with invalid timestamps
         result = result.dropna(subset=['timestamp'])
+
+        if progress_callback:
+            progress_callback(100, 100, f"Done: {len(result)} rows")
 
         return result
 
@@ -342,16 +367,26 @@ def load_historical_scans(
 
     # Read scans from each file along with file's data range info
     file_scans = []  # List of (filepath, scans, row_count)
+    total_files = len(filepaths)
     for i, fp in enumerate(filepaths):
         try:
             filename = os.path.basename(fp)
-            if progress_callback:
-                progress_callback(i, len(filepaths), f"Reading: {filename}")
 
-            df = read_psm_dat_file(fp)
+            # Create a nested progress callback that includes file context
+            def file_progress_callback(pct, total_pct, msg):
+                if progress_callback:
+                    # Show file X/Y and the detail message
+                    progress_callback(i, total_files, f"[{i+1}/{total_files}] {msg}")
+
+            file_progress_callback(0, 100, f"Reading {filename}...")
+
+            df = read_psm_dat_file(fp, progress_callback=file_progress_callback)
+
+            file_progress_callback(95, 100, f"Detecting scans...")
             scans = detect_scans_from_dat(df)
             if scans:
                 file_scans.append((fp, scans, len(df)))
+                file_progress_callback(100, 100, f"Found {len(scans)} scans")
         except Exception as e:
             logging.error(f"Error reading {fp}: {e}")
             continue
