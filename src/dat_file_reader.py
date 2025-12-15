@@ -66,10 +66,64 @@ def find_psm_files_last_24h(file_path: str, hours: int = 24) -> List[str]:
     return sorted([f for f in all_matching_files if os.path.getsize(f) > 500])
 
 
+def _calculate_concentration_psm(satflow: float, excess_flow: float, cpc_conc: float,
+                                   is_psm2: bool, vacuum_flow: float = 0.0,
+                                   cpc_flow: float = 1.0) -> float:
+    """
+    Calculate PSM concentration from raw CPC concentration.
+    Used for backwards compatibility with older .dat files that don't have
+    pre-calculated concentration_psm values.
+
+    Args:
+        satflow: Saturator flow rate (lpm)
+        excess_flow: Excess flow rate (lpm)
+        cpc_conc: Raw CPC concentration (#/cc)
+        is_psm2: True if PSM 2.0, False if Retrofit
+        vacuum_flow: Vacuum flow (lpm), only used for PSM 2.0
+        cpc_flow: CPC flow rate (lpm), default 1.0
+
+    Returns:
+        Dilution and poly corrected concentration from PSM
+    """
+    if np.isnan(satflow) or np.isnan(cpc_conc) or cpc_conc == 0:
+        return np.nan
+
+    # Calculate polynomial correction factor from saturator flow
+    if is_psm2:
+        # PSM 2.0 polynomial coefficients
+        pcor = np.array([0.12949491, -0.50587616, 0.57214191, 0.76108161])
+    else:
+        # Retrofit polynomial coefficients
+        pcor = np.array([-0.0272052, 0.11394213, -0.08959011, -0.20675596, 0.24343024, 1.10531145])
+
+    poly_correction = np.polyval(pcor, satflow)
+    if poly_correction == 0:
+        return np.nan
+
+    # Calculate inlet flow and dilution correction factor
+    if is_psm2:
+        inlet_flow = cpc_flow + vacuum_flow - satflow - excess_flow
+        if inlet_flow <= 0:
+            return np.nan
+        dilution_correction = (inlet_flow + 4 - excess_flow - satflow) / inlet_flow
+    else:
+        # Retrofit: simplified calculation
+        inlet_flow = cpc_flow - satflow - excess_flow
+        if inlet_flow <= 0:
+            inlet_flow = 0.1  # Fallback to avoid division by zero
+        dilution_correction = (inlet_flow + excess_flow + satflow) / inlet_flow
+
+    # Calculate concentration from PSM
+    return cpc_conc * dilution_correction / poly_correction
+
+
 def read_psm_dat_file(filepath: str) -> pd.DataFrame:
     """
     Read PSM .dat file and extract relevant columns.
     Auto-detects PSM version (2.0 vs Retrofit) from file header.
+
+    For older files where concentration_psm (column 1) is empty/NaN,
+    calculates it on the fly from CPC concentration and flow values.
 
     Args:
         filepath: Path to .dat file
@@ -96,16 +150,47 @@ def read_psm_dat_file(filepath: str) -> pd.DataFrame:
             raise ValueError(f"Invalid file format: expected at least 16 columns, got {len(df.columns)}")
 
         timestamp_col = df.columns[0]
-        concentration_psm_col = df.columns[1]  # Already dilution + poly corrected
+        concentration_psm_col = df.columns[1]  # Already dilution + poly corrected (may be empty in old files)
         satflow_col = df.columns[3]
+        excess_flow_col = df.columns[4]
         scan_status_col = df.columns[15]
 
+        # Get CPC concentration column index (differs between PSM 2.0 and Retrofit)
+        # PSM 2.0 has Vacuum flow at column 16, shifting CPC concentration to column 19
+        # Retrofit has CPC concentration at column 18
+        cpc_conc_col_idx = 19 if is_psm2 else 18
+        vacuum_flow_col_idx = 16 if is_psm2 else None
+
+        # Extract base columns
         result = pd.DataFrame({
             'timestamp': df[timestamp_col],
             'satflow': pd.to_numeric(df[satflow_col], errors='coerce'),
             'scan_status': df[scan_status_col].astype(str),
             'concentration_psm': pd.to_numeric(df[concentration_psm_col], errors='coerce')
         })
+
+        # Check if we need to calculate concentration_psm for rows where it's missing
+        missing_conc_mask = result['concentration_psm'].isna()
+
+        if missing_conc_mask.any() and len(df.columns) > cpc_conc_col_idx:
+            # Read additional columns needed for calculation
+            excess_flow = pd.to_numeric(df[excess_flow_col], errors='coerce')
+            cpc_conc = pd.to_numeric(df.iloc[:, cpc_conc_col_idx], errors='coerce')
+
+            vacuum_flow = pd.Series(0.0, index=df.index)
+            if is_psm2 and vacuum_flow_col_idx and len(df.columns) > vacuum_flow_col_idx:
+                vacuum_flow = pd.to_numeric(df.iloc[:, vacuum_flow_col_idx], errors='coerce')
+
+            # Calculate concentration_psm for rows where it's missing
+            for idx in result[missing_conc_mask].index:
+                calculated_conc = _calculate_concentration_psm(
+                    satflow=result.loc[idx, 'satflow'],
+                    excess_flow=excess_flow.loc[idx],
+                    cpc_conc=cpc_conc.loc[idx],
+                    is_psm2=is_psm2,
+                    vacuum_flow=vacuum_flow.loc[idx] if is_psm2 else 0.0
+                )
+                result.loc[idx, 'concentration_psm'] = calculated_conc
 
         # Parse timestamps
         result['timestamp'] = pd.to_datetime(result['timestamp'], format='%Y.%m.%d %H:%M:%S', errors='coerce')
