@@ -725,18 +725,22 @@ class CPCControlTab(QWidget):
         main_layout.setContentsMargins(8, 8, 8, 8)
 
         # === TEMPERATURES GROUP ===
-        temp_group = QGroupBox("\U0001F321 Temperatures")
+        temp_group = QGroupBox("🌡️ Temperatures")
         temp_group.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #e67e22;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
+                left: 12px;
+                padding: 0 6px;
                 color: #e67e22;
+                font-weight: bold;
+                font-size: 14px;
             }
         """)
         temp_layout = QGridLayout()
@@ -764,18 +768,22 @@ class CPCControlTab(QWidget):
         main_layout.addWidget(temp_group)
 
         # === PRESSURES GROUP ===
-        pressure_group = QGroupBox("\U0001F4CA Pressures")
+        pressure_group = QGroupBox("📊 Pressures")
         pressure_group.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #9b59b6;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
+                left: 12px;
+                padding: 0 6px;
                 color: #9b59b6;
+                font-weight: bold;
+                font-size: 14px;
             }
         """)
         pressure_layout = QGridLayout()
@@ -807,18 +815,22 @@ class CPCControlTab(QWidget):
         status_row.setSpacing(8)
 
         # Controls Group (toggles)
-        controls_group = QGroupBox("\U0001F39B Controls")
+        controls_group = QGroupBox("🎛️ Controls")
         controls_group.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #27ae60;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
+                left: 12px;
+                padding: 0 6px;
                 color: #27ae60;
+                font-weight: bold;
+                font-size: 14px;
             }
         """)
         controls_layout = QVBoxLayout()
@@ -838,18 +850,22 @@ class CPCControlTab(QWidget):
         status_row.addWidget(controls_group, 1)  # stretch factor 1
 
         # Status Group (indicators)
-        status_group = QGroupBox("\U00002139 Status")
+        status_group = QGroupBox("ℹ️ Status")
         status_group.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #17a2b8;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
+                left: 12px;
+                padding: 0 6px;
                 color: #17a2b8;
+                font-weight: bold;
+                font-size: 14px;
             }
         """)
         status_layout = QVBoxLayout()
@@ -872,18 +888,22 @@ class CPCControlTab(QWidget):
         status_row.addWidget(status_group, 1)  # stretch factor 1
 
         # Settings Group
-        settings_group = QGroupBox("\U00002699 Settings")
+        settings_group = QGroupBox("⚙️ Settings")
         settings_group.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #6c757d;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
+                left: 12px;
+                padding: 0 6px;
                 color: #6c757d;
+                font-weight: bold;
+                font-size: 14px;
             }
         """)
         settings_layout = QVBoxLayout()
@@ -900,20 +920,24 @@ class CPCControlTab(QWidget):
         main_layout.addLayout(status_row)
 
         # === SERIAL COMMANDS GROUP (collapsible) ===
-        self.commands_group = QGroupBox("Serial Commands")
+        self.commands_group = QGroupBox("📡 Serial Commands")
         self.commands_group.setCheckable(True)
         self.commands_group.setChecked(False)
         self.commands_group.setStyleSheet("""
             QGroupBox {
-                border: 1px solid #555;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
+                border: 1px solid #7f8c8d;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
-                color: #aaa;
+                left: 12px;
+                padding: 0 6px;
+                color: #7f8c8d;
+                font-weight: bold;
+                font-size: 14px;
             }
             QGroupBox::indicator {
                 width: 13px;

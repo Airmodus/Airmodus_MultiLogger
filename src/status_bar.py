@@ -231,47 +231,68 @@ class MultiLoggerStatusBar(QStatusBar):
         self.device_separators = {}  # dev_id -> VerticalSeparator (separator after this device)
         self.main_window = None  # Set by MainWindow after creation
 
-        # Width reserved for permanent widgets (saving, errors, time)
-        self._permanent_width = 250
+        # Width reserved for permanent widgets (saving, errors, time, summary)
+        self._permanent_width = 350
 
-        # Set fixed height
-        self.setFixedHeight(30)
+        # Set fixed height (taller for better visibility)
+        self.setFixedHeight(36)
 
         # Create container widget for device status widgets
         self.device_container = QWidget()
-        self.device_container.setStyleSheet("background-color: #FFFFFF;")  # White background
+        self.device_container.setStyleSheet("background-color: #f5f5f5;")  # Slightly off-white for subtle distinction
         self.device_layout = QHBoxLayout(self.device_container)
-        self.device_layout.setContentsMargins(0, 0, 0, 0)
-        self.device_layout.setSpacing(2)  # Reduced spacing
+        self.device_layout.setContentsMargins(4, 0, 4, 0)
+        self.device_layout.setSpacing(4)
 
         self.addWidget(self.device_container, 1)  # Stretch factor 1
 
         # Create global status widgets
         self._create_global_widgets()
 
-        # Set style
+        # Set style (slightly tinted background)
         self.setStyleSheet("""
             QStatusBar {
-                border-top: 1px solid #ccc;
-                background-color: #FFFFFF;
+                border-top: 2px solid #ddd;
+                background-color: #f5f5f5;
             }
         """)
 
     def _create_global_widgets(self):
-        """Create global status widgets (saving, errors, time)."""
+        """Create global status widgets (summary, saving, errors, time)."""
+        # Summary status indicator (shows overall system health)
+        self.summary_label = PersistentTooltipLabel("✓ All systems nominal")
+        self.summary_label.setStyleSheet("""
+            padding: 4px 12px;
+            color: #2E7D32;
+            font-weight: bold;
+            font-size: 13px;
+            background-color: rgba(46, 125, 50, 0.1);
+            border-radius: 4px;
+        """)
+        self.summary_label.setToolTip("All devices connected and operating normally")
+        self.summary_label.setAttribute(Qt.WA_Hover, True)
+
+        # Set minimum width for summary
+        font_metrics = QFontMetrics(self.summary_label.font())
+        summary_width = font_metrics.horizontalAdvance("⚠ 9 warnings") + 30
+        self.summary_label.setMinimumWidth(summary_width)
+
+        self.addPermanentWidget(self.summary_label)
+
         # Saving status
         self.saving_label = PersistentTooltipLabel("✗ Not Saving")
         self.saving_label.setStyleSheet("""
-            padding: 2px 8px;
+            padding: 4px 8px;
             color: #424242;
+            font-size: 13px;
             background-color: transparent;
         """)
         self.saving_label.setToolTip("Data saving is disabled")
-        self.saving_label.setAttribute(Qt.WA_Hover, True)  # Enable hover for tooltips
+        self.saving_label.setAttribute(Qt.WA_Hover, True)
 
         # Set minimum width to prevent jittering (use longest text)
         font_metrics = QFontMetrics(self.saving_label.font())
-        saving_width = font_metrics.horizontalAdvance("✗ Not Saving") + 20  # +20 for padding
+        saving_width = font_metrics.horizontalAdvance("✗ Not Saving") + 20
         self.saving_label.setMinimumWidth(saving_width)
 
         self.addPermanentWidget(self.saving_label)
@@ -279,17 +300,18 @@ class MultiLoggerStatusBar(QStatusBar):
         # Error count
         self.error_label = PersistentTooltipLabel("Errors: 0")
         self.error_label.setStyleSheet("""
-            padding: 2px 8px;
+            padding: 4px 8px;
             color: #2E7D32;
+            font-size: 13px;
             background-color: transparent;
         """)
         self.error_label.setToolTip("No errors")
         self.error_label.setCursor(QCursor(Qt.PointingHandCursor))
-        self.error_label.setAttribute(Qt.WA_Hover, True)  # Enable hover for tooltips
+        self.error_label.setAttribute(Qt.WA_Hover, True)
 
         # Set minimum width to prevent jittering (handle up to 99 errors)
         font_metrics = QFontMetrics(self.error_label.font())
-        error_width = font_metrics.horizontalAdvance("Errors: 99") + 20  # +20 for padding
+        error_width = font_metrics.horizontalAdvance("Errors: 99") + 20
         self.error_label.setMinimumWidth(error_width)
 
         self.addPermanentWidget(self.error_label)
@@ -305,8 +327,8 @@ class MultiLoggerStatusBar(QStatusBar):
         self.time_label.setFont(time_font)
 
         # Remove font-family from stylesheet to avoid CSS/QFont conflicts
-        # Use dark gray color to ensure visibility
-        self.time_label.setStyleSheet("padding: 2px 8px; background-color: transparent; color: #424242;")
+        # Use dark gray color to ensure visibility, with larger font size
+        self.time_label.setStyleSheet("padding: 4px 8px; background-color: transparent; color: #424242; font-size: 13px;")
         self.time_label.setToolTip("Current time")
         self.time_label.setAttribute(Qt.WA_Hover, True)  # Enable hover for tooltips
 
@@ -428,14 +450,62 @@ class MultiLoggerStatusBar(QStatusBar):
         self._update_device_sizes()
 
     def update_global_status(self):
-        """Update global status (saving, errors, time)."""
+        """Update global status (summary, saving, errors, time)."""
+        # Count warnings and errors for summary
+        error_count = sum(1 for has_error in self.data_holder.device_errors.values() if has_error)
+        disconnected_count = sum(1 for dev_id, widget in self.device_widgets.items()
+                                  if hasattr(widget, '_is_connected') and not widget._is_connected)
+
+        # Update summary indicator
+        total_issues = error_count + disconnected_count
+        if total_issues == 0:
+            self.summary_label.setText("✓ All systems nominal")
+            self.summary_label.setStyleSheet("""
+                padding: 4px 12px;
+                color: #2E7D32;
+                font-weight: bold;
+                font-size: 13px;
+                background-color: rgba(46, 125, 50, 0.1);
+                border-radius: 4px;
+            """)
+            self.summary_label.setToolTip("All devices connected and operating normally")
+        elif error_count > 0:
+            self.summary_label.setText(f"⚠ {total_issues} warning{'s' if total_issues > 1 else ''}")
+            self.summary_label.setStyleSheet("""
+                padding: 4px 12px;
+                color: #E65100;
+                font-weight: bold;
+                font-size: 13px;
+                background-color: rgba(230, 81, 0, 0.1);
+                border-radius: 4px;
+            """)
+            # Build tooltip
+            tooltip_lines = []
+            if error_count > 0:
+                tooltip_lines.append(f"<b>{error_count} device error{'s' if error_count > 1 else ''}</b>")
+            if disconnected_count > 0:
+                tooltip_lines.append(f"<b>{disconnected_count} device{'s' if disconnected_count > 1 else ''} disconnected</b>")
+            self.summary_label.setToolTip("<br>".join(tooltip_lines))
+        else:
+            # Just disconnected devices (no errors)
+            self.summary_label.setText(f"⚠ {disconnected_count} disconnected")
+            self.summary_label.setStyleSheet("""
+                padding: 4px 12px;
+                color: #757575;
+                font-weight: bold;
+                font-size: 13px;
+                background-color: rgba(117, 117, 117, 0.1);
+                border-radius: 4px;
+            """)
+            self.summary_label.setToolTip(f"{disconnected_count} device{'s' if disconnected_count > 1 else ''} disconnected")
+
         # Update saving status
         save_data = self.config.data_settings.save_data
         saving_status = self.data_holder.saving_status
 
         if not save_data:
             self.saving_label.setText("✗ Not Saving")
-            self.saving_label.setStyleSheet("padding: 2px 8px; color: #424242; background-color: transparent;")
+            self.saving_label.setStyleSheet("padding: 4px 8px; color: #424242; font-size: 13px; background-color: transparent;")
             self.saving_label.setToolTip("Data saving is disabled")
         elif saving_status == 1:
             # Build tooltip with timestamp and file info
@@ -456,23 +526,21 @@ class MultiLoggerStatusBar(QStatusBar):
                 tooltip_parts.append(f"<br><b>File:</b> {self.data_holder.most_recent_filename}")
 
             self.saving_label.setText("✓ Saving")
-            self.saving_label.setStyleSheet("padding: 2px 8px; color: #2E7D32; background-color: transparent;")  # Dark green
+            self.saving_label.setStyleSheet("padding: 4px 8px; color: #2E7D32; font-size: 13px; background-color: transparent;")
             self.saving_label.setToolTip("".join(tooltip_parts))
         else:
             self.saving_label.setText("! Save Error")
-            self.saving_label.setStyleSheet("padding: 2px 8px; color: #FFFFFF; background-color: #D32F2F; border-radius: 3px;")  # White text on dark red for consistency
+            self.saving_label.setStyleSheet("padding: 4px 8px; color: #FFFFFF; font-size: 13px; background-color: #D32F2F; border-radius: 3px;")
             self.saving_label.setToolTip("Error occurred while saving data")
 
-        # Update error count
-        error_count = sum(1 for has_error in self.data_holder.device_errors.values() if has_error)
-
+        # Update error count display
         if error_count == 0:
             self.error_label.setText("Errors: 0")
-            self.error_label.setStyleSheet("padding: 2px 8px; color: #2E7D32; background-color: transparent;")  # Dark green
+            self.error_label.setStyleSheet("padding: 4px 8px; color: #2E7D32; font-size: 13px; background-color: transparent;")
             self.error_label.setToolTip("No errors")
         else:
             self.error_label.setText(f"Errors: {error_count}")
-            self.error_label.setStyleSheet("padding: 2px 8px; color: #FFFFFF; background-color: #F57C00; border-radius: 3px;")  # White text on dark orange for consistency
+            self.error_label.setStyleSheet("padding: 4px 8px; color: #FFFFFF; font-size: 13px; background-color: #F57C00; border-radius: 3px;")
 
             # Build error tooltip
             error_devices = []

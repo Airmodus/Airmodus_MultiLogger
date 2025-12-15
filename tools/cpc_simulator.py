@@ -32,8 +32,12 @@ class CPCDataGenerator:
         self.psm_flow = 0.15
         self.min_flow = 0.15
         self.max_flow = 1.9
-        self.base_concentration = 1000.0
-        self.max_concentration = 50000.0
+        # Concentration range matching expected output (~100-300 at low flow, ~900-1100 at peaks)
+        self.base_concentration = 200.0  # Base concentration at minimum flow
+        self.max_concentration = 1000.0  # Max concentration at maximum flow
+        # Noise parameters for realistic CPC behavior
+        self.noise_base_std = 50.0  # Standard deviation of noise at base level
+        self.noise_peak_std = 100.0  # Standard deviation of noise at peak level
         self.base_pulses = 500
         self.base_dead_time = 0.02
         self.base_temp_saturator = 35.0
@@ -61,7 +65,23 @@ class CPCDataGenerator:
         self._read_psm_state()
         flow_ratio = (self.psm_flow - self.min_flow) / (self.max_flow - self.min_flow)
         flow_ratio = max(0, min(1, flow_ratio))
-        concentration = self.base_concentration + (self.max_concentration - self.base_concentration) * (flow_ratio ** 0.5)
+
+        # Linear relationship so CPC mirrors the PSM's exponential flow shape directly
+        mean_concentration = self.base_concentration + (self.max_concentration - self.base_concentration) * flow_ratio
+
+        # Add realistic noise that scales with concentration level
+        # Higher concentrations have proportionally more noise (Poisson-like behavior)
+        noise_std = self.noise_base_std + (self.noise_peak_std - self.noise_base_std) * flow_ratio
+        noise = random.gauss(0, noise_std)
+
+        # Add some random spikes (occasional particle bursts)
+        if random.random() < 0.05:  # 5% chance of spike
+            noise += random.uniform(50, 200) * (1 + flow_ratio)
+
+        concentration = mean_concentration + noise
+        # Ensure concentration stays positive and realistic
+        concentration = max(50, concentration)
+
         return concentration
 
     def generate_meas_all(self):

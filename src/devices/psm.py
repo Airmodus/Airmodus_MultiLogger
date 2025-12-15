@@ -1043,14 +1043,18 @@ class PSMControlTab(QWidget):
         temp_group.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #e67e22;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
+                left: 12px;
+                padding: 0 6px;
                 color: #e67e22;
+                font-weight: bold;
+                font-size: 14px;
             }
         """)
         temp_layout = QGridLayout()
@@ -1086,21 +1090,25 @@ class PSMControlTab(QWidget):
         flow_group.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #3498db;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
+                left: 12px;
+                padding: 0 6px;
                 color: #3498db;
+                font-weight: bold;
+                font-size: 14px;
             }
         """)
         flow_layout = QGridLayout()
         flow_layout.setSpacing(4)
 
         # Row 0: Setpoint flows
-        self.set_cpc_inlet_flow = SetStatusWidget("CPC inlet", " lpm", decimals=3)
+        self.set_cpc_inlet_flow = SetStatusWidget("CPC inlet", " lpm", decimals=3, is_temperature=False)
         self.set_cpc_inlet_flow.setToolTip("CPC inlet flow - used in dilution correction")
         flow_layout.addWidget(self.set_cpc_inlet_flow, 0, 0)
 
@@ -1145,14 +1153,18 @@ class PSMControlTab(QWidget):
         controls_group.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #27ae60;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
+                left: 12px;
+                padding: 0 6px;
                 color: #27ae60;
+                font-weight: bold;
+                font-size: 14px;
             }
         """)
         controls_layout = QVBoxLayout()
@@ -1176,14 +1188,18 @@ class PSMControlTab(QWidget):
         pressure_group.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #9b59b6;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
+                left: 12px;
+                padding: 0 6px;
                 color: #9b59b6;
+                font-weight: bold;
+                font-size: 14px;
             }
         """)
         pressure_layout = QVBoxLayout()
@@ -1207,14 +1223,18 @@ class PSMControlTab(QWidget):
         liquid_level_group.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #1abc9c;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
+                left: 12px;
+                padding: 0 6px;
                 color: #1abc9c;
+                font-weight: bold;
+                font-size: 14px;
             }
         """)
         liquid_level_layout = QVBoxLayout()
@@ -1236,14 +1256,18 @@ class PSMControlTab(QWidget):
         self.commands_group.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #7f8c8d;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
+                left: 12px;
+                padding: 0 6px;
                 color: #7f8c8d;
+                font-weight: bold;
+                font-size: 14px;
             }
         """)
         self.commands_group.setCheckable(True)

@@ -73,11 +73,13 @@ QTabBar::tab:selected {
     color: #e9e9e9;
     border-bottom: 0px;
 }
-/* spin boxes */
+/* spin boxes - dark theme styling */
 #spin_box, #double_spin_box {
-    color: #000000;
-    background-color: #ffffff;
-    font-size: 24px;
+    color: #ddd;
+    background-color: #3a3a3a;
+    font-size: 18px;
+    border: 1px solid #555;
+    border-radius: 4px;
 }
 /* line edit and text edit */
 #line_edit, #text_edit {

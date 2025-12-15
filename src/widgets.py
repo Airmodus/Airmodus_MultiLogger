@@ -75,6 +75,19 @@ class CommandWidget(QWidget):
         self.command_input.setStyleSheet("")  # Clear style
 
 
+# Status indicator color styles
+STATUS_GREEN = "background-color: #27ae60; border-radius: 3px;"
+STATUS_YELLOW = "background-color: #f39c12; border-radius: 3px;"
+STATUS_RED = "background-color: #e74c3c; border-radius: 3px;"
+STATUS_GRAY = "background-color: #555; border-radius: 3px;"
+
+
+# Frame styles for different states
+FRAME_NORMAL = "QFrame { border: 1px solid #555; border-radius: 4px; background: #2d2d2d; }"
+FRAME_ERROR = "QFrame { border: 2px solid #e74c3c; border-radius: 4px; background: rgba(231, 76, 60, 0.15); }"
+FRAME_WARNING = "QFrame { border: 2px solid #f39c12; border-radius: 4px; background: rgba(243, 156, 18, 0.1); }"
+
+
 # status indicator widget
 # used in CPCStatusTab and PSMStatusTab
 class IndicatorWidget(QFrame):
@@ -82,56 +95,95 @@ class IndicatorWidget(QFrame):
         super().__init__()
         # Add subtle border to separate items
         self.setFrameStyle(QFrame.StyledPanel)
-        self.setStyleSheet("QFrame { border: 1px solid #555; border-radius: 4px; background: transparent; }")
+        self._frame_normal = FRAME_NORMAL
+        self._frame_error = FRAME_ERROR
+        self.setStyleSheet(self._frame_normal)
 
-        layout = QVBoxLayout() # create widget layout
-        layout.setContentsMargins(6, 6, 6, 6)
-        self.name = name # save name
+        layout = QHBoxLayout()  # Horizontal layout for status indicator + content
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+        self.name = name
         self.ok_error_indicators = ["Laser power", "Saturator liquid level", "Drain liquid level", "Pulse quality"]
-        self.value_label = QLabel(self.name + "\n", objectName="label") # create value label
 
-        self.default_color = "QLabel { background-color: transparent; border: none; }"
+        # Status indicator (colored dot on left side)
+        self._status_indicator = QFrame()
+        self._status_indicator.setFixedSize(6, 40)
+        self._status_indicator.setStyleSheet(STATUS_GRAY)
+        layout.addWidget(self._status_indicator)
+
+        # Content area (vertical: name on top, value below)
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(2)
+
+        # Name label (smaller, gray)
+        self.name_label = QLabel(self.name)
+        name_font = self.font()
+        name_font.setPointSize(11)
+        self.name_label.setFont(name_font)
+        self.name_label.setStyleSheet("QLabel { color: #888; background: transparent; border: none; }")
+        self.name_label.setAlignment(Qt.AlignCenter)
+        content_layout.addWidget(self.name_label)
+
+        # Value label (larger, bold)
+        self.value_label = QLabel("--")
+        self.default_color = "QLabel { color: #ddd; background-color: transparent; border: none; }"
         self.value_label.setStyleSheet(self.default_color)
+        value_font = self.font()
+        value_font.setPointSize(18)
+        value_font.setBold(True)
+        self.value_label.setFont(value_font)
+        self.value_label.setAlignment(Qt.AlignCenter)
+        self.value_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        content_layout.addWidget(self.value_label)
 
-        font = self.font() # get current global font
-        font.setPointSize(14) # set font size
-        self.value_label.setFont(font) # apply font to value label
-        self.value_label.setAlignment(Qt.AlignCenter) # center label
-        self.value_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)  # Natural size
-
-        layout.addWidget(self.value_label, alignment=Qt.AlignCenter) # add value label to layout, centered
-        self.setLayout(layout) # apply layout
+        layout.addLayout(content_layout, 1)
+        self.setLayout(layout)
 
         # Track tooltip visibility for persistence during updates
         self._tooltip_visible = False
         self._tooltip_pos = None
 
-    def event(self, e):
-        """Track tooltip show/hide to restore after value updates."""
-        if e.type() == QEvent.ToolTip:
-            self._tooltip_visible = True
-            self._tooltip_pos = e.globalPos()
-        elif e.type() == QEvent.Leave:
-            self._tooltip_visible = False
-            self._tooltip_pos = None
-        return super().event(e)
+        # Track error state for status indicator
+        self._has_error = False
+
+        # Install event filter on name_label to track tooltip
+        self.name_label.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """Track tooltip show/hide on name_label."""
+        if obj == self.name_label:
+            if event.type() == QEvent.ToolTip:
+                self._tooltip_visible = True
+                self._tooltip_pos = event.globalPos()
+            elif event.type() == QEvent.Leave:
+                self._tooltip_visible = False
+                self._tooltip_pos = None
+        return super().eventFilter(obj, event)
 
     def _restore_tooltip(self):
         """Restore tooltip if it was visible before update."""
-        if self._tooltip_visible and self._tooltip_pos and self.toolTip():
-            QToolTip.showText(self._tooltip_pos, self.toolTip(), self)
+        if self._tooltip_visible and self._tooltip_pos and self.name_label.toolTip():
+            QToolTip.showText(self._tooltip_pos, self.name_label.toolTip(), self.name_label)
 
     # change indicator value, called by main window's update_values function
     def change_value(self, value):
-        self.value_label.setText(self.name + "\n" + value)
+        self.value_label.setText(value)
+        # Update status indicator based on error state
+        if not self._has_error:
+            self._status_indicator.setStyleSheet(STATUS_GREEN)
         # Restore tooltip after a brief delay to allow Qt to process the update
         if self._tooltip_visible:
             QTimer.singleShot(10, self._restore_tooltip)
 
     # change background color of value, called by main window's update_errors function
     def change_color(self, bit):
-        if int(bit) == 1: # if bit is 1 (error), set background color to red
-            self.value_label.setStyleSheet("QLabel { background-color : red }")
+        if int(bit) == 1:  # if bit is 1 (error), set entire frame to error state
+            self._has_error = True
+            # Make the entire frame red-tinted for more prominent error display
+            self.setStyleSheet(self._frame_error)
+            self.value_label.setStyleSheet("QLabel { background-color: #e74c3c; color: white; border: none; border-radius: 3px; padding: 2px; }")
+            self._status_indicator.setStyleSheet(STATUS_RED)
             if self.name == "Laser power":
                 self.change_value("ERROR")
             elif self.name == "Saturator liquid level":
@@ -140,10 +192,18 @@ class IndicatorWidget(QFrame):
                 self.change_value("HIGH")
             elif self.name == "Pulse quality":
                 self.change_value("ERROR")
-        else: # if bit is 0 (no error), set background color to normal
+        else:  # if bit is 0 (no error), set background color to normal
+            self._has_error = False
+            self.setStyleSheet(self._frame_normal)
             self.value_label.setStyleSheet(self.default_color)
+            self._status_indicator.setStyleSheet(STATUS_GREEN)
             if self.name in self.ok_error_indicators:
                 self.change_value("OK")
+
+    def setToolTip(self, tooltip):
+        """Set tooltip on the name label only, not the whole widget."""
+        self.name_label.setToolTip(tooltip)
+
 
 class ToggleButton(QPushButton):
     def __init__(self, name, *args, **kwargs):
@@ -208,9 +268,10 @@ class ToggleSwitch(QWidget):
 
         # Colors
         self._track_color_on = QColor("#4CAF50")  # Green
-        self._track_color_off = QColor("#9E9E9E")  # Gray
+        self._track_color_off = QColor("#5a5a5a")  # Darker gray for better visibility
         self._knob_color = QColor("#FFFFFF")  # White
         self._text_color = QColor("#CCCCCC")  # Light gray text (visible on dark background)
+        self._text_color_off = QColor("#AAAAAA")  # Slightly brighter for OFF state visibility
 
         # Dimensions
         self._track_width = 50
@@ -261,7 +322,11 @@ class ToggleSwitch(QWidget):
         b = int(self._track_color_off.blue() + (self._track_color_on.blue() - self._track_color_off.blue()) * self._knob_position)
         track_color = QColor(r, g, b)
 
-        painter.setPen(Qt.NoPen)
+        # Draw border for OFF state (more visible)
+        if self._knob_position < 0.5:
+            painter.setPen(QPen(QColor("#777"), 1))
+        else:
+            painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(track_color))
         painter.drawRoundedRect(track_rect, self._track_height / 2, self._track_height / 2)
 
@@ -272,6 +337,7 @@ class ToggleSwitch(QWidget):
 
         # Add subtle shadow to knob
         shadow_rect = QRectF(knob_x + 1, knob_y + 1, self._knob_diameter, self._knob_diameter)
+        painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(QColor(0, 0, 0, 30)))
         painter.drawEllipse(shadow_rect)
 
@@ -279,10 +345,12 @@ class ToggleSwitch(QWidget):
         painter.setBrush(QBrush(self._knob_color))
         painter.drawEllipse(knob_rect)
 
-        # Draw label text
-        painter.setPen(QPen(self._text_color))
+        # Draw label text (brighter for OFF state)
+        text_color = self._text_color if self.state else self._text_color_off
+        painter.setPen(QPen(text_color))
         font = self.font()
         font.setPointSize(12)
+        font.setBold(not self.state)  # Bold for OFF state to make it more visible
         painter.setFont(font)
 
         text_x = 10 + self._track_width + 10  # After switch + padding
@@ -364,14 +432,24 @@ class StartButton(QPushButton):
                 self.state = 0
 
 # Stylesheet for custom +/- spinbox buttons
+# Uses both class and ID selectors to override global stylesheet
+# Also styles the internal QLineEdit to ensure text visibility
 SPINBOX_STYLE = """
-    QSpinBox, QDoubleSpinBox {
-        background-color: transparent;
+    QSpinBox, QDoubleSpinBox,
+    QSpinBox#spin_box, QDoubleSpinBox#double_spin_box {
+        background-color: #3a3a3a;
         color: #ddd;
         border: 1px solid #555;
         border-radius: 4px;
         padding: 2px;
-        padding-right: 25px;
+        padding-right: 30px;
+    }
+    QSpinBox QLineEdit, QDoubleSpinBox QLineEdit {
+        background-color: #3a3a3a;
+        color: #ddd;
+        border: none;
+        selection-background-color: #555;
+        selection-color: #fff;
     }
     QSpinBox::up-button, QDoubleSpinBox::up-button {
         subcontrol-origin: border;
@@ -379,7 +457,7 @@ SPINBOX_STYLE = """
         background-color: #3a3a3a;
         border: 1px solid #555;
         border-top-right-radius: 3px;
-        width: 22px;
+        width: 28px;
     }
     QSpinBox::down-button, QDoubleSpinBox::down-button {
         subcontrol-origin: border;
@@ -387,11 +465,16 @@ SPINBOX_STYLE = """
         background-color: #3a3a3a;
         border: 1px solid #555;
         border-bottom-right-radius: 3px;
-        width: 22px;
+        width: 28px;
     }
     QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
     QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
-        background-color: #4a4a4a;
+        background-color: #505050;
+        border: 1px solid #777;
+    }
+    QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
+    QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
+        background-color: #606060;
     }
     QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
         image: none;
@@ -405,6 +488,9 @@ SPINBOX_STYLE = """
     }
 """
 
+# Button width constant for paintEvent
+SPINBOX_BUTTON_WIDTH = 28
+
 # custom spin box class with signal for value change
 # https://stackoverflow.com/questions/47874952/qspinbox-signal-for-arrow-buttons
 class SpinBox(QSpinBox):
@@ -413,6 +499,8 @@ class SpinBox(QSpinBox):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setStyleSheet(SPINBOX_STYLE)
+        # Explicitly style internal line edit to ensure text visibility
+        self.lineEdit().setStyleSheet("background-color: #3a3a3a; color: #ddd; border: none;")
 
     # override stepBy function to emit signal when value changes
     def stepBy(self, step):
@@ -428,12 +516,12 @@ class SpinBox(QSpinBox):
         painter.setRenderHint(QPainter.Antialiasing)
 
         # Get button areas (approximate positions)
-        button_width = 22
+        button_width = SPINBOX_BUTTON_WIDTH
         button_height = self.height() // 2
         right_edge = self.width() - 1
 
         # Draw + on up button
-        painter.setPen(QPen(QColor("#aaa"), 2))
+        painter.setPen(QPen(QColor("#ccc"), 2))
         plus_center_x = right_edge - button_width // 2
         plus_center_y = button_height // 2
         painter.drawLine(plus_center_x - 4, plus_center_y, plus_center_x + 4, plus_center_y)
@@ -451,6 +539,8 @@ class DoubleSpinBox(QDoubleSpinBox):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setStyleSheet(SPINBOX_STYLE)
+        # Explicitly style internal line edit to ensure text visibility
+        self.lineEdit().setStyleSheet("background-color: #3a3a3a; color: #ddd; border: none;")
 
     # override stepBy function to emit signal when value changes
     def stepBy(self, step):
@@ -466,12 +556,12 @@ class DoubleSpinBox(QDoubleSpinBox):
         painter.setRenderHint(QPainter.Antialiasing)
 
         # Get button areas (approximate positions)
-        button_width = 22
+        button_width = SPINBOX_BUTTON_WIDTH
         button_height = self.height() // 2
         right_edge = self.width() - 1
 
         # Draw + on up button
-        painter.setPen(QPen(QColor("#aaa"), 2))
+        painter.setPen(QPen(QColor("#ccc"), 2))
         plus_center_x = right_edge - button_width // 2
         plus_center_y = button_height // 2
         painter.drawLine(plus_center_x - 4, plus_center_y, plus_center_x + 4, plus_center_y)
@@ -483,48 +573,71 @@ class DoubleSpinBox(QDoubleSpinBox):
 
         painter.end()
 
+# Editable input field style with hover and focus effects
+EDITABLE_INPUT_STYLE = """
+    QLineEdit {
+        background-color: #2a2a2a;
+        color: #ddd;
+        border: 1px solid #555;
+        border-radius: 4px;
+        padding: 4px 8px;
+    }
+    QLineEdit:hover {
+        border: 1px solid #888;
+        background-color: #353535;
+    }
+    QLineEdit:focus {
+        border: 1px solid #3498db;
+        background-color: #353535;
+    }
+    QLineEdit::placeholder {
+        color: #666;
+    }
+"""
+
+
 # used in CPCSetTab and PSMSetTab
 class SetWidget(QFrame):
     def __init__(self, name, suffix, *args, integer=False, **kwargs):
         super().__init__()
         # Outer border, transparent background for inner elements
         self.setFrameStyle(QFrame.StyledPanel)
-        self.setStyleSheet("QFrame { border: 1px solid #555; border-radius: 4px; } QLabel { background: transparent; border: none; }")
+        self.setStyleSheet("QFrame { border: 1px solid #555; border-radius: 4px; background: #2d2d2d; } QLabel { background: transparent; border: none; }")
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(6, 6, 6, 6)
-        font = self.font() # get current global font
-        font.setPointSize(14) # set font size
+        layout.setContentsMargins(8, 8, 8, 8)
+        font = self.font()
+        font.setPointSize(14)
         # create label for widget name
         self.name = name
         self.name_label = QLabel(self.name, objectName="label")
         self.name_label.setAlignment(Qt.AlignCenter)
-        self.name_label.setFont(font) # apply font to label
-        self.name_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)  # Natural size
+        self.name_label.setFont(font)
+        self.name_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         layout.addWidget(self.name_label, alignment=Qt.AlignCenter)
         # create normal / double spin box for setting value
         self.is_integer = integer
-        if integer: # if value is integer, use spin box (int)
+        if integer:
             self.value_spinbox = SpinBox(objectName="spin_box", maximum=9999)
-            validator = QIntValidator() # create int validator
-        else: # if not integer, use double spin box (float)
-            if "decimals" in kwargs: # if decimals are specified in kwargs
+            validator = QIntValidator()
+        else:
+            if "decimals" in kwargs:
                 self.value_spinbox = DoubleSpinBox(objectName="double_spin_box", singleStep=0.1, maximum=9999, decimals=kwargs["decimals"])
             else:
                 self.value_spinbox = DoubleSpinBox(objectName="double_spin_box", singleStep=0.1, maximum=9999)
-            locale = QLocale(QLocale.C) # create locale to use dot as decimal separator
-            validator = QDoubleValidator() # create double validator 
-            validator.setLocale(locale) # set validator locale
-            self.value_spinbox.setLocale(locale) # set spinbox locale
-        self.value_spinbox.setSuffix(suffix) # set suffix
-        self.value_spinbox.lineEdit().setReadOnly(True) # make line edit read only
-        self.value_spinbox.lineEdit().setAlignment(Qt.AlignCenter) # align text in line edit
-        layout.addWidget(self.value_spinbox) # add widget to layout
-        # add line edit for value input (subtle styling)
+            locale = QLocale(QLocale.C)
+            validator = QDoubleValidator()
+            validator.setLocale(locale)
+            self.value_spinbox.setLocale(locale)
+        self.value_spinbox.setSuffix(suffix)
+        self.value_spinbox.lineEdit().setReadOnly(True)
+        self.value_spinbox.lineEdit().setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.value_spinbox)
+        # add line edit for value input (visible borders with hover/focus)
         self.value_input = QLineEdit(objectName="line_edit")
         self.value_input.setPlaceholderText("Enter value")
-        self.value_input.setStyleSheet("QLineEdit { background-color: transparent; color: #ccc; border: none; border-bottom: 1px solid #555; }")
-        self.value_input.setValidator(validator) # set validator, only allow int or float
+        self.value_input.setStyleSheet(EDITABLE_INPUT_STYLE)
+        self.value_input.setValidator(validator)
         self.value_input.returnPressed.connect(self.value_input_return_pressed)
         layout.addWidget(self.value_input)
         # set layout
@@ -549,52 +662,85 @@ class SetWidget(QFrame):
         self.value_input.clear()
     def set_red_color(self):
         if self.error == False:
-            self.value_spinbox.setStyleSheet("QDoubleSpinBox { background-color : red }")
+            self.value_spinbox.setStyleSheet(SPINBOX_STYLE + " QSpinBox, QDoubleSpinBox { background-color: red; }")
+            self.value_spinbox.lineEdit().setStyleSheet("background-color: red; color: #fff; border: none;")
             self.error = True
+
     def set_default_color(self):
         if self.error == True:
-            self.value_spinbox.setStyleSheet(self.stylesheet)
+            self.value_spinbox.setStyleSheet(SPINBOX_STYLE)
+            self.value_spinbox.lineEdit().setStyleSheet("background-color: #3a3a3a; color: #ddd; border: none;")
             self.error = False
 
     def setToolTip(self, tooltip):
-        """Set tooltip on the frame (not label) to prevent tooltip reset on value updates."""
-        super().setToolTip(tooltip)
+        """Set tooltip on the name label only, not the whole widget."""
+        self.name_label.setToolTip(tooltip)
 
 
 class SetStatusWidget(QFrame):
     """Combined setpoint control and actual value display widget.
 
-    Shows a setpoint spinbox with input field, plus a small indicator
-    displaying the actual measured value side-by-side.
+    Shows a setpoint spinbox with input field, plus a large indicator
+    displaying the actual measured value. Includes status indicator,
+    delta display, and trend arrows.
     """
-    def __init__(self, name, suffix, actual_name=None, *args, integer=False, **kwargs):
+    def __init__(self, name, suffix, actual_name=None, *args, integer=False, is_temperature=True, **kwargs):
+        from collections import deque
         super().__init__()
         self.name = name
         self.actual_name = actual_name or name
+        self.suffix = suffix
+        self.is_temperature = is_temperature  # Used for tolerance thresholds
 
-        # Outer border, transparent background for inner elements
+        # Outer border with subtle background
         self.setFrameStyle(QFrame.StyledPanel)
-        self.setStyleSheet("QFrame { border: 1px solid #555; border-radius: 4px; } QLabel { background: transparent; border: none; }")
+        self._frame_normal = "QFrame { border: 1px solid #555; border-radius: 4px; background: #2d2d2d; } QLabel { background: transparent; border: none; }"
+        self._frame_error = "QFrame { border: 2px solid #e74c3c; border-radius: 4px; background: rgba(231, 76, 60, 0.15); } QLabel { background: transparent; border: none; }"
+        self._frame_warning = "QFrame { border: 2px solid #f39c12; border-radius: 4px; background: rgba(243, 156, 18, 0.1); } QLabel { background: transparent; border: none; }"
+        self.setStyleSheet(self._frame_normal)
 
-        layout = QVBoxLayout()
-        layout.setSpacing(4)
-        layout.setContentsMargins(6, 6, 6, 6)
+        # Main horizontal layout: status indicator + content
+        main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(8)
 
-        font = self.font()
-        font.setPointSize(14)
+        # Status indicator (colored bar on left side)
+        self._status_indicator = QFrame()
+        self._status_indicator.setFixedSize(6, 80)
+        self._status_indicator.setStyleSheet(STATUS_GRAY)
+        main_layout.addWidget(self._status_indicator)
 
-        # Label for widget name
-        self.name_label = QLabel(self.name, objectName="label")
+        # Content area
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(4)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Name label (smaller, centered)
+        self.name_label = QLabel(self.name)
+        name_font = self.font()
+        name_font.setPointSize(11)
+        self.name_label.setFont(name_font)
+        self.name_label.setStyleSheet("QLabel { color: #888; }")
         self.name_label.setAlignment(Qt.AlignCenter)
-        self.name_label.setFont(font)
-        self.name_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)  # Natural size
-        layout.addWidget(self.name_label, alignment=Qt.AlignCenter)
+        content_layout.addWidget(self.name_label)
 
-        # Horizontal layout for spinbox and actual value
-        value_row = QHBoxLayout()
-        value_row.setSpacing(8)
+        # Values row: Setpoint (small) | Actual (large)
+        values_row = QHBoxLayout()
+        values_row.setSpacing(8)
 
-        # Create spinbox for setpoint (same as SetWidget)
+        # Setpoint section (smaller, gray)
+        setpoint_section = QVBoxLayout()
+        setpoint_section.setSpacing(2)
+
+        self.setpoint_label = QLabel("Set:")
+        setpoint_label_font = self.font()
+        setpoint_label_font.setPointSize(10)
+        self.setpoint_label.setFont(setpoint_label_font)
+        self.setpoint_label.setStyleSheet("QLabel { color: #666; }")
+        self.setpoint_label.setAlignment(Qt.AlignCenter)
+        setpoint_section.addWidget(self.setpoint_label)
+
+        # Create spinbox for setpoint
         self.is_integer = integer
         if integer:
             self.value_spinbox = SpinBox(objectName="spin_box", maximum=9999)
@@ -611,29 +757,68 @@ class SetStatusWidget(QFrame):
         self.value_spinbox.setSuffix(suffix)
         self.value_spinbox.lineEdit().setReadOnly(True)
         self.value_spinbox.lineEdit().setAlignment(Qt.AlignCenter)
-        value_row.addWidget(self.value_spinbox, stretch=2)
+        setpoint_section.addWidget(self.value_spinbox)
 
-        # Actual value indicator (compact)
-        self.actual_label = QLabel("Act: --")
+        values_row.addLayout(setpoint_section, stretch=1)
+
+        # Actual value section (larger, bold)
+        actual_section = QVBoxLayout()
+        actual_section.setSpacing(2)
+
+        actual_header = QLabel("Actual:")
+        actual_header_font = self.font()
+        actual_header_font.setPointSize(10)
+        actual_header.setFont(actual_header_font)
+        actual_header.setStyleSheet("QLabel { color: #666; }")
+        actual_header.setAlignment(Qt.AlignCenter)
+        actual_section.addWidget(actual_header)
+
+        self.actual_label = QLabel("--")
         self.actual_label.setAlignment(Qt.AlignCenter)
         actual_font = self.font()
-        actual_font.setPointSize(12)
+        actual_font.setPointSize(18)
+        actual_font.setBold(True)
         self.actual_label.setFont(actual_font)
-        self.actual_label.setStyleSheet("QLabel { color: #666; padding: 2px; }")
-        self.actual_label.setMinimumWidth(70)
-        value_row.addWidget(self.actual_label, stretch=1)
+        self.actual_label.setStyleSheet("QLabel { color: #ddd; }")
+        self.actual_label.setMinimumWidth(90)
+        actual_section.addWidget(self.actual_label)
 
-        layout.addLayout(value_row)
+        values_row.addLayout(actual_section, stretch=1)
+        content_layout.addLayout(values_row)
 
-        # Input field for manual value entry (subtle styling)
+        # Delta and trend row
+        delta_row = QHBoxLayout()
+        delta_row.setSpacing(4)
+
+        self.delta_label = QLabel("")
+        delta_font = self.font()
+        delta_font.setPointSize(10)
+        self.delta_label.setFont(delta_font)
+        self.delta_label.setStyleSheet("QLabel { color: #888; }")
+        self.delta_label.setAlignment(Qt.AlignCenter)
+        delta_row.addWidget(self.delta_label, stretch=1)
+
+        self.trend_label = QLabel("")
+        trend_font = self.font()
+        trend_font.setPointSize(12)
+        self.trend_label.setFont(trend_font)
+        self.trend_label.setStyleSheet("QLabel { color: #888; }")
+        self.trend_label.setAlignment(Qt.AlignCenter)
+        self.trend_label.setFixedWidth(20)
+        delta_row.addWidget(self.trend_label)
+
+        content_layout.addLayout(delta_row)
+
+        # Input field for manual value entry
         self.value_input = QLineEdit(objectName="line_edit")
         self.value_input.setPlaceholderText("Enter value")
-        self.value_input.setStyleSheet("QLineEdit { background-color: transparent; color: #ccc; border: none; border-bottom: 1px solid #555; }")
+        self.value_input.setStyleSheet(EDITABLE_INPUT_STYLE)
         self.value_input.setValidator(validator)
         self.value_input.returnPressed.connect(self.value_input_return_pressed)
-        layout.addWidget(self.value_input)
+        content_layout.addWidget(self.value_input)
 
-        self.setLayout(layout)
+        main_layout.addLayout(content_layout, 1)
+        self.setLayout(main_layout)
         self.stylesheet = self.styleSheet()
         self.error = False
 
@@ -641,20 +826,29 @@ class SetStatusWidget(QFrame):
         self._tooltip_visible = False
         self._tooltip_pos = None
 
-    def event(self, e):
-        """Track tooltip show/hide to restore after value updates."""
-        if e.type() == QEvent.ToolTip:
-            self._tooltip_visible = True
-            self._tooltip_pos = e.globalPos()
-        elif e.type() == QEvent.Leave:
-            self._tooltip_visible = False
-            self._tooltip_pos = None
-        return super().event(e)
+        # Value history for trend calculation (10 second window)
+        self._value_history = deque(maxlen=10)
+        self._current_actual = None
+        self._has_error = False
+
+        # Install event filter on name_label to track tooltip
+        self.name_label.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """Track tooltip show/hide on name_label."""
+        if obj == self.name_label:
+            if event.type() == QEvent.ToolTip:
+                self._tooltip_visible = True
+                self._tooltip_pos = event.globalPos()
+            elif event.type() == QEvent.Leave:
+                self._tooltip_visible = False
+                self._tooltip_pos = None
+        return super().eventFilter(obj, event)
 
     def _restore_tooltip(self):
         """Restore tooltip if it was visible before update."""
-        if self._tooltip_visible and self._tooltip_pos and self.toolTip():
-            QToolTip.showText(self._tooltip_pos, self.toolTip(), self)
+        if self._tooltip_visible and self._tooltip_pos and self.name_label.toolTip():
+            QToolTip.showText(self._tooltip_pos, self.name_label.toolTip(), self.name_label)
 
     def value_input_return_pressed(self):
         """Handle value input when Enter is pressed."""
@@ -672,35 +866,162 @@ class SetStatusWidget(QFrame):
         """Clear the input field."""
         self.value_input.clear()
 
+    def _parse_value(self, value_str):
+        """Parse numeric value from string (removes units)."""
+        try:
+            # Remove common suffixes
+            cleaned = value_str.replace("°C", "").replace("lpm", "").replace("kPa", "").strip()
+            return float(cleaned)
+        except (ValueError, AttributeError):
+            return None
+
+    def _calculate_trend(self):
+        """Calculate trend based on value history."""
+        if len(self._value_history) < 6:
+            return "→"  # Not enough data
+
+        history = list(self._value_history)
+        first_half = history[:len(history)//2]
+        second_half = history[len(history)//2:]
+
+        first_avg = sum(first_half) / len(first_half)
+        second_avg = sum(second_half) / len(second_half)
+
+        # Threshold based on type
+        threshold = 0.1 if self.is_temperature else 0.01
+
+        diff = second_avg - first_avg
+        if diff > threshold:
+            return "↑"
+        elif diff < -threshold:
+            return "↓"
+        return "→"
+
+    def _update_status_indicator(self, actual, setpoint):
+        """Update status indicator color and frame style based on delta."""
+        if actual is None or setpoint is None or setpoint == 0:
+            self._status_indicator.setStyleSheet(STATUS_GRAY)
+            self.setStyleSheet(self._frame_normal)
+            return
+
+        delta = abs(actual - setpoint)
+
+        if self.is_temperature:
+            # Temperature thresholds: ±0.5°C green, ±1°C yellow, else red
+            if delta <= 0.5:
+                self._status_indicator.setStyleSheet(STATUS_GREEN)
+                self.setStyleSheet(self._frame_normal)
+            elif delta <= 1.0:
+                self._status_indicator.setStyleSheet(STATUS_YELLOW)
+                self.setStyleSheet(self._frame_warning)
+            else:
+                self._status_indicator.setStyleSheet(STATUS_RED)
+                self.setStyleSheet(self._frame_error)
+        else:
+            # Flow rate thresholds: ±5% green, ±10% yellow, else red
+            pct = (delta / setpoint) * 100 if setpoint != 0 else 0
+            if pct <= 5:
+                self._status_indicator.setStyleSheet(STATUS_GREEN)
+                self.setStyleSheet(self._frame_normal)
+            elif pct <= 10:
+                self._status_indicator.setStyleSheet(STATUS_YELLOW)
+                self.setStyleSheet(self._frame_warning)
+            else:
+                self._status_indicator.setStyleSheet(STATUS_RED)
+                self.setStyleSheet(self._frame_error)
+
     def change_value(self, value):
         """Update the actual value display (called by device update)."""
-        self.actual_label.setText(f"Act: {value}")
-        # Restore tooltip after a brief delay to allow Qt to process the update
+        self.actual_label.setText(value)
+
+        # Parse numeric value for calculations
+        actual = self._parse_value(value)
+        self._current_actual = actual
+
+        if actual is not None:
+            # Add to history for trend
+            self._value_history.append(actual)
+
+            # Get setpoint for delta and status
+            setpoint = self.value_spinbox.value()
+
+            # Update delta display
+            delta = actual - setpoint
+            delta_sign = "+" if delta >= 0 else ""
+            if self.is_temperature:
+                self.delta_label.setText(f"Δ {delta_sign}{delta:.2f}°C")
+            else:
+                self.delta_label.setText(f"Δ {delta_sign}{delta:.3f}")
+
+            # Color delta based on magnitude
+            abs_delta = abs(delta)
+            if self.is_temperature:
+                if abs_delta <= 0.5:
+                    self.delta_label.setStyleSheet("QLabel { color: #27ae60; }")  # Green
+                elif abs_delta <= 1.0:
+                    self.delta_label.setStyleSheet("QLabel { color: #f39c12; }")  # Yellow
+                else:
+                    self.delta_label.setStyleSheet("QLabel { color: #e74c3c; }")  # Red
+            else:
+                pct = (abs_delta / setpoint) * 100 if setpoint != 0 else 0
+                if pct <= 5:
+                    self.delta_label.setStyleSheet("QLabel { color: #27ae60; }")
+                elif pct <= 10:
+                    self.delta_label.setStyleSheet("QLabel { color: #f39c12; }")
+                else:
+                    self.delta_label.setStyleSheet("QLabel { color: #e74c3c; }")
+
+            # Update trend arrow
+            trend = self._calculate_trend()
+            self.trend_label.setText(trend)
+            if trend == "↑":
+                self.trend_label.setStyleSheet("QLabel { color: #e74c3c; }")  # Red for rising
+            elif trend == "↓":
+                self.trend_label.setStyleSheet("QLabel { color: #3498db; }")  # Blue for falling
+            else:
+                self.trend_label.setStyleSheet("QLabel { color: #888; }")  # Gray for stable
+
+            # Update status indicator (unless there's an error)
+            if not self._has_error:
+                self._update_status_indicator(actual, setpoint)
+
+        # Restore tooltip after a brief delay
         if self._tooltip_visible:
             QTimer.singleShot(10, self._restore_tooltip)
 
     def set_red_color(self):
         """Set error color on spinbox."""
         if self.error == False:
-            self.value_spinbox.setStyleSheet("QDoubleSpinBox { background-color : red }")
+            self.value_spinbox.setStyleSheet(SPINBOX_STYLE + " QSpinBox, QDoubleSpinBox { background-color: red; }")
+            self.value_spinbox.lineEdit().setStyleSheet("background-color: red; color: #fff; border: none;")
             self.error = True
 
     def set_default_color(self):
         """Reset spinbox to default color."""
         if self.error == True:
-            self.value_spinbox.setStyleSheet(self.stylesheet)
+            self.value_spinbox.setStyleSheet(SPINBOX_STYLE)
+            self.value_spinbox.lineEdit().setStyleSheet("background-color: #3a3a3a; color: #ddd; border: none;")
             self.error = False
 
     def change_color(self, bit):
         """Change color based on error bit (for compatibility with IndicatorWidget)."""
         if int(bit) == 1:
-            self.actual_label.setStyleSheet("QLabel { background-color : red; color: white; padding: 2px; }")
+            self._has_error = True
+            # Make the entire frame red-tinted for prominent error display
+            self.setStyleSheet(self._frame_error)
+            self.actual_label.setStyleSheet("QLabel { background-color: #e74c3c; color: white; border-radius: 3px; padding: 2px; }")
+            self._status_indicator.setStyleSheet(STATUS_RED)
         else:
-            self.actual_label.setStyleSheet("QLabel { color: #666; padding: 2px; }")
+            self._has_error = False
+            self.setStyleSheet(self._frame_normal)
+            self.actual_label.setStyleSheet("QLabel { color: #ddd; }")
+            # Re-evaluate status based on current values
+            if self._current_actual is not None:
+                self._update_status_indicator(self._current_actual, self.value_spinbox.value())
 
     def setToolTip(self, tooltip):
-        """Set tooltip on the frame (not label) to prevent tooltip reset on value updates."""
-        super().setToolTip(tooltip)
+        """Set tooltip on the name label only, not the whole widget."""
+        self.name_label.setToolTip(tooltip)
 
 
 class TabConfirmationPopup(QWidget):
