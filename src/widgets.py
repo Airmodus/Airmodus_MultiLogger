@@ -103,7 +103,7 @@ class IndicatorWidget(QFrame):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
         self.name = name
-        self.ok_error_indicators = ["Laser power", "Saturator liquid level", "Drain liquid level", "Pulse quality"]
+        self.ok_error_indicators = ["Laser power", "Saturator liquid level", "Drain liquid level", "Pulse quality", "Saturator", "Drain"]
 
         # Status indicator (colored dot on left side)
         self._status_indicator = QFrame()
@@ -186,9 +186,9 @@ class IndicatorWidget(QFrame):
             self._status_indicator.setStyleSheet(STATUS_RED)
             if self.name == "Laser power":
                 self.change_value("ERROR")
-            elif self.name == "Saturator liquid level":
+            elif self.name in ("Saturator liquid level", "Saturator"):
                 self.change_value("LOW")
-            elif self.name == "Drain liquid level":
+            elif self.name in ("Drain liquid level", "Drain"):
                 self.change_value("HIGH")
             elif self.name == "Pulse quality":
                 self.change_value("ERROR")
