@@ -282,6 +282,12 @@ class PSMContourTab(QWidget):
         self.bin_curves = {}  # bin_index -> PlotCurveItem
         self.bin_checkboxes = []  # List of QCheckBox widgets
 
+        # Cumulative mode state
+        self.bin_plot_mode = "Individual"  # "Individual" or "Cumulative"
+        self.selected_cumulative = set()  # Indices of selected cumulative cutoffs
+        self.cumulative_curves = {}  # cutoff_index -> PlotCurveItem
+        self.cumulative_checkboxes = []  # List of QCheckBox widgets
+
         # Create UI
         self.main_layout = QVBoxLayout()
         self.main_layout.setContentsMargins(5, 5, 5, 5)
@@ -635,10 +641,33 @@ class PSMContourTab(QWidget):
         selector_layout.setContentsMargins(5, 5, 5, 5)
         selector_layout.setSpacing(2)
 
-        # Title label
-        title_label = QLabel("Bin Selection")
-        title_label.setStyleSheet("font-weight: bold; font-size: 11px; color: #aaa;")
-        selector_layout.addWidget(title_label)
+        # Mode dropdown (Individual / Cumulative)
+        self.bin_mode_combo = QComboBox()
+        self.bin_mode_combo.addItems(["Individual", "Cumulative"])
+        self.bin_mode_combo.setFixedHeight(24)
+        self.bin_mode_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #3a3a3a;
+                color: white;
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 2px 5px;
+                font-size: 10px;
+            }
+            QComboBox:hover {
+                background-color: #4a4a4a;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #3a3a3a;
+                color: white;
+                selection-background-color: #4a90d9;
+            }
+        """)
+        self.bin_mode_combo.currentTextChanged.connect(self._on_bin_mode_changed)
+        selector_layout.addWidget(self.bin_mode_combo)
 
         # Scroll area for checkboxes
         scroll_area = QScrollArea()
@@ -788,18 +817,142 @@ class PSMContourTab(QWidget):
         return f"Bin {bin_idx}"
 
     def _select_all_bins(self):
-        """Select all bin checkboxes."""
-        for cb in self.bin_checkboxes:
-            cb.setChecked(True)
+        """Select all checkboxes in current mode."""
+        if self.bin_plot_mode == "Individual":
+            for cb in self.bin_checkboxes:
+                cb.setChecked(True)
+        else:  # Cumulative
+            for cb in self.cumulative_checkboxes:
+                cb.setChecked(True)
 
     def _clear_all_bins(self):
-        """Clear all bin checkboxes."""
+        """Clear all checkboxes in current mode."""
+        if self.bin_plot_mode == "Individual":
+            for cb in self.bin_checkboxes:
+                cb.setChecked(False)
+        else:  # Cumulative
+            for cb in self.cumulative_checkboxes:
+                cb.setChecked(False)
+
+    def _create_cumulative_checkboxes(self):
+        """Create checkboxes for cumulative cutoffs (< X nm)."""
+        # Clear existing cumulative checkboxes
+        for cb in self.cumulative_checkboxes:
+            self.checkbox_layout.removeWidget(cb)
+            cb.deleteLater()
+        self.cumulative_checkboxes = []
+        self.selected_cumulative = set()
+
+        # Remove old cumulative curves from plot
+        if hasattr(self, 'bin_plot'):
+            for curve in self.cumulative_curves.values():
+                self.bin_plot.removeItem(curve)
+            if hasattr(self, 'bin_plot_legend') and self.bin_plot_legend:
+                self.bin_plot_legend.clear()
+        self.cumulative_curves = {}
+
+        if not hasattr(self, 'bin_limits_dp') or self.bin_limits_dp is None:
+            return
+
+        # Create checkbox for each bin upper boundary (cumulative < X nm)
+        # Skip the first limit (minimum) since there are no particles below it
+        num_bins = len(self.bin_limits_dp) - 1
+        for i in range(num_bins):
+            upper = self.bin_limits_dp[i + 1]  # Upper boundary of bin i
+            label = f"< {upper:.1f} nm"
+
+            cb = QCheckBox(label)
+            color = BIN_COLORS[i % len(BIN_COLORS)]
+            cb.setStyleSheet(f"""
+                QCheckBox {{
+                    color: rgb({color[0]}, {color[1]}, {color[2]});
+                    font-size: 10px;
+                }}
+                QCheckBox::indicator {{
+                    width: 12px;
+                    height: 12px;
+                }}
+            """)
+            cb.setToolTip(f"Show cumulative concentration for particles < {upper:.1f} nm")
+            cb.toggled.connect(lambda checked, idx=i: self._on_cumulative_toggled(idx, checked))
+
+            # Insert before the stretch
+            self.checkbox_layout.insertWidget(self.checkbox_layout.count() - 1, cb)
+            self.cumulative_checkboxes.append(cb)
+
+    def _on_cumulative_toggled(self, cutoff_idx: int, checked: bool):
+        """Handle cumulative checkbox toggle."""
+        if checked:
+            self.selected_cumulative.add(cutoff_idx)
+            # Create curve with color
+            color = BIN_COLORS[cutoff_idx % len(BIN_COLORS)]
+            pen = pg.mkPen(color=color, width=2)
+            label = self._get_cumulative_label(cutoff_idx)
+            curve = self.bin_plot.plot(pen=pen, name=label)
+            self.cumulative_curves[cutoff_idx] = curve
+        else:
+            self.selected_cumulative.discard(cutoff_idx)
+            if cutoff_idx in self.cumulative_curves:
+                self.bin_plot.removeItem(self.cumulative_curves[cutoff_idx])
+                del self.cumulative_curves[cutoff_idx]
+
+        # Update the time-series plot
+        self._update_bin_timeseries()
+
+    def _get_cumulative_label(self, cutoff_idx: int) -> str:
+        """Get label for a cumulative cutoff index."""
+        if hasattr(self, 'bin_limits_dp') and self.bin_limits_dp is not None:
+            if cutoff_idx < len(self.bin_limits_dp) - 1:
+                upper = self.bin_limits_dp[cutoff_idx + 1]
+                return f"< {upper:.1f}"
+        return f"< Bin {cutoff_idx}"
+
+    def _on_bin_mode_changed(self, mode: str):
+        """Handle mode dropdown change between Individual and Cumulative."""
+        self.bin_plot_mode = mode
+
+        # Clear all curves and legend
+        if hasattr(self, 'bin_plot'):
+            for curve in self.bin_curves.values():
+                self.bin_plot.removeItem(curve)
+            for curve in self.cumulative_curves.values():
+                self.bin_plot.removeItem(curve)
+            if hasattr(self, 'bin_plot_legend') and self.bin_plot_legend:
+                self.bin_plot_legend.clear()
+
+        self.bin_curves = {}
+        self.cumulative_curves = {}
+        self.selected_bins = set()
+        self.selected_cumulative = set()
+
+        # Hide current checkboxes
         for cb in self.bin_checkboxes:
+            cb.hide()
             cb.setChecked(False)
+        for cb in self.cumulative_checkboxes:
+            cb.hide()
+            cb.setChecked(False)
+
+        # Show appropriate checkboxes
+        if mode == "Individual":
+            for cb in self.bin_checkboxes:
+                cb.show()
+        else:  # Cumulative
+            # Create cumulative checkboxes if not yet created
+            if not self.cumulative_checkboxes:
+                self._create_cumulative_checkboxes()
+            for cb in self.cumulative_checkboxes:
+                cb.show()
 
     def _update_bin_timeseries(self):
         """Update time-series curves from scan_buffer."""
-        if len(self.scan_buffer) == 0 or len(self.selected_bins) == 0:
+        if len(self.scan_buffer) == 0:
+            return
+
+        # Check if any selections in current mode
+        if self.bin_plot_mode == "Individual" and len(self.selected_bins) == 0:
+            return
+        if self.bin_plot_mode == "Cumulative" and len(self.selected_cumulative) == 0:
             return
 
         try:
@@ -817,27 +970,51 @@ class PSMContourTab(QWidget):
                     return pd.Timestamp(ts)
                 return pd.Timestamp(ts)
 
-            # Extract data for each selected bin
-            for bin_idx in self.selected_bins:
-                if bin_idx not in self.bin_curves:
-                    continue
-
-                times = []
-                values = []
-
-                for scan in self.scan_buffer:
-                    ts = to_timestamp(scan['time'])
-                    if ts < time_window_ago:
+            if self.bin_plot_mode == "Individual":
+                # Extract data for each selected bin
+                for bin_idx in self.selected_bins:
+                    if bin_idx not in self.bin_curves:
                         continue
 
-                    dN_dlogDp = scan.get('dN_dlogDp', [])
-                    if bin_idx < len(dN_dlogDp):
-                        # Use timestamp as x value
-                        times.append(ts.timestamp())
-                        values.append(dN_dlogDp[bin_idx])
+                    times = []
+                    values = []
 
-                if times and values:
-                    self.bin_curves[bin_idx].setData(x=times, y=values)
+                    for scan in self.scan_buffer:
+                        ts = to_timestamp(scan['time'])
+                        if ts < time_window_ago:
+                            continue
+
+                        dN_dlogDp = scan.get('dN_dlogDp', [])
+                        if bin_idx < len(dN_dlogDp):
+                            times.append(ts.timestamp())
+                            values.append(dN_dlogDp[bin_idx])
+
+                    if times and values:
+                        self.bin_curves[bin_idx].setData(x=times, y=values)
+
+            else:  # Cumulative mode
+                # Extract cumulative data for each selected cutoff
+                for cutoff_idx in self.selected_cumulative:
+                    if cutoff_idx not in self.cumulative_curves:
+                        continue
+
+                    times = []
+                    values = []
+
+                    for scan in self.scan_buffer:
+                        ts = to_timestamp(scan['time'])
+                        if ts < time_window_ago:
+                            continue
+
+                        dN_dlogDp = scan.get('dN_dlogDp', [])
+                        # Sum all bins from 0 to cutoff_idx (inclusive)
+                        if cutoff_idx < len(dN_dlogDp):
+                            cumulative_value = sum(dN_dlogDp[:cutoff_idx + 1])
+                            times.append(ts.timestamp())
+                            values.append(cumulative_value)
+
+                    if times and values:
+                        self.cumulative_curves[cutoff_idx].setData(x=times, y=values)
 
             # Update x-axis to show time properly
             if hasattr(self, 'bin_plot'):
