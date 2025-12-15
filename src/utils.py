@@ -85,20 +85,11 @@ def cpc_flow_send(psm_widget, value, device_widgets):
             if cpc_widget.connection:
                 cpc_widget.connection.send_set_val(value, ":SET:FLOW ", decimals=3)
 
-# change PSM's 10 Hz parameter and button status
+# change PSM's 10 Hz parameter based on checkbox state
 def ten_hz_clicked(psm_widget, config):
-    # get current status of PSM 10 hz parameter from extra_params
-    status = psm_widget.device_config.extra_params.get('10_hz', False)
-    # if 10 hz is off, turn it on
-    if status == False:
-        # set 10 hz flag to True
-        psm_widget.device_config.extra_params['10_hz'] = True
-        psm_widget.measure_tab.ten_hz.change_color(1)
-    # if 10 hz is on, turn it off
-    elif status == True:
-        # set 10 hz flag to False
-        psm_widget.device_config.extra_params['10_hz'] = False
-        psm_widget.measure_tab.ten_hz.change_color(0)
+    # Get checkbox state (checkbox manages its own state, we just sync to config)
+    is_checked = psm_widget.measure_tab.ten_hz_checkbox.isChecked()
+    psm_widget.device_config.extra_params['10_hz'] = is_checked
 
 
 # when command is entered, send message to device and update .par file

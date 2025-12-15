@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import pty
 import random
@@ -28,11 +29,30 @@ class PSMDataGenerator:
 
     def __init__(self, mode="scan"):
         self.mode = mode  # scan, step, or fixed
-        self.scan_position = 0  # 0-100 for scan mode
-        self.scan_direction = 1  # 1 = up, -1 = down
+
+        # Scan parameters (from :SET:FLOW:SCAN command)
+        self.scan_min_flow = 0.15
+        self.scan_max_flow = 1.9
+        self.scan_bottom_wait = 10  # seconds
+        self.scan_up_time = 110  # seconds
+        self.scan_top_wait = 10  # seconds
+        self.scan_down_time = 110  # seconds
+
+        # Step parameters (from :SET:FLOW:STEP command)
+        self.step_time = 10  # seconds per step
+        self.step_flows = [0.3, 0.5, 0.7, 1.0, 1.3, 1.6, 1.9]
+        self.step_index = 0
+        self.step_time_in_current = 0
+
+        # Fixed parameters (from :SET:FLOW:FXD command)
+        self.fixed_flow = 1.0
+
+        # Scan state machine
+        self.scan_phase = 0  # 0=bottom_wait, 1=up_scan, 2=top_wait, 3=down_scan
+        self.phase_time = 0.0  # time in current phase
+        self.current_flow = self.scan_min_flow
 
         # Base values for PSM measurements
-        self.base_saturator_flow = 1.0
         self.base_excess_flow = 0.5
         self.base_temp_growth_tube = 90.0
         self.base_temp_saturator = 80.0
@@ -54,54 +74,100 @@ class PSMDataGenerator:
         self.setting_temp_drain = 30.0
         self.setting_flow = 1.0
 
-    def generate_meas_scan(self):
-        """Generate :MEAS:SCAN response data."""
-        # Update scan position
-        self.scan_position += self.scan_direction * 2
-        if self.scan_position >= 100:
-            self.scan_direction = -1
-        elif self.scan_position <= 0:
-            self.scan_direction = 1
+    def set_scan_params(self, bottom_wait, up_time, top_wait, down_time, min_flow, max_flow):
+        self.scan_bottom_wait = bottom_wait
+        self.scan_up_time = up_time
+        self.scan_top_wait = top_wait
+        self.scan_down_time = down_time
+        self.scan_min_flow = min_flow
+        self.scan_max_flow = max_flow
+        self.scan_phase = 0
+        self.phase_time = 0.0
+        self.current_flow = min_flow
+        self.mode = "scan"
 
-        sat_flow = self.base_saturator_flow + random.uniform(-0.05, 0.05)
-        exc_flow = self.base_excess_flow + random.uniform(-0.05, 0.05)
+    def set_step_params(self, step_time, step_flows):
+        self.step_time = step_time
+        self.step_flows = step_flows
+        self.step_index = 0
+        self.step_time_in_current = 0
+        self.current_flow = step_flows[0] if step_flows else 1.0
+        self.mode = "step"
 
-        temp_gt = self.base_temp_growth_tube + random.uniform(-0.5, 0.5)
-        temp_sat = self.base_temp_saturator + random.uniform(-0.5, 0.5)
-        temp_inlet = self.base_temp_inlet + random.uniform(-0.5, 0.5)
-        temp_heater = self.base_temp_heater + random.uniform(-0.5, 0.5)
-        temp_drain = self.base_temp_drainage + random.uniform(-0.5, 0.5)
-        temp_cabin = self.base_temp_cabin + random.uniform(-0.5, 0.5)
+    def set_fixed_params(self, flow):
+        self.fixed_flow = flow
+        self.current_flow = flow
+        self.mode = "fixd"
 
-        pres_inlet = self.base_pres_inlet + random.uniform(-1, 1)
-        pres_inlet_sat = self.base_pres_inlet_sat + random.uniform(-1, 1)
-        pres_sat_exc = self.base_pres_sat_excess + random.uniform(-1, 1)
-        pres_crit = self.base_pres_critical + random.uniform(-1, 1)
+    def _update_scan_flow(self, dt):
+        self.phase_time += dt
+        phase_durations = [
+            self.scan_bottom_wait,
+            self.scan_up_time,
+            self.scan_top_wait,
+            self.scan_down_time
+        ]
+        current_duration = phase_durations[self.scan_phase]
 
-        poly_corr = 1.0 + random.uniform(-0.01, 0.01)
-        scan_status = self.scan_position  # 0-100
+        if self.phase_time >= current_duration:
+            self.phase_time = 0.0
+            self.scan_phase = (self.scan_phase + 1) % 4
 
-        status_hex = "0x0000"
-        note_hex = "0x0000"
+        if self.scan_phase == 0:
+            self.current_flow = self.scan_min_flow
+        elif self.scan_phase == 1:
+            ratio = self.scan_max_flow / self.scan_min_flow
+            power = self.phase_time / self.scan_up_time
+            self.current_flow = self.scan_min_flow * (ratio ** power)
+        elif self.scan_phase == 2:
+            self.current_flow = self.scan_max_flow
+        elif self.scan_phase == 3:
+            ratio = self.scan_min_flow / self.scan_max_flow
+            power = self.phase_time / self.scan_down_time
+            self.current_flow = self.scan_max_flow * (ratio ** power)
 
-        # Format matches PSM firmware output
+        self.current_flow = max(self.scan_min_flow, min(self.scan_max_flow, self.current_flow))
+        return self.scan_phase
+
+    def _update_step_flow(self, dt):
+        self.step_time_in_current += dt
+        if self.step_time_in_current >= self.step_time:
+            self.step_time_in_current = 0
+            self.step_index = (self.step_index + 1) % len(self.step_flows)
+        self.current_flow = self.step_flows[self.step_index]
+        return 9
+
+    def _update_fixed_flow(self, dt):
+        self.current_flow = self.fixed_flow
+        return 9
+
+    def generate_measurement(self, dt=1.0):
+        if self.mode == "scan":
+            scan_status = self._update_scan_flow(dt)
+        elif self.mode == "step":
+            scan_status = self._update_step_flow(dt)
+        else:
+            scan_status = self._update_fixed_flow(dt)
+
         values = [
-            f"{sat_flow:.2f}",       # 0: saturator flow
-            f"{exc_flow:.2f}",       # 1: excess flow
-            f"{temp_gt:.1f}",        # 2: temp growth tube
-            f"{temp_sat:.1f}",       # 3: temp saturator
-            f"{temp_inlet:.1f}",     # 4: temp inlet
-            f"{temp_heater:.1f}",    # 5: temp heater
-            f"{temp_drain:.1f}",     # 6: temp drainage
-            f"{temp_cabin:.1f}",     # 7: temp cabin
-            f"{pres_inlet:.1f}",     # 8: pressure inlet
-            f"{pres_inlet_sat:.1f}", # 9: pressure inlet-saturator
-            f"{pres_sat_exc:.1f}",   # 10: pressure saturator-excess
-            f"{pres_crit:.1f}",      # 11: pressure critical orifice
-            f"{poly_corr:.3f}",      # 12: polynomial correction
-            str(scan_status),        # 13: scan status (0-100)
-            status_hex,              # 14: status hex
-            note_hex                 # 15: note hex
+            f"{self.current_flow:.4f}",
+            f"{self.base_excess_flow:.2f}",
+            f"{self.base_temp_growth_tube:.1f}",
+            f"{self.base_temp_saturator:.1f}",
+            f"{self.base_temp_inlet:.1f}",
+            f"{self.base_temp_heater:.1f}",
+            f"{self.base_temp_drainage:.1f}",
+            f"{self.base_temp_cabin:.1f}",
+            f"{self.current_flow:.4f}",
+            f"{self.base_pres_inlet:.1f}",
+            f"{self.base_pres_inlet_sat:.1f}",
+            f"{self.base_pres_sat_excess:.1f}",
+            f"{self.base_pres_critical:.1f}",
+            "4.00",
+            "1.000",
+            str(scan_status),
+            "0x0000",
+            "0x0000"
         ]
         return ",".join(values)
 
@@ -146,6 +212,28 @@ class PSMSimulator:
         self.verbose = verbose
         self.data_generator = PSMDataGenerator(mode=mode)
         self.read_buffer = ""
+        self.state_file = f"{link_path}.state" if link_path else None
+
+    def _write_state(self):
+        if not self.state_file:
+            return
+        try:
+            state = {
+                "flow": self.data_generator.current_flow,
+                "mode": self.mode,
+                "scan_phase": self.data_generator.scan_phase
+            }
+            with open(self.state_file, 'w') as f:
+                json.dump(state, f)
+        except Exception:
+            pass
+
+    def _remove_state_file(self):
+        if self.state_file and os.path.exists(self.state_file):
+            try:
+                os.unlink(self.state_file)
+            except OSError:
+                pass
 
     def _configure_serial(self):
         """Configure the pty for serial-like operation."""
@@ -298,10 +386,42 @@ class PSMSimulator:
             data = self.data_generator.generate_syst_vcmp()
             response = f":SYST:VCMP {data}"
         elif ':SYST:VER' in cmd_upper:
-            # PSM 2.0 firmware is >= 0.6.x
             response = "Firmware version: 0.6.8"
+        elif ':SET:FLOW:SCAN' in cmd_upper:
+            try:
+                parts = command.split(' ', 1)[1].split(',')
+                bottom_wait = float(parts[0])
+                up_time = float(parts[1])
+                top_wait = float(parts[2])
+                down_time = float(parts[3])
+                min_flow = float(parts[4])
+                max_flow = float(parts[5])
+                self.data_generator.set_scan_params(bottom_wait, up_time, top_wait, down_time, min_flow, max_flow)
+                self.mode = "scan"
+                print(f"[SCAN] min={min_flow}, max={max_flow}, up={up_time}s, down={down_time}s")
+            except Exception as e:
+                print(f"[ERR] Failed to parse SCAN params: {e}")
+        elif ':SET:FLOW:STEP' in cmd_upper:
+            try:
+                parts = command.split(' ', 1)[1].split(',')
+                num_steps = int(parts[0])
+                step_times = [float(parts[i]) for i in range(1, num_steps + 1)]
+                step_flows = [float(parts[i]) for i in range(num_steps + 1, 2 * num_steps + 1)]
+                avg_step_time = sum(step_times) / len(step_times) if step_times else 10
+                self.data_generator.set_step_params(avg_step_time, step_flows)
+                self.mode = "step"
+                print(f"[STEP] flows={step_flows}, time={avg_step_time}s")
+            except Exception as e:
+                print(f"[ERR] Failed to parse STEP params: {e}")
+        elif ':SET:FLOW:FXD' in cmd_upper:
+            try:
+                flow = float(command.split(' ', 1)[1])
+                self.data_generator.set_fixed_params(flow)
+                self.mode = "fixd"
+                print(f"[FIXED] flow={flow}")
+            except Exception as e:
+                print(f"[ERR] Failed to parse FIXED params: {e}")
         elif ':SET:' in cmd_upper:
-            # Accept SET commands silently
             if self.verbose:
                 print(f"[OK] Setting accepted: {command}")
         else:
@@ -316,10 +436,11 @@ class PSMSimulator:
     def _push_data(self):
         """Push auto-generated measurement data."""
         try:
-            data = self.data_generator.generate_meas_scan()
+            data = self.data_generator.generate_measurement(dt=self.push_interval)
             mode_cmd = f":MEAS:{self.mode.upper()}"
             message = f"{mode_cmd} {data}\r\n"
             os.write(self.master_fd, message.encode('utf-8'))
+            self._write_state()
             if self.verbose:
                 print(f"[TX] {mode_cmd} {data[:50]}...")
         except OSError as e:
@@ -329,6 +450,7 @@ class PSMSimulator:
         """Stop simulation and cleanup."""
         self.running = False
         self._remove_symlink()
+        self._remove_state_file()
         if self.master_fd is not None:
             try:
                 os.close(self.master_fd)
@@ -349,8 +471,11 @@ def main():
         epilog="""
 Examples:
   python psm_simulator.py
-  python psm_simulator.py --link /tmp/airmodus_sim
-  python psm_simulator.py --serial PSM_TEST_001 --verbose
+  python psm_simulator.py --link /tmp/psm_sim --verbose
+
+To sync with CPC simulator:
+  1. python psm_simulator.py --link /tmp/psm_sim
+  2. python cpc_simulator.py --link /tmp/cpc_sim --psm-link /tmp/psm_sim
         """
     )
     parser.add_argument('--serial', default='PSM_SIM_001',
@@ -359,8 +484,8 @@ Examples:
                         help='Data push interval in seconds (default: 1.0)')
     parser.add_argument('--mode', choices=['scan', 'step', 'fixd'], default='scan',
                         help='Measurement mode (default: scan)')
-    parser.add_argument('--link', default='/tmp/airmodus_sim',
-                        help='Symlink path for consistent port (default: /tmp/airmodus_sim). Use --link "" to disable.')
+    parser.add_argument('--link', default='/tmp/psm_sim',
+                        help='Symlink path for consistent port (default: /tmp/psm_sim)')
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Enable verbose output (show TX/RX messages)')
 

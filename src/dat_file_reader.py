@@ -75,7 +75,7 @@ def read_psm_dat_file(filepath: str) -> pd.DataFrame:
         filepath: Path to .dat file
 
     Returns:
-        DataFrame with columns: timestamp, satflow, scan_status, concentration
+        DataFrame with columns: timestamp, satflow, scan_status, concentration_psm
 
     Raises:
         FileNotFoundError: If file doesn't exist
@@ -92,24 +92,19 @@ def read_psm_dat_file(filepath: str) -> pd.DataFrame:
         df = pd.read_csv(filepath)
 
         # Validate minimum columns
-        if len(df.columns) < 20:
-            raise ValueError(f"Invalid file format: expected at least 20 columns, got {len(df.columns)}")
+        if len(df.columns) < 16:
+            raise ValueError(f"Invalid file format: expected at least 16 columns, got {len(df.columns)}")
 
-        # Column indices differ between PSM Retrofit and PSM 2.0
-        # PSM 2.0 has an extra "Vacuum flow" column at index 16, shifting CPC concentration
-
-        # Extract column names (handle potential variations)
         timestamp_col = df.columns[0]
-        satflow_col = df.columns[3]  # Saturator flow rate (lpm)
-        scan_status_col = df.columns[15]  # Scan status (same index for both formats)
-        concentration_col = df.columns[19 if is_psm2 else 18]  # CPC concentration (1/cm3)
+        concentration_psm_col = df.columns[1]  # Already dilution + poly corrected
+        satflow_col = df.columns[3]
+        scan_status_col = df.columns[15]
 
-        # Create result dataframe with standardized column names
         result = pd.DataFrame({
             'timestamp': df[timestamp_col],
             'satflow': pd.to_numeric(df[satflow_col], errors='coerce'),
             'scan_status': df[scan_status_col].astype(str),
-            'concentration': pd.to_numeric(df[concentration_col], errors='coerce')
+            'concentration_psm': pd.to_numeric(df[concentration_psm_col], errors='coerce')
         })
 
         # Parse timestamps
@@ -141,13 +136,13 @@ def detect_scans_from_dat(df: pd.DataFrame) -> List[Dict[str, np.ndarray]]:
     - Down scan: status 3 + status 0 (bottom wait)
 
     Args:
-        df: DataFrame with columns: timestamp, satflow, scan_status, concentration
+        df: DataFrame with columns: timestamp, satflow, scan_status, concentration_psm
 
     Returns:
         List of scan dicts with keys:
         - 'times': np.ndarray of pandas.Timestamp objects
         - 'satflows': np.ndarray of float values (lpm)
-        - 'concentrations': np.ndarray of float values (1/cm3)
+        - 'concentrations_psm': np.ndarray of corrected concentration values (1/cm3)
     """
     scans = []
     current_scan = None
@@ -175,10 +170,10 @@ def detect_scans_from_dat(df: pd.DataFrame) -> List[Dict[str, np.ndarray]]:
                 scans.append({
                     'times': np.array(current_scan['times']),
                     'satflows': np.array(current_scan['satflows']),
-                    'concentrations': np.array(current_scan['concentrations'])
+                    'concentrations_psm': np.array(current_scan['concentrations_psm'])
                 })
             # Start new UP scan
-            current_scan = {'times': [], 'satflows': [], 'concentrations': [], 'type': 'up'}
+            current_scan = {'times': [], 'satflows': [], 'concentrations_psm': [], 'type': 'up'}
 
         # Down scan starts when transitioning TO status "3"
         elif scan_status == "3" and prev_status != "3":
@@ -187,10 +182,10 @@ def detect_scans_from_dat(df: pd.DataFrame) -> List[Dict[str, np.ndarray]]:
                 scans.append({
                     'times': np.array(current_scan['times']),
                     'satflows': np.array(current_scan['satflows']),
-                    'concentrations': np.array(current_scan['concentrations'])
+                    'concentrations_psm': np.array(current_scan['concentrations_psm'])
                 })
             # Start new DOWN scan
-            current_scan = {'times': [], 'satflows': [], 'concentrations': [], 'type': 'down'}
+            current_scan = {'times': [], 'satflows': [], 'concentrations_psm': [], 'type': 'down'}
 
         # Accumulate data during scan
         # Up scan: include status 1 and 2 (top wait)
@@ -202,10 +197,10 @@ def detect_scans_from_dat(df: pd.DataFrame) -> List[Dict[str, np.ndarray]]:
             elif current_scan['type'] == 'down' and scan_status in ["3", "0"]:
                 include_point = True
 
-            if include_point and not pd.isna(row['satflow']) and not pd.isna(row['concentration']):
+            if include_point and not pd.isna(row['satflow']) and not pd.isna(row['concentration_psm']):
                 current_scan['times'].append(row['timestamp'])
                 current_scan['satflows'].append(row['satflow'])
-                current_scan['concentrations'].append(row['concentration'])
+                current_scan['concentrations_psm'].append(row['concentration_psm'])
 
         prev_status = scan_status
 
@@ -214,7 +209,7 @@ def detect_scans_from_dat(df: pd.DataFrame) -> List[Dict[str, np.ndarray]]:
         scans.append({
             'times': np.array(current_scan['times']),
             'satflows': np.array(current_scan['satflows']),
-            'concentrations': np.array(current_scan['concentrations'])
+            'concentrations_psm': np.array(current_scan['concentrations_psm'])
         })
 
     return scans

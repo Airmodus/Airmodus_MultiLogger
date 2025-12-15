@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import pty
 import random
@@ -26,9 +27,13 @@ import time
 class CPCDataGenerator:
     """Generates realistic CPC sensor data with random variations."""
 
-    def __init__(self):
-        # Base values for CPC measurements
-        self.base_concentration = 5000.0  # particles/cc
+    def __init__(self, psm_link=None):
+        self.psm_state_file = f"{psm_link}.state" if psm_link else None
+        self.psm_flow = 0.15
+        self.min_flow = 0.15
+        self.max_flow = 1.9
+        self.base_concentration = 1000.0
+        self.max_concentration = 50000.0
         self.base_pulses = 500
         self.base_dead_time = 0.02
         self.base_temp_saturator = 35.0
@@ -40,49 +45,47 @@ class CPCDataGenerator:
         self.base_pres_nozzle = 40.0
         self.base_pres_cabin = 101.0
         self.base_laser_current = 2.5
-        self.base_liquid_level = 1  # 0=empty, 1=ok, 2=full
+        self.base_liquid_level = 1
+
+    def _read_psm_state(self):
+        if not self.psm_state_file:
+            return
+        try:
+            with open(self.psm_state_file, 'r') as f:
+                state = json.load(f)
+                self.psm_flow = state.get("flow", 0.15)
+        except Exception:
+            pass
+
+    def _calculate_concentration(self):
+        self._read_psm_state()
+        flow_ratio = (self.psm_flow - self.min_flow) / (self.max_flow - self.min_flow)
+        flow_ratio = max(0, min(1, flow_ratio))
+        concentration = self.base_concentration + (self.max_concentration - self.base_concentration) * (flow_ratio ** 0.5)
+        return concentration
 
     def generate_meas_all(self):
         """Generate :MEAS:ALL response data."""
-        concentration = max(0, self.base_concentration + random.uniform(-500, 500))
-        pulses = max(0, int(self.base_pulses + random.uniform(-50, 50)))
-        dead_time = max(0, self.base_dead_time + random.uniform(-0.005, 0.005))
-        pulse_duration = 0.001  # firmware value, not used
-        unused = 0
+        concentration = self._calculate_concentration()
+        pulses = int(concentration / 10)
 
-        temp_sat = self.base_temp_saturator + random.uniform(-0.5, 0.5)
-        temp_opt = self.base_temp_optics + random.uniform(-0.5, 0.5)
-        temp_con = self.base_temp_condenser + random.uniform(-0.5, 0.5)
-        temp_cab = self.base_temp_cabin + random.uniform(-0.5, 0.5)
-
-        pres_inlet = self.base_pres_inlet + random.uniform(-1, 1)
-        pres_crit = self.base_pres_critical + random.uniform(-1, 1)
-        pres_noz = self.base_pres_nozzle + random.uniform(-1, 1)
-        pres_cab = self.base_pres_cabin + random.uniform(-1, 1)
-
-        laser = self.base_laser_current + random.uniform(-0.1, 0.1)
-        liquid = self.base_liquid_level
-
-        status_hex = "0x0000"  # No errors
-
-        # Format: conc, pulses, dead_time, pulse_dur, unused, temps (4), pressures (4), laser, liquid, status
         values = [
             f"{concentration:.1f}",
             str(pulses),
-            f"{dead_time:.4f}",
-            f"{pulse_duration:.4f}",
-            str(unused),
-            f"{temp_sat:.1f}",
-            f"{temp_opt:.1f}",
-            f"{temp_con:.1f}",
-            f"{temp_cab:.1f}",
-            f"{pres_inlet:.1f}",
-            f"{pres_crit:.1f}",
-            f"{pres_noz:.1f}",
-            f"{pres_cab:.1f}",
-            f"{laser:.2f}",
-            str(liquid),
-            status_hex
+            f"{self.base_dead_time:.4f}",
+            "0.0010",
+            "0",
+            f"{self.base_temp_saturator:.1f}",
+            f"{self.base_temp_optics:.1f}",
+            f"{self.base_temp_condenser:.1f}",
+            f"{self.base_temp_cabin:.1f}",
+            f"{self.base_pres_inlet:.1f}",
+            f"{self.base_pres_critical:.1f}",
+            f"{self.base_pres_nozzle:.1f}",
+            f"{self.base_pres_cabin:.1f}",
+            f"{self.base_laser_current:.2f}",
+            str(self.base_liquid_level),
+            "0x0000"
         ]
         return ",".join(values)
 
@@ -111,7 +114,7 @@ class CPCDataGenerator:
 class CPCSimulator:
     """Simulates a CPC device using a virtual serial port."""
 
-    def __init__(self, serial_number="CPC_SIM_001", link_path=None, verbose=False):
+    def __init__(self, serial_number="CPC_SIM_001", link_path=None, verbose=False, psm_link=None):
         self.serial_number = serial_number
         self.running = False
         self.master_fd = None
@@ -119,7 +122,8 @@ class CPCSimulator:
         self.slave_path = None
         self.link_path = link_path
         self.verbose = verbose
-        self.data_generator = CPCDataGenerator()
+        self.psm_link = psm_link
+        self.data_generator = CPCDataGenerator(psm_link=psm_link)
         self.read_buffer = ""
 
     def _configure_serial(self):
@@ -180,14 +184,20 @@ class CPCSimulator:
         else:
             print(f"Virtual port: {self.slave_path}")
         print(f"Serial number: {self.serial_number}")
+        if self.psm_link:
+            print(f"PSM sync: {self.psm_link}.state")
         print("-" * 50)
         print("CPC is command-based. It responds to:")
         print("  :MEAS:ALL  - Measurement data")
         print("  :SYST:PRNT - Settings")
         print("  :SYST:PALL - All parameters")
         print("  *IDN       - Device identification")
+        if self.psm_link:
+            print("-" * 50)
+            print("Concentration synced with PSM flow:")
+            print("  Low flow (0.15) -> ~1000 particles/cc")
+            print("  High flow (1.9) -> ~50000 particles/cc")
         print("-" * 50)
-        print("Configure this port in MultiLogger for your CPC device")
         print("Press Ctrl+C to stop")
         print("=" * 50)
         print()
@@ -301,25 +311,29 @@ def main():
         epilog="""
 Examples:
   python cpc_simulator.py
-  python cpc_simulator.py --link /tmp/airmodus_sim
+  python cpc_simulator.py --link /tmp/cpc_sim --psm-link /tmp/psm_sim
   python cpc_simulator.py --serial CPC_TEST_001 --verbose
         """
     )
     parser.add_argument('--serial', default='CPC_SIM_001',
                         help='Serial number to report (default: CPC_SIM_001)')
-    parser.add_argument('--link', default='/tmp/airmodus_sim',
-                        help='Symlink path for consistent port (default: /tmp/airmodus_sim). Use --link "" to disable.')
+    parser.add_argument('--link', default='/tmp/cpc_sim',
+                        help='Symlink path for consistent port (default: /tmp/cpc_sim)')
+    parser.add_argument('--psm-link', default=None,
+                        help='PSM simulator link path to sync concentration with PSM flow')
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Enable verbose output (show TX/RX messages)')
 
     args = parser.parse_args()
 
     link_path = args.link if args.link else None
+    psm_link = args.psm_link if args.psm_link else None
 
     simulator = CPCSimulator(
         serial_number=args.serial,
         link_path=link_path,
-        verbose=args.verbose
+        verbose=args.verbose,
+        psm_link=psm_link
     )
 
     def signal_handler(signum, frame):

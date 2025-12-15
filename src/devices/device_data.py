@@ -108,8 +108,8 @@ class PSMData:
         """Convert to array in order expected by legacy code."""
         # Build base PSM data up to scan_status (indices 0-14 in legacy)
         base = [
-            nan,  # [legacy 0: placeholder]
-            nan,  # [1: placeholder]
+            self.concentration_psm,  # [0: Concentration from PSM (dilution + poly corrected)]
+            nan,  # [1: Cut-off diameter placeholder - not calculated]
             self.saturator_flow,  # [2: but aligned to legacy sat_flow at ~4; comments below use legacy-ish labels]
             self.excess_flow,  # [~5]
             self.temp_saturator,  # [~6, legacy 3]

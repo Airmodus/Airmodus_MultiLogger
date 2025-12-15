@@ -7,6 +7,8 @@ To add a new device, simply add one entry to this registry.
 New devices can use the @register_device decorator for automatic registration.
 """
 
+import logging
+
 from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM,
                    EDILUTER, TSI_CPC, EXAMPLE_DEVICE)
 
@@ -119,14 +121,29 @@ def setup_psm_connections(widget, device_config, connection, app):
     device_id = device_config.device_id
     device_type = device_config.device_type
 
-    # Measure tab buttons
-    widget.measure_tab.scan.clicked.connect(
-        lambda: connection.send_message(widget.measure_tab.compile_scan()))
-    widget.measure_tab.step.clicked.connect(
-        lambda: connection.send_message(widget.measure_tab.compile_step()))
-    widget.measure_tab.fixed.clicked.connect(
-        lambda: connection.send_message(widget.measure_tab.compile_fixed()))
-    widget.measure_tab.ten_hz.clicked.connect(
+    # Mode dropdown just lets user browse - button sends the command
+    def on_update_clicked():
+        if not connection or not connection._connected:
+            return
+        widget.measure_tab._on_update_sending()
+        mode_index = widget.measure_tab.mode_selector.currentIndex()
+        if mode_index == 0:
+            cmd = widget.measure_tab.compile_scan()
+        elif mode_index == 1:
+            cmd = widget.measure_tab.compile_step()
+        elif mode_index == 2:
+            cmd = widget.measure_tab.compile_fixed()
+        else:
+            return
+        if cmd:
+            connection.send_message(cmd)
+            widget.measure_tab.save_settings(device_config.extra_params)
+            widget.measure_tab._mark_settings_clean()
+            if hasattr(widget, 'on_config_changed'):
+                widget.on_config_changed()
+
+    widget.measure_tab.update_button.clicked.connect(on_update_clicked)
+    widget.measure_tab.ten_hz_checkbox.toggled.connect(
         lambda: ten_hz_clicked(widget, app.config))
 
     # Temperature setpoints

@@ -1,10 +1,38 @@
 from PyQt5.QtGui import QColor
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtWidgets import (QSplitter, QTabWidget, QGridLayout, QWidget,
-    QSizePolicy)
+    QSizePolicy, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QStackedWidget,
+    QComboBox, QCheckBox, QPushButton)
 from numpy import nan
+import numpy as np
 import logging
+import pyqtgraph as pg
 
+
+# Button styles for different states
+STYLE_BTN_START = """
+    QPushButton { background-color: #4CAF50; color: white; padding: 6px 16px; font-size: 13px; font-weight: bold; border: none; border-radius: 4px; }
+    QPushButton:hover { background-color: #45a049; }
+    QPushButton:disabled { background-color: #ccc; color: #888; }
+"""
+STYLE_BTN_UPDATE = """
+    QPushButton { background-color: #2196F3; color: white; padding: 6px 16px; font-size: 13px; font-weight: bold; border: none; border-radius: 4px; }
+    QPushButton:hover { background-color: #1976D2; }
+    QPushButton:disabled { background-color: #ccc; color: #888; }
+"""
+STYLE_BTN_RUNNING = """
+    QPushButton { background-color: #9E9E9E; color: white; padding: 6px 16px; font-size: 13px; border: none; border-radius: 4px; }
+    QPushButton:hover { background-color: #757575; }
+    QPushButton:disabled { background-color: #ccc; color: #888; }
+"""
+STYLE_BTN_SENDING = """
+    QPushButton { background-color: #FF9800; color: white; padding: 6px 16px; font-size: 13px; border: none; border-radius: 4px; }
+    QPushButton:disabled { background-color: #ccc; color: #888; }
+"""
+# Keep old styles for compatibility (unused now)
+STYLE_UPDATE_CLEAN = STYLE_BTN_RUNNING
+STYLE_UPDATE_DIRTY = STYLE_BTN_UPDATE
+STYLE_UPDATE_SENDING = STYLE_BTN_SENDING
 
 from config import PSM, PSM_ERRORS
 from widgets import (
@@ -12,7 +40,6 @@ from widgets import (
     SetWidget,
     ToggleButton,
     IndicatorWidget,
-    StartButton,
     StepsWidget
 )
 
@@ -41,7 +68,7 @@ class PSMWidget(ComplexDevice):
         self.plot_tab = SinglePlot(device_type=PSM)
         self.addTab(self.plot_tab, "Plot")
         # create contour plot tab for PSM (next to Plot tab)
-        self.contour_tab = PSMContourTab(self.device_config)
+        self.contour_tab = PSMContourTab(self.device_config, self.is_psm2)
         self.addTab(self.contour_tab, "Contour")
         # create set tab for PSM (pass is_psm2 to determine UI)
         self.set_tab = PSMSetTab(self.is_psm2)
@@ -336,16 +363,15 @@ class PSMWidget(ComplexDevice):
         return None
 
     def get_status_bar_text(self):
-        """Get formatted text for status bar display."""
-        # Show measurement mode and state
-        if hasattr(self, 'measure_tab'):
-            measure_tab = self.measure_tab
-            if hasattr(measure_tab, 'scan') and measure_tab.scan.state == 1:
-                return "Scanning"
-            elif hasattr(measure_tab, 'step') and measure_tab.step.state == 1:
-                return "Step scan"
-            elif hasattr(measure_tab, 'fixed') and measure_tab.fixed.state == 1:
-                return "Fixed mode"
+        if hasattr(self, 'measure_tab') and hasattr(self.measure_tab, '_current_device_mode'):
+            mode = self.measure_tab._current_device_mode
+            satflow = self.current_data.saturator_flow if hasattr(self, 'current_data') else 0
+            if mode == ":MEAS:SCAN":
+                return f"Scanning ({satflow:.2f} lpm)"
+            elif mode == ":MEAS:STEP":
+                return f"Step ({satflow:.2f} lpm)"
+            elif mode == ":MEAS:FIXD":
+                return f"Fixed ({satflow:.2f} lpm)"
         return "Idle"
 
     def process_parsed_messages(self, parsed_messages, device_config, data_holder):
@@ -600,9 +626,7 @@ class PSMWidget(ComplexDevice):
                 self.current_data.total_errors = total_errors
                 self.current_data.liquid_errors = liquid_errors
 
-                # Update mode color FIRST (critical for status bar display)
-                # This must happen before update_values in case it throws
-                self.measure_tab.change_mode_color(command)
+                self.measure_tab.change_mode_color(command, self.current_data.saturator_flow)
 
                 # Update GUI status tab values
                 self.update_values(data)
@@ -892,9 +916,15 @@ class PSMWidget(ComplexDevice):
         if hasattr(self, 'set_app_config'):
             self.set_app_config(app_config)
 
-        # Restore 10 Hz button state
+        # Restore 10 Hz checkbox state
         if '10_hz' in device_config.extra_params:
-            self.measure_tab.ten_hz.change_color(int(device_config.extra_params['10_hz']))
+            self.measure_tab.ten_hz_checkbox.setChecked(bool(int(device_config.extra_params['10_hz'])))
+
+        # Restore measure tab settings (scan/step/fixed parameters)
+        self.measure_tab.restore_settings(device_config.extra_params)
+
+        # Connect measure tab value changes to save settings
+        self._connect_measure_tab_save(device_config)
 
         # Update PSM type UI (CO flow visibility, vacuum flow visibility)
         # This ensures correct UI state based on firmware version from config
@@ -907,6 +937,29 @@ class PSMWidget(ComplexDevice):
                 self.set_tab.set_co_flow.value_spinbox.setValue(round(co_flow_val, 3))
             except (ValueError, AttributeError):
                 pass
+
+    def _connect_measure_tab_save(self, device_config):
+        """Connect measure tab value changes to save settings."""
+        def save_measure_settings():
+            self.measure_tab.save_settings(device_config.extra_params)
+            if hasattr(self, 'on_config_changed'):
+                self.on_config_changed()
+
+        # Connect scan mode controls
+        self.measure_tab.set_minimum_flow.value_spinbox.valueChanged.connect(save_measure_settings)
+        self.measure_tab.set_max_flow.value_spinbox.valueChanged.connect(save_measure_settings)
+        self.measure_tab.scan_time_preset.currentIndexChanged.connect(save_measure_settings)
+        self.measure_tab.set_bottom_wait.value_spinbox.valueChanged.connect(save_measure_settings)
+        self.measure_tab.set_up_scan_time.value_spinbox.valueChanged.connect(save_measure_settings)
+        self.measure_tab.set_top_wait.value_spinbox.valueChanged.connect(save_measure_settings)
+        self.measure_tab.set_down_scan_time.value_spinbox.valueChanged.connect(save_measure_settings)
+
+        # Connect step mode controls
+        self.measure_tab.step_time.value_spinbox.valueChanged.connect(save_measure_settings)
+        self.measure_tab.steps.text_box.textChanged.connect(save_measure_settings)
+
+        # Connect fixed mode control
+        self.measure_tab.set_flow.value_spinbox.valueChanged.connect(save_measure_settings)
 
     def update_auxiliary_displays(self, data_holder=None):
         """Update PSM contour plot."""
@@ -1065,62 +1118,682 @@ class PSMStatusTab(QWidget):
         self.setLayout(layout)
 
 
+class ScanPreviewWidget(QWidget):
+    """Visual preview of scan/step flow profile."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Create plot widget
+        self.plot_widget = pg.PlotWidget()
+        self.plot_widget.setBackground('w')
+        self.plot_widget.setMinimumHeight(150)
+
+        # Style the plot
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_widget.setLabel('left', 'Flow', units='lpm')
+        self.plot_widget.setLabel('bottom', 'Time', units='s')
+
+        # Create the curve
+        self.curve = self.plot_widget.plot(pen=pg.mkPen(color='#2196F3', width=2))
+
+        # Add phase labels (will be positioned dynamically)
+        self.phase_labels = []
+
+        layout.addWidget(self.plot_widget)
+        self.setLayout(layout)
+
+    def update_scan_preview(self, bottom_wait, up_scan, top_wait, down_scan, min_flow, max_flow):
+        """Update preview with scan mode exponential profile."""
+        # Calculate total time and generate time points
+        total_time = bottom_wait + up_scan + top_wait + down_scan
+
+        # Generate flow profile
+        times = []
+        flows = []
+
+        # Calculate scan power for exponential profile
+        scan_power = (max_flow / min_flow) ** (1.0 / up_scan)
+
+        # Phase 1: Bottom wait (flat at min_flow)
+        t_points = np.linspace(0, bottom_wait, max(2, int(bottom_wait)))
+        times.extend(t_points)
+        flows.extend([min_flow] * len(t_points))
+
+        # Phase 2: Up scan (exponential rise)
+        t_points = np.linspace(0, up_scan, max(10, int(up_scan)))
+        times.extend(t_points + bottom_wait)
+        flows.extend(min_flow * (scan_power ** t_points))
+
+        # Phase 3: Top wait (flat at max_flow)
+        t_points = np.linspace(0, top_wait, max(2, int(top_wait)))
+        times.extend(t_points + bottom_wait + up_scan)
+        flows.extend([max_flow] * len(t_points))
+
+        # Phase 4: Down scan (exponential fall)
+        t_points = np.linspace(0, down_scan, max(10, int(down_scan)))
+        times.extend(t_points + bottom_wait + up_scan + top_wait)
+        flows.extend(max_flow * ((1 / scan_power) ** t_points))
+
+        # Update curve
+        self.curve.setData(times, flows)
+
+        # Set axis ranges with padding
+        self.plot_widget.setXRange(0, total_time, padding=0.02)
+        self.plot_widget.setYRange(min_flow * 0.9, max_flow * 1.05, padding=0.02)
+
+        # Clear old labels
+        for label in self.phase_labels:
+            self.plot_widget.removeItem(label)
+        self.phase_labels.clear()
+
+        # Add phase indicator regions with subtle colors
+        # Bottom wait region
+        if bottom_wait > 5:
+            label = pg.TextItem(f"Wait\n{bottom_wait}s", anchor=(0.5, 1), color='#666')
+            label.setPos(bottom_wait / 2, min_flow * 0.95)
+            self.plot_widget.addItem(label)
+            self.phase_labels.append(label)
+
+        # Up scan region
+        label = pg.TextItem(f"Up\n{up_scan}s", anchor=(0.5, 0.5), color='#666')
+        label.setPos(bottom_wait + up_scan / 2, (min_flow + max_flow) / 2)
+        self.plot_widget.addItem(label)
+        self.phase_labels.append(label)
+
+        # Top wait region
+        if top_wait > 5:
+            label = pg.TextItem(f"Wait\n{top_wait}s", anchor=(0.5, 0), color='#666')
+            label.setPos(bottom_wait + up_scan + top_wait / 2, max_flow * 1.02)
+            self.plot_widget.addItem(label)
+            self.phase_labels.append(label)
+
+        # Down scan region
+        label = pg.TextItem(f"Down\n{down_scan}s", anchor=(0.5, 0.5), color='#666')
+        label.setPos(bottom_wait + up_scan + top_wait + down_scan / 2, (min_flow + max_flow) / 2)
+        self.plot_widget.addItem(label)
+        self.phase_labels.append(label)
+
+    def update_step_preview(self, step_time, steps):
+        """Update preview with step mode staircase profile."""
+        if not steps:
+            self.curve.setData([], [])
+            return
+
+        times = []
+        flows = []
+
+        current_time = 0
+        for step_flow in steps:
+            # Add horizontal line for this step
+            times.extend([current_time, current_time + step_time])
+            flows.extend([step_flow, step_flow])
+            current_time += step_time
+
+        # Update curve
+        self.curve.setData(times, flows)
+
+        # Set axis ranges
+        min_flow = min(steps) if steps else 0.1
+        max_flow = max(steps) if steps else 1.9
+        self.plot_widget.setXRange(0, current_time, padding=0.02)
+        self.plot_widget.setYRange(min_flow * 0.9, max_flow * 1.1, padding=0.02)
+
+        # Clear old labels
+        for label in self.phase_labels:
+            self.plot_widget.removeItem(label)
+        self.phase_labels.clear()
+
+    def update_fixed_preview(self, flow):
+        """Show flat line for fixed mode."""
+        times = [0, 60]  # 60 second window
+        flows = [flow, flow]
+        self.curve.setData(times, flows)
+        self.plot_widget.setXRange(0, 60, padding=0.02)
+        self.plot_widget.setYRange(0, 2.1, padding=0.02)
+
+        # Clear old labels
+        for label in self.phase_labels:
+            self.plot_widget.removeItem(label)
+        self.phase_labels.clear()
+
+        # Add label showing flow value
+        label = pg.TextItem(f"Fixed: {flow:.2f} lpm", anchor=(0.5, 0.5), color='#666')
+        label.setPos(30, flow)
+        self.plot_widget.addItem(label)
+        self.phase_labels.append(label)
+
+
 class PSMMeasureTab(QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__()
 
-        layout = QGridLayout() # create layout
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(8)
 
-        # scan mode widgets
-        self.scan = StartButton("Scan")
-        layout.addWidget(self.scan, 0, 0)
-        self.set_minimum_flow = SetWidget("Minimum flow", " lpm")
+        # === HEADER ROW: Mode selector, Start button, 10Hz checkbox (all on left) ===
+        header_widget = QWidget()
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
+
+        # Mode selector dropdown (larger)
+        mode_label = QLabel("Mode:")
+        mode_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.mode_selector = QComboBox()
+        self.mode_selector.addItems(["Scan", "Step", "Fixed"])
+        self.mode_selector.setMinimumWidth(120)
+        self.mode_selector.setMinimumHeight(35)
+        self.mode_selector.setStyleSheet("QComboBox { font-size: 14px; padding: 5px; }")
+
+        # Live status indicator (shows actual device state)
+        self.status_label = QLabel("● Idle")
+        self.status_label.setStyleSheet("color: #888; font-size: 13px;")
+        self.status_label.setMinimumWidth(120)
+
+        # Dynamic action button (Start/Update/Switch based on state)
+        self.update_button = QPushButton("▶ Start Scan")
+        self.update_button.setStyleSheet(STYLE_BTN_START)
+        self.update_button.setMinimumHeight(32)
+        self._device_mode = None  # Track device mode for button logic
+
+        # 10 Hz checkbox
+        self.ten_hz_checkbox = QCheckBox("10 Hz")
+        self.ten_hz_checkbox.setStyleSheet("font-size: 12px;")
+
+        # Layout: Mode selector, status, action button, stretch, 10Hz on right
+        header_layout.addWidget(mode_label)
+        header_layout.addWidget(self.mode_selector)
+        header_layout.addWidget(self.status_label)
+        header_layout.addWidget(self.update_button)
+        header_layout.addStretch()  # Push 10Hz to right
+        header_layout.addWidget(self.ten_hz_checkbox)
+        header_widget.setLayout(header_layout)
+        main_layout.addWidget(header_widget)
+
+        # === CONTENT AREA: Settings on left, Preview on right ===
+        content_widget = QWidget()
+        content_layout = QHBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(12)
+
+        # Left side: Settings + Update button in vertical layout
+        left_container = QWidget()
+        left_layout = QVBoxLayout()
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
+
+        # Stacked widget for mode-specific settings
+        self.mode_settings = QStackedWidget()
+        self.mode_settings.setMaximumWidth(300)
+
+        # Create scan settings widget
+        self.mode_settings.addWidget(self._create_scan_settings())
+
+        # Create step settings widget
+        self.mode_settings.addWidget(self._create_step_settings())
+
+        # Create fixed settings widget
+        self.mode_settings.addWidget(self._create_fixed_settings())
+
+        left_layout.addWidget(self.mode_settings, 1)  # stretch factor 1
+
+        left_container.setLayout(left_layout)
+        left_container.setMaximumWidth(300)
+        content_layout.addWidget(left_container)
+
+        # Right side: Preview graph (takes remaining space)
+        self.scan_preview = ScanPreviewWidget()
+        content_layout.addWidget(self.scan_preview, 1)  # stretch factor 1
+
+        content_widget.setLayout(content_layout)
+        main_layout.addWidget(content_widget, 1)  # stretch factor 1
+
+        self.setLayout(main_layout)
+
+        # Connect mode selector to switch settings and update preview
+        self.mode_selector.currentIndexChanged.connect(self._on_mode_changed)
+
+        # Connect individual timing controls to update total display
+        # (Preset selector handles setting all values when selected)
+        self.set_bottom_wait.value_spinbox.valueChanged.connect(self._update_total_from_individual)
+        self.set_up_scan_time.value_spinbox.valueChanged.connect(self._update_total_from_individual)
+        self.set_top_wait.value_spinbox.valueChanged.connect(self._update_total_from_individual)
+        self.set_down_scan_time.value_spinbox.valueChanged.connect(self._update_total_from_individual)
+
+        # Connect all scan controls to preview update
+        self.set_minimum_flow.value_spinbox.valueChanged.connect(self._update_scan_preview)
+        self.set_max_flow.value_spinbox.valueChanged.connect(self._update_scan_preview)
+        self.set_bottom_wait.value_spinbox.valueChanged.connect(self._update_scan_preview)
+        self.set_up_scan_time.value_spinbox.valueChanged.connect(self._update_scan_preview)
+        self.set_top_wait.value_spinbox.valueChanged.connect(self._update_scan_preview)
+        self.set_down_scan_time.value_spinbox.valueChanged.connect(self._update_scan_preview)
+
+        # Connect step mode controls to preview
+        self.step_time.value_spinbox.valueChanged.connect(self._update_step_preview)
+        self.steps.text_box.textChanged.connect(self._update_step_preview)
+
+        # Connect fixed mode control to preview
+        self.set_flow.value_spinbox.valueChanged.connect(self._update_fixed_preview)
+
+        self.ten_hz = self.ten_hz_checkbox
+
+        # Dirty state tracking for Update button
+        self._saved_settings = {}
+
+        # Connect value changes to dirty check (in addition to preview updates)
+        self.set_minimum_flow.value_spinbox.valueChanged.connect(self._check_settings_dirty)
+        self.set_max_flow.value_spinbox.valueChanged.connect(self._check_settings_dirty)
+        self.scan_time_preset.currentIndexChanged.connect(self._check_settings_dirty)
+        self.set_bottom_wait.value_spinbox.valueChanged.connect(self._check_settings_dirty)
+        self.set_up_scan_time.value_spinbox.valueChanged.connect(self._check_settings_dirty)
+        self.set_top_wait.value_spinbox.valueChanged.connect(self._check_settings_dirty)
+        self.set_down_scan_time.value_spinbox.valueChanged.connect(self._check_settings_dirty)
+        self.step_time.value_spinbox.valueChanged.connect(self._check_settings_dirty)
+        self.steps.text_box.textChanged.connect(self._check_settings_dirty)
+        self.set_flow.value_spinbox.valueChanged.connect(self._check_settings_dirty)
+
+        # Initial preview update
+        self._update_scan_preview()
+
+    def _get_current_settings(self):
+        """Get current settings from UI as a dict for dirty comparison."""
+        return {
+            'scan_min_flow': self.set_minimum_flow.value_spinbox.value(),
+            'scan_max_flow': self.set_max_flow.value_spinbox.value(),
+            'scan_preset_index': self.scan_time_preset.currentIndex(),
+            'scan_bottom_wait': self.set_bottom_wait.value_spinbox.value(),
+            'scan_up_time': self.set_up_scan_time.value_spinbox.value(),
+            'scan_top_wait': self.set_top_wait.value_spinbox.value(),
+            'scan_down_time': self.set_down_scan_time.value_spinbox.value(),
+            'step_time': self.step_time.value_spinbox.value(),
+            'step_values': self.steps.text_box.toPlainText(),
+            'fixed_flow': self.set_flow.value_spinbox.value(),
+        }
+
+    def _check_settings_dirty(self):
+        """Check if current settings differ from saved, update button."""
+        self._update_action_button()
+
+    def _mark_settings_clean(self):
+        """Snapshot current settings as 'saved' state."""
+        self._saved_settings = self._get_current_settings()
+        self._update_action_button()
+
+    def _on_update_sending(self):
+        """Show sending state and disable briefly to prevent spam."""
+        self.update_button.setText("Sending...")
+        self.update_button.setStyleSheet(STYLE_BTN_SENDING)
+        self.update_button.setEnabled(False)
+        # Re-enable after 1 second
+        QTimer.singleShot(1000, self._on_update_complete)
+
+    def _on_update_complete(self):
+        self.update_button.setEnabled(True)
+        self._update_action_button()
+
+    def update_device_status(self, mode_command: str, satflow: float):
+        """Update status label and action button based on device state."""
+        # Store current device mode for button logic
+        self._device_mode = mode_command
+
+        # Update status label
+        if mode_command == ":MEAS:SCAN":
+            self.status_label.setText(f"● Scanning ({satflow:.2f} lpm)")
+            self.status_label.setStyleSheet("color: #4CAF50; font-size: 13px; font-weight: bold;")
+        elif mode_command == ":MEAS:STEP":
+            self.status_label.setText(f"● Step ({satflow:.2f} lpm)")
+            self.status_label.setStyleSheet("color: #4CAF50; font-size: 13px; font-weight: bold;")
+        elif mode_command == ":MEAS:FIXD":
+            self.status_label.setText(f"● Fixed ({satflow:.2f} lpm)")
+            self.status_label.setStyleSheet("color: #4CAF50; font-size: 13px; font-weight: bold;")
+        else:
+            self.status_label.setText("● Idle")
+            self.status_label.setStyleSheet("color: #888; font-size: 13px;")
+
+        # Update action button
+        self._update_action_button()
+
+    def _update_action_button(self):
+        """Update action button text and style based on device and UI state."""
+        if not hasattr(self, '_device_mode'):
+            self._device_mode = None
+
+        ui_mode_index = self.mode_selector.currentIndex()
+        mode_names = ["Scan", "Step", "Fixed"]
+        ui_mode_name = mode_names[ui_mode_index] if ui_mode_index < len(mode_names) else "Scan"
+
+        # Map UI index to device mode command
+        ui_to_device_mode = {0: ":MEAS:SCAN", 1: ":MEAS:STEP", 2: ":MEAS:FIXD"}
+        ui_device_mode = ui_to_device_mode.get(ui_mode_index)
+
+        is_idle = self._device_mode not in [":MEAS:SCAN", ":MEAS:STEP", ":MEAS:FIXD"]
+        is_same_mode = self._device_mode == ui_device_mode
+
+        if is_idle:
+            # Device is idle - show Start button
+            self.update_button.setText(f"▶ Start {ui_mode_name}")
+            self.update_button.setStyleSheet(STYLE_BTN_START)
+        elif is_same_mode:
+            # Running same mode - show Update if settings changed
+            if self._is_settings_dirty():
+                self.update_button.setText("Update Settings")
+                self.update_button.setStyleSheet(STYLE_BTN_UPDATE)
+            else:
+                self.update_button.setText(f"● {ui_mode_name} Running")
+                self.update_button.setStyleSheet(STYLE_BTN_RUNNING)
+        else:
+            # Running different mode - show Switch button
+            self.update_button.setText(f"Switch to {ui_mode_name}")
+            self.update_button.setStyleSheet(STYLE_BTN_UPDATE)
+
+    def _is_settings_dirty(self):
+        """Check if current settings differ from saved."""
+        if not self._saved_settings:
+            return False
+        return self._get_current_settings() != self._saved_settings
+
+    @staticmethod
+    def compile_scan_from_params(params):
+        bottom_wait = params.get('scan_bottom_wait', 10)
+        up_time = params.get('scan_up_time', 110)
+        top_wait = params.get('scan_top_wait', 10)
+        down_time = params.get('scan_down_time', 110)
+        min_flow = params.get('scan_min_flow', 0.15)
+        max_flow = params.get('scan_max_flow', 1.9)
+        return f":SET:FLOW:SCAN {bottom_wait},{up_time},{top_wait},{down_time},{min_flow},{max_flow}"
+
+    @staticmethod
+    def compile_step_from_params(params):
+        step_time = params.get('step_time', 30)
+        step_values = params.get('step_values', '0.1\n0.7\n1.3\n1.9')
+        step_list = [s.strip() for s in step_values.split('\n') if s.strip()]
+        if not step_list:
+            return None
+        step_amount = len(step_list)
+        step_times = [step_time] * step_amount
+        return f":SET:FLOW:STEP {step_amount},{','.join(map(str, step_times))},{','.join(step_list)}"
+
+    @staticmethod
+    def compile_fixed_from_params(params):
+        flow = params.get('fixed_flow', 1.9)
+        return f":SET:FLOW:FXD {round(flow, 3)}"
+
+    def _create_scan_settings(self):
+        """Create widget with scan mode settings (compact layout)."""
+        widget = QWidget()
+        layout = QGridLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.setVerticalSpacing(4)
+
+        def make_compact(set_widget):
+            """Hide the 'Enter value' input to save space."""
+            set_widget.value_input.hide()
+            return set_widget
+
+        # Flow range (side by side)
+        self.set_minimum_flow = make_compact(SetWidget("Min flow", " lpm"))
         self.set_minimum_flow.value_spinbox.setValue(0.15)
-        layout.addWidget(self.set_minimum_flow, 1, 0)
-        self.set_max_flow = SetWidget("Maximum flow", " lpm")
-        self.set_max_flow.value_spinbox.setValue(1.9)
-        layout.addWidget(self.set_max_flow, 2, 0)
-        self.set_scan_time = SetWidget("Scan time", " s", integer=True)
-        self.set_scan_time.value_spinbox.setValue(240)
-        layout.addWidget(self.set_scan_time, 3, 0)
+        layout.addWidget(self.set_minimum_flow, 0, 0)
 
-        # step mode widgets
-        self.step = StartButton("Step")
-        layout.addWidget(self.step, 0, 1)
+        self.set_max_flow = make_compact(SetWidget("Max flow", " lpm"))
+        self.set_max_flow.value_spinbox.setValue(1.9)
+        layout.addWidget(self.set_max_flow, 0, 1)
+
+        # Total scan time preset selector
+        total_label = QLabel("Total scan time")
+        total_label.setAlignment(Qt.AlignCenter)
+        total_label.setStyleSheet("font-size: 14px;")
+        layout.addWidget(total_label, 1, 0, 1, 2)
+
+        self.scan_time_preset = QComboBox()
+        self.scan_time_preset.setMinimumHeight(30)
+        self.scan_time_preset.setStyleSheet("QComboBox { font-size: 14px; padding: 4px; }")
+        # Preset values (seconds)
+        self._scan_time_presets = [60, 120, 180, 240, 300, 360, 480]
+        for preset in self._scan_time_presets:
+            self.scan_time_preset.addItem(f"{preset} s")
+        self.scan_time_preset.setCurrentIndex(3)  # Default 240s
+        layout.addWidget(self.scan_time_preset, 2, 0, 1, 2)
+
+        # Hidden spinbox for compatibility (stores actual value)
+        self.set_scan_time = SetWidget("Total time", " s", integer=True)
+        self.set_scan_time.value_spinbox.setValue(240)
+        self.set_scan_time.hide()  # Hidden, just for storing value
+
+        # Timing controls in 2x2 grid
+        self.set_bottom_wait = make_compact(SetWidget("Bottom wait", " s", integer=True))
+        self.set_bottom_wait.value_spinbox.setValue(10)
+        self.set_bottom_wait.value_spinbox.setRange(1, 60)
+        layout.addWidget(self.set_bottom_wait, 3, 0)
+
+        self.set_up_scan_time = make_compact(SetWidget("Up scan", " s", integer=True))
+        self.set_up_scan_time.value_spinbox.setValue(110)
+        self.set_up_scan_time.value_spinbox.setRange(10, 600)
+        layout.addWidget(self.set_up_scan_time, 3, 1)
+
+        self.set_top_wait = make_compact(SetWidget("Top wait", " s", integer=True))
+        self.set_top_wait.value_spinbox.setValue(10)
+        self.set_top_wait.value_spinbox.setRange(1, 60)
+        layout.addWidget(self.set_top_wait, 4, 0)
+
+        self.set_down_scan_time = make_compact(SetWidget("Down scan", " s", integer=True))
+        self.set_down_scan_time.value_spinbox.setValue(110)
+        self.set_down_scan_time.value_spinbox.setRange(10, 600)
+        layout.addWidget(self.set_down_scan_time, 4, 1)
+
+        # Connect preset selector
+        self.scan_time_preset.currentIndexChanged.connect(self._on_preset_selected)
+
+        # Add stretch at bottom
+        layout.setRowStretch(5, 1)
+        widget.setLayout(layout)
+
+        # Note: Initial preset is applied in __init__ after scan_preview is created
+
+        return widget
+
+    def _on_preset_selected(self, index):
+        """Apply preset scan time and calculate individual times."""
+        if index < 0 or index >= len(self._scan_time_presets):
+            return
+
+        total_time = self._scan_time_presets[index]
+
+        # Default wait times
+        bottom_wait = 10
+        top_wait = 10
+
+        # Calculate scan times (remaining split evenly)
+        remaining = total_time - bottom_wait - top_wait
+        if remaining < 20:
+            remaining = 20
+        up_time = remaining // 2
+        down_time = remaining // 2
+        # Extra second to top wait if odd
+        if remaining % 2 != 0:
+            top_wait += 1
+
+        # Block signals to prevent circular updates
+        self.set_scan_time.value_spinbox.blockSignals(True)
+        self.set_bottom_wait.value_spinbox.blockSignals(True)
+        self.set_up_scan_time.value_spinbox.blockSignals(True)
+        self.set_top_wait.value_spinbox.blockSignals(True)
+        self.set_down_scan_time.value_spinbox.blockSignals(True)
+
+        self.set_scan_time.value_spinbox.setValue(total_time)
+        self.set_bottom_wait.value_spinbox.setValue(bottom_wait)
+        self.set_up_scan_time.value_spinbox.setValue(up_time)
+        self.set_top_wait.value_spinbox.setValue(top_wait)
+        self.set_down_scan_time.value_spinbox.setValue(down_time)
+
+        self.set_scan_time.value_spinbox.blockSignals(False)
+        self.set_bottom_wait.value_spinbox.blockSignals(False)
+        self.set_up_scan_time.value_spinbox.blockSignals(False)
+        self.set_top_wait.value_spinbox.blockSignals(False)
+        self.set_down_scan_time.value_spinbox.blockSignals(False)
+
+        # Update preview
+        self._update_scan_preview()
+
+    def _create_step_settings(self):
+        """Create widget with step mode settings."""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
         self.step_time = SetWidget("Step time", " s", integer=True)
         self.step_time.value_spinbox.setValue(30)
-        layout.addWidget(self.step_time, 1, 1)
+        self.step_time.value_input.hide()  # Compact
+        layout.addWidget(self.step_time)
+
         self.steps = StepsWidget()
         self.steps.text_box.setText("0.1\n0.7\n1.3\n1.9")
-        layout.addWidget(self.steps, 2, 1, 2, 1)
+        layout.addWidget(self.steps, 1)  # stretch factor 1
 
-        # fixed mode widgets
-        self.fixed = StartButton("Fixed")
-        layout.addWidget(self.fixed, 0, 2)
+        widget.setLayout(layout)
+        return widget
+
+    def _create_fixed_settings(self):
+        """Create widget with fixed mode settings."""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
         self.set_flow = SetWidget("Saturator flow", " lpm")
         self.set_flow.value_spinbox.setValue(1.9)
-        layout.addWidget(self.set_flow, 1, 2)
+        self.set_flow.value_input.hide()  # Compact
+        layout.addWidget(self.set_flow)
 
-        # 10 hz logging button
-        self.ten_hz = StartButton("10 Hz logging")
-        layout.addWidget(self.ten_hz, 4, 0, 1, 3)
-        # set button size policy to minimum
-        self.ten_hz.setSizePolicy(QSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum))
+        layout.addStretch()
+        widget.setLayout(layout)
+        return widget
 
-        self.setLayout(layout)
+    def _on_mode_changed(self, index):
+        """Handle mode selector change."""
+        self.mode_settings.setCurrentIndex(index)
+        if index == 0:  # Scan
+            self._update_scan_preview()
+        elif index == 1:  # Step
+            self._update_step_preview()
+        elif index == 2:  # Fixed
+            self._update_fixed_preview()
+        # Update action button text for new mode
+        self._update_action_button()
+
+    def get_current_mode(self):
+        """Return the currently selected mode command."""
+        mode_commands = [":MEAS:SCAN", ":MEAS:STEP", ":MEAS:FIXD"]
+        return mode_commands[self.mode_selector.currentIndex()]
     
-    def compile_scan(self): # compile scan command
-        scan_time = self.set_scan_time.value_spinbox.value()
-        if scan_time % 2 == 0: # if scan time is even
-            time = int((scan_time - 20) / 2)
-            parameters = [10, time, 10, time]
-        else: # if scan time is odd
-            time = int((scan_time - 21) / 2)
-            parameters = [11, time, 10, time]
-        # add minimum flow to parameters
-        parameters.append(round(self.set_minimum_flow.value_spinbox.value(), 3))
-        # add maximum flow to parameters
-        parameters.append(round(self.set_max_flow.value_spinbox.value(), 3))
+    def _update_scan_times_from_total(self, total_time):
+        """Recalculate individual scan times from total scan time."""
+        bottom_wait = self.set_bottom_wait.value_spinbox.value()
+        top_wait = self.set_top_wait.value_spinbox.value()
+
+        remaining = total_time - bottom_wait - top_wait
+        if remaining < 20:
+            remaining = 20  # Minimum 10s each for up/down
+
+        # Split remaining time evenly between up and down scans
+        up_time = remaining // 2
+        down_time = remaining // 2
+
+        # If odd remaining, add extra 1s to top wait instead
+        if remaining % 2 != 0:
+            self.set_top_wait.value_spinbox.blockSignals(True)
+            self.set_top_wait.value_spinbox.setValue(top_wait + 1)
+            self.set_top_wait.value_spinbox.blockSignals(False)
+
+        # Update spinboxes without triggering circular updates
+        self.set_up_scan_time.value_spinbox.blockSignals(True)
+        self.set_down_scan_time.value_spinbox.blockSignals(True)
+        self.set_up_scan_time.value_spinbox.setValue(up_time)
+        self.set_down_scan_time.value_spinbox.setValue(down_time)
+        self.set_up_scan_time.value_spinbox.blockSignals(False)
+        self.set_down_scan_time.value_spinbox.blockSignals(False)
+
+        # Update preview since signals were blocked
+        self._update_scan_preview()
+
+    def _update_total_from_individual(self):
+        """Update total scan time display when individual times change."""
+        total = (self.set_bottom_wait.value_spinbox.value() +
+                 self.set_up_scan_time.value_spinbox.value() +
+                 self.set_top_wait.value_spinbox.value() +
+                 self.set_down_scan_time.value_spinbox.value())
+
+        # Update hidden spinbox for compatibility
+        self.set_scan_time.value_spinbox.blockSignals(True)
+        self.set_scan_time.value_spinbox.setValue(total)
+        self.set_scan_time.value_spinbox.blockSignals(False)
+
+        # Update preset dropdown to show current total
+        # Check if it matches a preset
+        self.scan_time_preset.blockSignals(True)
+        if total in self._scan_time_presets:
+            idx = self._scan_time_presets.index(total)
+            self.scan_time_preset.setCurrentIndex(idx)
+        else:
+            # Show custom value - add temporarily if not in list
+            custom_text = f"{total} s (custom)"
+            # Check if we already have a custom entry
+            last_idx = self.scan_time_preset.count() - 1
+            if "(custom)" in self.scan_time_preset.itemText(last_idx):
+                self.scan_time_preset.setItemText(last_idx, custom_text)
+                self.scan_time_preset.setCurrentIndex(last_idx)
+            else:
+                self.scan_time_preset.addItem(custom_text)
+                self.scan_time_preset.setCurrentIndex(self.scan_time_preset.count() - 1)
+        self.scan_time_preset.blockSignals(False)
+
+    def _update_scan_preview(self):
+        """Update scan mode preview graph."""
+        self.scan_preview.update_scan_preview(
+            bottom_wait=self.set_bottom_wait.value_spinbox.value(),
+            up_scan=self.set_up_scan_time.value_spinbox.value(),
+            top_wait=self.set_top_wait.value_spinbox.value(),
+            down_scan=self.set_down_scan_time.value_spinbox.value(),
+            min_flow=self.set_minimum_flow.value_spinbox.value(),
+            max_flow=self.set_max_flow.value_spinbox.value()
+        )
+
+    def _update_step_preview(self):
+        """Update step mode preview graph."""
+        step_list = self.steps.text_box.toPlainText().split("\n")
+        steps = []
+        for step in step_list:
+            try:
+                steps.append(float(step))
+            except ValueError:
+                continue
+        self.scan_preview.update_step_preview(
+            step_time=self.step_time.value_spinbox.value(),
+            steps=steps
+        )
+
+    def _update_fixed_preview(self):
+        """Update fixed mode preview graph."""
+        self.scan_preview.update_fixed_preview(
+            flow=self.set_flow.value_spinbox.value()
+        )
+
+    def compile_scan(self):
+        """Compile scan command with individual timing parameters."""
+        bottom_wait = self.set_bottom_wait.value_spinbox.value()
+        up_scan = self.set_up_scan_time.value_spinbox.value()
+        top_wait = self.set_top_wait.value_spinbox.value()
+        down_scan = self.set_down_scan_time.value_spinbox.value()
+        min_flow = round(self.set_minimum_flow.value_spinbox.value(), 3)
+        max_flow = round(self.set_max_flow.value_spinbox.value(), 3)
+
+        parameters = [bottom_wait, up_scan, top_wait, down_scan, min_flow, max_flow]
         scan_string = ":SET:FLOW:SCAN " + ",".join(map(str, parameters))
         return scan_string
     
@@ -1154,20 +1827,79 @@ class PSMMeasureTab(QWidget):
         fixed_string = ":SET:FLOW:FXD " + str(round(self.set_flow.value_spinbox.value(), 3))
         return fixed_string
     
-    # change color of active mode
-    def change_mode_color(self, command):
-        # TODO only update if command is different from current
-        if command == ":MEAS:SCAN":
-            self.scan.change_color(1)
-            self.step.change_color(0)
-            self.fixed.change_color(0)
-        if command == ":MEAS:STEP":
-            self.scan.change_color(0)
-            self.step.change_color(1)
-            self.fixed.change_color(0)
-        if command == ":MEAS:FIXD":
-            self.scan.change_color(0)
-            self.step.change_color(0)
-            self.fixed.change_color(1)
+    def change_mode_color(self, command, satflow=0.0):
+        self._current_device_mode = command
+        self.update_device_status(command, satflow)
+
+    def save_settings(self, extra_params: dict):
+        """Save all measure tab settings to extra_params dict."""
+        # Scan mode settings
+        extra_params['scan_min_flow'] = self.set_minimum_flow.value_spinbox.value()
+        extra_params['scan_max_flow'] = self.set_max_flow.value_spinbox.value()
+        extra_params['scan_preset_index'] = self.scan_time_preset.currentIndex()
+        extra_params['scan_bottom_wait'] = self.set_bottom_wait.value_spinbox.value()
+        extra_params['scan_up_time'] = self.set_up_scan_time.value_spinbox.value()
+        extra_params['scan_top_wait'] = self.set_top_wait.value_spinbox.value()
+        extra_params['scan_down_time'] = self.set_down_scan_time.value_spinbox.value()
+
+        # Step mode settings
+        extra_params['step_time'] = self.step_time.value_spinbox.value()
+        extra_params['step_values'] = self.steps.text_box.toPlainText()
+
+        # Fixed mode settings
+        extra_params['fixed_flow'] = self.set_flow.value_spinbox.value()
+
+    def restore_settings(self, extra_params: dict):
+        """Restore measure tab settings from extra_params dict."""
+        # Block signals to prevent triggering saves during restore
+        widgets_to_block = [
+            self.set_minimum_flow.value_spinbox,
+            self.set_max_flow.value_spinbox,
+            self.scan_time_preset,
+            self.set_bottom_wait.value_spinbox,
+            self.set_up_scan_time.value_spinbox,
+            self.set_top_wait.value_spinbox,
+            self.set_down_scan_time.value_spinbox,
+            self.step_time.value_spinbox,
+            self.steps.text_box,
+            self.set_flow.value_spinbox,
+        ]
+
+        for widget in widgets_to_block:
+            widget.blockSignals(True)
+
+        try:
+            # Scan mode settings
+            if 'scan_min_flow' in extra_params:
+                self.set_minimum_flow.value_spinbox.setValue(extra_params['scan_min_flow'])
+            if 'scan_max_flow' in extra_params:
+                self.set_max_flow.value_spinbox.setValue(extra_params['scan_max_flow'])
+            if 'scan_bottom_wait' in extra_params:
+                self.set_bottom_wait.value_spinbox.setValue(extra_params['scan_bottom_wait'])
+            if 'scan_up_time' in extra_params:
+                self.set_up_scan_time.value_spinbox.setValue(extra_params['scan_up_time'])
+            if 'scan_top_wait' in extra_params:
+                self.set_top_wait.value_spinbox.setValue(extra_params['scan_top_wait'])
+            if 'scan_down_time' in extra_params:
+                self.set_down_scan_time.value_spinbox.setValue(extra_params['scan_down_time'])
+            if 'scan_preset_index' in extra_params:
+                self.scan_time_preset.setCurrentIndex(extra_params['scan_preset_index'])
+
+            # Step mode settings
+            if 'step_time' in extra_params:
+                self.step_time.value_spinbox.setValue(extra_params['step_time'])
+            if 'step_values' in extra_params:
+                self.steps.text_box.setPlainText(extra_params['step_values'])
+
+            # Fixed mode settings
+            if 'fixed_flow' in extra_params:
+                self.set_flow.value_spinbox.setValue(extra_params['fixed_flow'])
+        finally:
+            for widget in widgets_to_block:
+                widget.blockSignals(False)
+
+        self._update_scan_preview()
+        self._mark_settings_clean()
+
 
 __all__ = ['PSMWidget']

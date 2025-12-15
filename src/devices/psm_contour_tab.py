@@ -92,9 +92,10 @@ class PSMContourTab(QWidget):
     - Color: log10(dN/dlogDp) concentration
     """
 
-    def __init__(self, device_config, app_config=None):
+    def __init__(self, device_config, is_psm2: bool = False, app_config=None):
         super().__init__()
         self.device_config = device_config
+        self.is_psm2 = is_psm2  # True for PSM 2.0, False for Retrofit
         self.app_config = app_config  # Will be set later by PSM widget
         self.on_config_changed = None  # Callback to notify parent when config changes
 
@@ -135,6 +136,12 @@ class PSMContourTab(QWidget):
         self._prev_scan_status = "9"
         self._current_scan = None  # Dict with 'times', 'satflows', 'concentrations'
         self._prev_saturator_flow = None  # For 10Hz saturator flow interpolation
+        self._scan_start_time = None  # Timestamp when current scan phase started (for exponential flow calc)
+
+        # CPC transit delay: time for particles to travel from saturator to CPC counter
+        # Matches PSM Inversion Tool's CPC_time_lag = -3 seconds
+        # Concentration is shifted forward (paired with satflow from 3 seconds earlier)
+        self.cpc_transit_delay = 3  # seconds
 
         # Scan buffer (stores completed scans)
         self.scan_buffer = []  # List of dicts: {'time': float, 'bin_centers': array, 'dN_dlogDp': array}
@@ -715,6 +722,55 @@ class PSMContourTab(QWidget):
         if file_path:
             self._load_calibration(file_path)
 
+    def _fit_calibration(self, calibration_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Extend calibration to instrument max range ONLY if needed.
+
+        For PSM 2.0: max range is 12nm
+        For Retrofit: max range is 4nm
+
+        If calibration already covers the range (has points >= max_dp),
+        no extrapolation is needed - use calibration data as-is.
+        Only extrapolates using last 3 points when calibration doesn't reach max_dp.
+        """
+        max_dp = 12.0 if self.is_psm2 else 4.0
+        min_satflow = 0.05 if self.is_psm2 else 0.1
+
+        # If calibration already reaches max_dp, no extrapolation needed
+        if calibration_df['cal_diameter'].max() >= max_dp:
+            return calibration_df
+
+        # Extrapolate: fit last 3 points to extend to max_dp
+        slope, intercept = np.polyfit(
+            calibration_df['cal_satflow'].iloc[-3:],
+            calibration_df['cal_diameter'].iloc[-3:],
+            1
+        )
+
+        # Calculate satflow where diameter equals max_dp
+        satflow_for_max_dp = (max_dp - intercept) / slope
+
+        # Enforce minimum satflow limit
+        if satflow_for_max_dp < min_satflow:
+            satflow_for_max_dp = min_satflow
+
+        # Get detection efficiency from last point (use same value for extrapolated point)
+        last_efficiency = calibration_df['cal_maxdeteff'].iloc[-1]
+
+        # Add new row with extrapolated values
+        new_row = pd.DataFrame({
+            'cal_satflow': [satflow_for_max_dp],
+            'cal_diameter': [max_dp],
+            'cal_maxdeteff': [last_efficiency]
+        })
+        calibration_df = pd.concat([calibration_df, new_row], ignore_index=True)
+
+        # Sort by satflow in descending order and reset index
+        calibration_df = calibration_df.sort_values(by=['cal_satflow'], ascending=False)
+        calibration_df = calibration_df.reset_index(drop=True)
+
+        return calibration_df
+
     def _load_calibration(self, file_path: str, auto_load: bool = False):
         """
         Load calibration file and initialize bins using fixed PSM 2.0 bin limits.
@@ -739,6 +795,9 @@ class PSMContourTab(QWidget):
             # Rename columns if they don't have standard names
             if 'cal_satflow' not in self.calibration_df.columns:
                 self.calibration_df.columns = ['cal_satflow', 'cal_diameter', 'cal_maxdeteff'] + list(self.calibration_df.columns[3:])
+
+            # Extend calibration to full instrument range (12nm for PSM 2.0, 4nm for Retrofit)
+            self.calibration_df = self._fit_calibration(self.calibration_df)
 
             # Get min/max diameter from calibration
             min_diameter = self.calibration_df['cal_diameter'].min()
@@ -825,43 +884,64 @@ class PSMContourTab(QWidget):
         """
         return np.sqrt(x[:-1] * x[1:])
 
+    def _get_scan_times(self) -> tuple:
+        """Get scan timing parameters from PSM measure tab.
+
+        Returns:
+            Tuple of (up_scan_time, down_scan_time) in seconds
+        """
+        # Try to get from parent PSM widget's measure tab
+        try:
+            # self is PSMContourTab, parent should be PSMWidget
+            parent = self.parent()
+            if parent and hasattr(parent, 'measure_tab'):
+                measure_tab = parent.measure_tab
+                up_time = measure_tab.set_up_scan_time.value_spinbox.value()
+                down_time = measure_tab.set_down_scan_time.value_spinbox.value()
+                return (up_time, down_time)
+        except Exception:
+            pass
+
+        # Fallback defaults (typical 240s total: 10+110+10+110)
+        return (110, 110)
+
     def _calculate_flow_bins(self, fixed_bin_limits: np.ndarray) -> np.ndarray:
         """
         Calculate saturator flow bin limits from diameter limits.
 
-        This follows the PSM Inversion Tool algorithm:
+        This follows the PSM Inversion Tool algorithm exactly:
         1. Calculate geometric mean diameters between fixed limits (binning_limit)
-        2. Add min and max edges to binning_limit
+        2. Append max edge, then prepend min edge to binning_limit
         3. Convert diameter binning limits to flow via calibration interpolation
+        4. Flip to get ascending flow order (matches original algorithm)
 
         Args:
             fixed_bin_limits: Array of diameter bin edges (nm)
 
         Returns:
-            Array of saturator flow bin limits (lpm), flipped order (high flow = small diameter)
+            Array of saturator flow bin limits (lpm) in ASCENDING order (low flow to high flow)
         """
         fixed_bin_limits = np.array(fixed_bin_limits)
 
         # Calculate geometric mean diameters between bin limits
         binning_limit = self._geom_means(fixed_bin_limits)
 
-        # Add min and max edges
+        # Add min and max edges (same order as original: append max, then prepend min)
         max_bin_edge = fixed_bin_limits[-1]
         min_bin_edge = fixed_bin_limits[0]
-        binning_limit = np.append(min_bin_edge, binning_limit)
         binning_limit = np.append(binning_limit, max_bin_edge)
+        binning_limit = np.append(min_bin_edge, binning_limit)
+        # Result: [min_dp, geom_means..., max_dp] in ascending diameter order
 
-        # Convert diameter to flow via calibration interpolation
-        # binning_limit is in ascending diameter order: [small_dp, ..., large_dp]
-        # Calibration: small diameter -> high flow, large diameter -> low flow
-        # So interp result is [high_flow, ..., low_flow] - DESCENDING order
-        # This is what we want: bin 0 = highest flow = smallest diameter = highest concentration
-        bin_lims = np.interp(
+        # Convert diameter to flow via calibration interpolation and FLIP
+        # This matches the original: np.flip(np.interp(binning_limit, cal_diameter, cal_satflow))
+        bin_lims = np.flip(np.interp(
             binning_limit,
             self.calibration_df['cal_diameter'].values,
             self.calibration_df['cal_satflow'].values
-        )
-        # DO NOT flip - we want bin_lims in descending order (high flow to low flow)
+        ))
+        # Result: ascending flow order [low_flow, ..., high_flow]
+        # low_flow = large diameter, high_flow = small diameter
 
         return bin_lims
 
@@ -1204,10 +1284,11 @@ class PSMContourTab(QWidget):
                 include_point = True
 
             if include_point:
-                if not np.isnan(current_data.saturator_flow) and not np.isnan(current_data.cpc_concentration):
+                # Only add data if dilution-corrected concentration is available
+                if not np.isnan(current_data.saturator_flow) and not np.isnan(current_data.concentration_psm):
                     self._current_scan['times'].append(pd.Timestamp.now())
                     self._current_scan['satflows'].append(current_data.saturator_flow)
-                    self._current_scan['concentrations'].append(current_data.cpc_concentration)
+                    self._current_scan['concentrations'].append(current_data.concentration_psm)
 
         # Update scan progress UI
         self._update_scan_progress(scan_status, current_data.saturator_flow)
@@ -1248,6 +1329,7 @@ class PSMContourTab(QWidget):
             self._current_scan = {
                 'times': [], 'satflows': [], 'concentrations': [], 'type': 'up'
             }
+            self._scan_start_time = pd.Timestamp.now()  # Track when scan started
             self._prev_saturator_flow = None  # Reset on new scan
 
         elif scan_status == "3" and self._prev_scan_status != "3":
@@ -1256,6 +1338,7 @@ class PSMContourTab(QWidget):
             self._current_scan = {
                 'times': [], 'satflows': [], 'concentrations': [], 'type': 'down'
             }
+            self._scan_start_time = pd.Timestamp.now()  # Track when scan started
             self._prev_saturator_flow = None  # Reset on new scan
 
         # Accumulate data during scan
@@ -1267,13 +1350,53 @@ class PSMContourTab(QWidget):
                 include_point = True
 
             if include_point and not np.isnan(current_flow):
-                # Interpolate saturator flow for 10 points
-                if self._prev_saturator_flow is None:
-                    # First point in scan - use current flow for all
+                # Skip if corrections not available
+                dilution_corr = current_data.cpc_dilution_correction
+                poly_corr = current_data.poly_correction
+                if np.isnan(dilution_corr) or np.isnan(poly_corr) or poly_corr == 0:
+                    # Store flow for next interpolation but don't add data
+                    self._prev_saturator_flow = current_flow
+                    self._prev_scan_status = scan_status
+                    return
+
+                # Calculate saturator flow for 10 points using exponential scan profile
+                if self._scan_start_time is None or self.bin_limits_flow is None:
+                    # Fallback to current flow if we don't have timing info
                     flows = np.full(10, current_flow)
                 else:
-                    # Linear interpolation: index 0 is oldest (just after prev), index 9 is current
-                    flows = np.linspace(self._prev_saturator_flow, current_flow, 10)
+                    # Get scan parameters
+                    up_scan_time, down_scan_time = self._get_scan_times()
+                    min_flow = self.bin_limits_flow.min()
+                    max_flow = self.bin_limits_flow.max()
+
+                    # Select scan time based on scan type
+                    if self._current_scan['type'] == 'up':
+                        scan_time = up_scan_time
+                    else:
+                        scan_time = down_scan_time
+
+                    # Calculate scan power for exponential profile
+                    scan_power = (max_flow / min_flow) ** (1.0 / scan_time)
+
+                    # Calculate time since scan started
+                    base_time = pd.Timestamp.now()
+                    time_since_start = (base_time - self._scan_start_time).total_seconds()
+
+                    # Generate 10 flow values at 100ms intervals
+                    flows = np.zeros(10)
+                    for i in range(10):
+                        # Time offset: index 0 is -900ms, index 9 is now (0ms)
+                        t = time_since_start + (i - 9) * 0.1
+                        if t < 0:
+                            t = 0
+
+                        if self._current_scan['type'] == 'up':
+                            flows[i] = min_flow * (scan_power ** t)
+                        else:  # down
+                            flows[i] = max_flow * ((1 / scan_power) ** t)
+
+                    # Clamp flows to valid range
+                    flows = np.clip(flows, min_flow, max_flow)
 
                 # Add 10 data points
                 base_time = pd.Timestamp.now()
@@ -1284,11 +1407,13 @@ class PSMContourTab(QWidget):
                         continue
 
                     if not np.isnan(conc_float):
+                        # Apply dilution and poly corrections
+                        corrected_conc = conc_float * dilution_corr / poly_corr
                         # Time offset: index 0 is -900ms, index 9 is now (0ms)
                         time_offset = pd.Timedelta(milliseconds=(i - 9) * 100)
                         self._current_scan['times'].append(base_time + time_offset)
                         self._current_scan['satflows'].append(flows[i])
-                        self._current_scan['concentrations'].append(conc_float)
+                        self._current_scan['concentrations'].append(corrected_conc)
 
         # Store current flow for next interpolation
         self._prev_saturator_flow = current_flow
@@ -1365,7 +1490,7 @@ class PSMContourTab(QWidget):
             satflows = np.array(self._current_scan['satflows'])
             concentrations = np.array(self._current_scan['concentrations'])
 
-            # Bin and invert in one step (matching reference tool algorithm)
+            # Bin and invert (time shift applied inside _bin_and_invert_scan)
             dN_dlogDp = self._bin_and_invert_scan(satflows, concentrations)
 
             # Store scan result
@@ -1502,28 +1627,33 @@ class PSMContourTab(QWidget):
 
         Uses pd.cut for binning (like reference) and computes dN/dlogDp.
 
-        Returns:
-            Array of dN/dlogDp values for each bin (num_bins - 1 valid values + 1 zero)
-        """
-        # Debug: show satflow range for first few scans
-        if not hasattr(self, '_bin_debug_count'):
-            self._bin_debug_count = 0
+        The algorithm follows generateNinv() from InversionFunctions.py:
+        1. Bin data by satflow using pd.cut
+        2. Calculate mean concentration per bin
+        3. Calculate dN using diff() - first value is NaN, skip it
+        4. For each bin: dN/dlogDp = dN / dlogDp / MaxDeteff
 
+        Returns:
+            Array of dN/dlogDp values for each bin
+        """
         # Create DataFrame like reference tool
         df = pd.DataFrame({'satflow': satflows, 'concentration': concentrations})
 
-        # Use pd.cut to bin by satflow - bins must be sorted
-        # Sort flow limits ascending for pd.cut
-        bins_sorted = np.sort(self.bin_limits_flow)
-        df['bins'] = pd.cut(df['satflow'], bins_sorted)
+        # Apply CPC transit delay: concentration measured at time T corresponds to
+        # particles that passed through the saturator at time T-3 seconds.
+        # Shift concentration backward to align with the correct satflow.
+        df['concentration'] = df['concentration'].shift(-self.cpc_transit_delay)
 
-        # Calculate mean concentration per bin
+        # Use pd.cut to bin by satflow
+        # bin_limits_flow is now in ascending order (matches original after flip)
+        df['bins'] = pd.cut(df['satflow'], self.bin_limits_flow)
+
+        # Calculate mean concentration per bin (like reference groupRawData)
         bin_means = df.groupby('bins', observed=True)['concentration'].mean()
 
         # Calculate dN using diff (like reference line 187)
         # bin_means is sorted by interval (ascending flow = ascending index)
         # diff() gives: bin_means[i] - bin_means[i-1]
-        # Higher flow bin has higher concentration, so diff is positive
         dN = bin_means.diff()
 
         # Get calibration data
@@ -1531,44 +1661,43 @@ class PSMContourTab(QWidget):
         cal_diameter = self.calibration_df['cal_diameter'].values
         cal_maxdeteff = self.calibration_df['cal_maxdeteff'].values
 
-        # Calculate dlogDp and MaxDeteff for each bin
-        # Use the bin intervals to get flow edges
-        num_output_bins = len(bin_means) - 1  # First bin has NaN from diff
+        # Initialize output array
         dN_dlogDp = np.zeros(self.num_bins)
 
         bin_intervals = bin_means.index.tolist()
 
         for i, interval in enumerate(bin_intervals):
             if i == 0:
-                continue  # Skip first bin (NaN from diff)
+                continue  # Skip first bin (NaN from diff, like reference drops first row)
 
-            # Get flow edges for this bin
-            lower_flow = interval.left  # Lower flow edge
+            # Get flow edges for this bin (like reference lines 172, 176-177)
+            lower_flow = interval.left   # Lower flow edge
             upper_flow = interval.right  # Upper flow edge
 
-            # Convert flow to diameter
+            # Convert flow to diameter (like reference lines 176-177)
+            # Need to flip cal arrays for interp since cal is sorted by satflow descending
             lower_dp = np.interp(lower_flow, np.flip(cal_satflow), np.flip(cal_diameter))
             upper_dp = np.interp(upper_flow, np.flip(cal_satflow), np.flip(cal_diameter))
 
-            # dlogDp = log10(larger_dp) - log10(smaller_dp)
-            # lower_flow -> larger_dp, upper_flow -> smaller_dp
+            # dlogDp = log10(LowerDp) - log10(UpperDp) (like reference line 178)
+            # lower_flow -> larger_dp (LowerDp), upper_flow -> smaller_dp (UpperDp)
             dlogDp = np.log10(lower_dp) - np.log10(upper_dp)
 
-            # MaxDeteff at the smaller diameter (upper_dp, from upper_flow)
+            # MaxDeteff at UpperDp (the smaller diameter) (like reference line 179)
             max_det_eff = np.interp(upper_dp, cal_diameter, cal_maxdeteff)
 
             # Get dN for this bin
             dN_val = dN.iloc[i]
 
-            # Calculate dN/dlogDp with detection efficiency correction
-            # Set negative dN to 0 first (like reference line 192-194)
+            # Set negative dN to 0 (like reference lines 192-194)
             if pd.isna(dN_val) or dN_val < 0:
                 dN_val = 0
 
+            # Calculate dN/dlogDp (like reference lines 197, 199-200)
             if abs(dlogDp) > 0.001 and max_det_eff > 0:
-                # Map to output array - bin i-1 because we skip first bin
-                # Output bins go from smallest diameter to largest
-                output_idx = self.num_bins - i  # Reverse order for display
+                # Direct indexing: i=1 -> output[0], i=2 -> output[1], etc.
+                # This matches reference which drops first row
+                output_idx = i - 1
                 if 0 <= output_idx < self.num_bins:
                     dN_dlogDp[output_idx] = dN_val / abs(dlogDp) / max_det_eff
 
@@ -1580,16 +1709,15 @@ class PSMContourTab(QWidget):
 
         This follows the PSM Inversion Tool algorithm:
         1. Calculate dN using diff (difference between adjacent bins)
-        2. For each bin i, dN[i] = conc[i] - conc[i+1] (higher flow - lower flow)
+        2. dN[i] = conc[i+1] - conc[i] (higher flow - lower flow)
            Since higher flow has higher cumulative concentration, this gives positive dN
         3. Calculate dlogDp = log10(LowerDp) - log10(UpperDp) where LowerDp > UpperDp
-        4. Get MaxDeteff at the larger diameter (LowerDp)
+        4. Get MaxDeteff at UpperDp (the smaller diameter)
         5. dN/dlogDp = dN / dlogDp / MaxDeteff
 
-        The key insight: bin_limits_flow is ordered from high flow to low flow.
-        - High flow = small diameter = high cumulative concentration
-        - Low flow = large diameter = low cumulative concentration
-        - dN = particles in size range = conc[high_flow] - conc[low_flow] > 0
+        bin_limits_flow is now in ASCENDING order (low flow to high flow):
+        - bin_limits_flow[0] = lowest flow = largest diameter = lowest concentration
+        - bin_limits_flow[-1] = highest flow = smallest diameter = highest concentration
 
         Returns:
             Array of dN/dlogDp values (num_bins values, first one typically invalid)
@@ -1603,33 +1731,34 @@ class PSMContourTab(QWidget):
         cal_maxdeteff = self.calibration_df['cal_maxdeteff'].values
 
         # Calculate dN: difference between consecutive bins
-        # binned_concentrations[0] = highest flow = smallest diameter = highest conc
-        # binned_concentrations[n-1] = lowest flow = largest diameter = lowest conc
-        # dN[i] = conc[i] - conc[i+1] = particles in size range between bin i and i+1
-        # Use np.diff which computes arr[i+1] - arr[i], so negate to get arr[i] - arr[i+1]
-        dN_values = -np.diff(binned_concentrations)
+        # bin_limits_flow is ASCENDING: [low_flow, ..., high_flow]
+        # binned_concentrations[0] = lowest flow = largest diameter = lowest conc
+        # binned_concentrations[n-1] = highest flow = smallest diameter = highest conc
+        # np.diff computes arr[i+1] - arr[i], which gives positive dN (higher conc - lower conc)
+        dN_values = np.diff(binned_concentrations)
         # dN_values has num_bins - 1 elements
 
         for i in range(num_bins):
             # Get flow bin edges for this bin
-            # bin_limits_flow[i] = higher flow (smaller diameter)
-            # bin_limits_flow[i+1] = lower flow (larger diameter)
-            higher_flow = self.bin_limits_flow[i]
-            lower_flow = self.bin_limits_flow[i+1] if i+1 < len(self.bin_limits_flow) else self.bin_limits_flow[i]
+            # bin_limits_flow[i] = lower flow (larger diameter)
+            # bin_limits_flow[i+1] = higher flow (smaller diameter)
+            lower_flow = self.bin_limits_flow[i]
+            higher_flow = self.bin_limits_flow[i+1] if i+1 < len(self.bin_limits_flow) else self.bin_limits_flow[i]
 
             # Calculate diameters by interpolating from flow
             # Need to flip because calibration has diameter increasing with decreasing flow
-            smaller_dp = np.interp(higher_flow, np.flip(cal_satflow), np.flip(cal_diameter))
             larger_dp = np.interp(lower_flow, np.flip(cal_satflow), np.flip(cal_diameter))
+            smaller_dp = np.interp(higher_flow, np.flip(cal_satflow), np.flip(cal_diameter))
 
-            # Calculate dlogDp = log10(larger) - log10(smaller) > 0
+            # Calculate dlogDp = log10(LowerDp) - log10(UpperDp) (like reference line 178)
+            # LowerDp = larger_dp (from lower flow), UpperDp = smaller_dp (from higher flow)
             if larger_dp > 0 and smaller_dp > 0:
                 dlogDp = np.log10(larger_dp) - np.log10(smaller_dp)
             else:
                 dlogDp = 0
 
-            # Get MaxDeteff at the larger diameter (as in PSM Inversion Tool)
-            max_det_eff = np.interp(larger_dp, cal_diameter, cal_maxdeteff)
+            # Get MaxDeteff at UpperDp (the smaller diameter) - like reference line 179
+            max_det_eff = np.interp(smaller_dp, cal_diameter, cal_maxdeteff)
 
             # Get dN for this bin
             # For bin i, we need dN between bin i and bin i+1
@@ -1979,17 +2108,17 @@ class PSMContourTab(QWidget):
         Process a historical scan and add it to the scan buffer.
 
         Args:
-            scan_data: Dict with keys 'times', 'satflows', 'concentrations'
+            scan_data: Dict with keys 'times', 'satflows', 'concentrations_psm'
         """
         times = scan_data['times']
         satflows = scan_data['satflows']
-        concentrations = scan_data['concentrations']
+        concentrations_psm = scan_data['concentrations_psm']
 
         if len(times) < 3:
             return  # Skip incomplete scans
 
-        # Bin and invert in one step (matching reference tool algorithm)
-        dN_dlogDp = self._bin_and_invert_scan(satflows, concentrations)
+        # Bin and invert (time shift applied inside _bin_and_invert_scan)
+        dN_dlogDp = self._bin_and_invert_scan(satflows, concentrations_psm)
 
         # Store scan result
         scan_result = {
