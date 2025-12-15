@@ -1,9 +1,9 @@
 from PyQt5.QtGui import QPalette, QIntValidator, QDoubleValidator, QCursor, QPainter, QColor, QPen, QBrush
-from PyQt5.QtCore import Qt, pyqtSignal, QLocale, QTimer, QSize, QRectF, QPropertyAnimation, pyqtProperty, QEasingCurve
+from PyQt5.QtCore import Qt, pyqtSignal, QLocale, QTimer, QSize, QRectF, QPropertyAnimation, pyqtProperty, QEasingCurve, QEvent
 from PyQt5.QtWidgets import (QLabel, QWidget, QVBoxLayout, QLineEdit, QPushButton,
                              QSpinBox, QDoubleSpinBox, QTextEdit, QHBoxLayout,
                              QSizePolicy, QSplitter, QTabBar, QStyleFactory, QApplication,
-                             QToolButton, QScrollArea, QFrame)
+                             QToolButton, QScrollArea, QFrame, QToolTip)
 from datetime import datetime as dt
 import sys
 import logging
@@ -102,12 +102,32 @@ class IndicatorWidget(QFrame):
         layout.addWidget(self.value_label, alignment=Qt.AlignCenter) # add value label to layout, centered
         self.setLayout(layout) # apply layout
 
-    def setToolTip(self, tooltip):
-        """Set tooltip on the label only, not the whole widget."""
-        self.value_label.setToolTip(tooltip)
+        # Track tooltip visibility for persistence during updates
+        self._tooltip_visible = False
+        self._tooltip_pos = None
+
+    def event(self, e):
+        """Track tooltip show/hide to restore after value updates."""
+        if e.type() == QEvent.ToolTip:
+            self._tooltip_visible = True
+            self._tooltip_pos = e.globalPos()
+        elif e.type() == QEvent.Leave:
+            self._tooltip_visible = False
+            self._tooltip_pos = None
+        return super().event(e)
+
+    def _restore_tooltip(self):
+        """Restore tooltip if it was visible before update."""
+        if self._tooltip_visible and self._tooltip_pos and self.toolTip():
+            QToolTip.showText(self._tooltip_pos, self.toolTip(), self)
+
     # change indicator value, called by main window's update_values function
     def change_value(self, value):
         self.value_label.setText(self.name + "\n" + value)
+        # Restore tooltip after a brief delay to allow Qt to process the update
+        if self._tooltip_visible:
+            QTimer.singleShot(10, self._restore_tooltip)
+
     # change background color of value, called by main window's update_errors function
     def change_color(self, bit):
         if int(bit) == 1: # if bit is 1 (error), set background color to red
@@ -537,8 +557,8 @@ class SetWidget(QFrame):
             self.error = False
 
     def setToolTip(self, tooltip):
-        """Set tooltip on the label only, not the whole widget."""
-        self.name_label.setToolTip(tooltip)
+        """Set tooltip on the frame (not label) to prevent tooltip reset on value updates."""
+        super().setToolTip(tooltip)
 
 
 class SetStatusWidget(QFrame):
@@ -617,6 +637,25 @@ class SetStatusWidget(QFrame):
         self.stylesheet = self.styleSheet()
         self.error = False
 
+        # Track tooltip visibility for persistence during updates
+        self._tooltip_visible = False
+        self._tooltip_pos = None
+
+    def event(self, e):
+        """Track tooltip show/hide to restore after value updates."""
+        if e.type() == QEvent.ToolTip:
+            self._tooltip_visible = True
+            self._tooltip_pos = e.globalPos()
+        elif e.type() == QEvent.Leave:
+            self._tooltip_visible = False
+            self._tooltip_pos = None
+        return super().event(e)
+
+    def _restore_tooltip(self):
+        """Restore tooltip if it was visible before update."""
+        if self._tooltip_visible and self._tooltip_pos and self.toolTip():
+            QToolTip.showText(self._tooltip_pos, self.toolTip(), self)
+
     def value_input_return_pressed(self):
         """Handle value input when Enter is pressed."""
         value = self.value_input.text()
@@ -636,6 +675,9 @@ class SetStatusWidget(QFrame):
     def change_value(self, value):
         """Update the actual value display (called by device update)."""
         self.actual_label.setText(f"Act: {value}")
+        # Restore tooltip after a brief delay to allow Qt to process the update
+        if self._tooltip_visible:
+            QTimer.singleShot(10, self._restore_tooltip)
 
     def set_red_color(self):
         """Set error color on spinbox."""
@@ -657,8 +699,8 @@ class SetStatusWidget(QFrame):
             self.actual_label.setStyleSheet("QLabel { color: #666; padding: 2px; }")
 
     def setToolTip(self, tooltip):
-        """Set tooltip on the label only, not the whole widget."""
-        self.name_label.setToolTip(tooltip)
+        """Set tooltip on the frame (not label) to prevent tooltip reset on value updates."""
+        super().setToolTip(tooltip)
 
 
 class TabConfirmationPopup(QWidget):
