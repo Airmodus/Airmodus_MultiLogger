@@ -71,7 +71,7 @@ class PSMWidget(ComplexDevice):
         self.addTab(self.plot_tab, "Plot")
         # create contour plot tab for PSM (next to Plot tab)
         self.contour_tab = PSMContourTab(self.device_config, self.is_psm2)
-        self.addTab(self.contour_tab, "Contour")
+        self.addTab(self.contour_tab, "Distribution")
         # create combined control tab for PSM (merges Set and Status tabs)
         self.control_tab = PSMControlTab(self.is_psm2)
         self.addTab(self.control_tab, "Control")

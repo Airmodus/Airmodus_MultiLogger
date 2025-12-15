@@ -697,8 +697,9 @@ class PSMContourTab(QWidget):
         selector_layout.addLayout(btn_layout)
         ts_layout.addWidget(selector_widget)
 
-        # Time-series plot (right side)
-        self.bin_plot = pg.PlotWidget()
+        # Time-series plot (right side) with proper time axis
+        time_axis = pg.DateAxisItem(orientation='bottom')
+        self.bin_plot = pg.PlotWidget(axisItems={'bottom': time_axis})
         self.bin_plot.setLabel('left', 'dN/dlogDp', units='#/cm³')
         self.bin_plot.setLabel('bottom', 'Time')
         self.bin_plot.showGrid(x=True, y=True, alpha=0.3)
@@ -719,6 +720,14 @@ class PSMContourTab(QWidget):
             cb.deleteLater()
         self.bin_checkboxes = []
         self.selected_bins = set()
+
+        # Remove old curves from plot before resetting
+        if hasattr(self, 'bin_plot'):
+            for curve in self.bin_curves.values():
+                self.bin_plot.removeItem(curve)
+            # Clear legend as well
+            if hasattr(self, 'bin_plot_legend') and self.bin_plot_legend:
+                self.bin_plot_legend.clear()
         self.bin_curves = {}
 
         if not hasattr(self, 'bin_limits_dp') or self.bin_limits_dp is None:
