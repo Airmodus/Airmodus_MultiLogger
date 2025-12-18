@@ -918,9 +918,9 @@ class PSMWidget(ComplexDevice):
         if hasattr(self, 'set_app_config'):
             self.set_app_config(app_config)
 
-        # Restore 10 Hz checkbox state
+        # Restore 10 Hz toggle state
         if '10_hz' in device_config.extra_params:
-            self.measure_tab.ten_hz_checkbox.setChecked(bool(int(device_config.extra_params['10_hz'])))
+            self.measure_tab.ten_hz_checkbox.update_state(int(device_config.extra_params['10_hz']))
 
         # Restore measure tab settings (scan/step/fixed parameters)
         self.measure_tab.restore_settings(device_config.extra_params)
@@ -1494,9 +1494,8 @@ class PSMMeasureTab(QWidget):
         self.update_button.setMinimumHeight(32)
         self._device_mode = None  # Track device mode for button logic
 
-        # 10 Hz checkbox
-        self.ten_hz_checkbox = QCheckBox("10 Hz")
-        self.ten_hz_checkbox.setStyleSheet("font-size: 12px;")
+        # 10 Hz toggle switch
+        self.ten_hz_checkbox = ToggleSwitch("10 Hz", "Enable 10 Hz data logging rate")
 
         # Layout: Mode selector, status, action button, stretch, 10Hz on right
         header_layout.addWidget(mode_label)

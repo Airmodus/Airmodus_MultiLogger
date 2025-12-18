@@ -14,7 +14,7 @@ import pandas as pd
 from typing import Optional, List, Dict
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QFileDialog, QMenu, QSizePolicy, QCheckBox,
-                              QLineEdit, QSpinBox, QProgressBar, QGraphicsOpacityEffect,
+                              QLineEdit, QSpinBox, QDoubleSpinBox, QProgressBar, QGraphicsOpacityEffect,
                               QWidgetAction, QActionGroup, QComboBox, QStackedWidget,
                               QScrollArea, QFrame, QGroupBox, QButtonGroup)
 from PyQt5.QtCore import Qt, QPoint, QTimer, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal, QRegExp
@@ -35,6 +35,9 @@ BIN_PRESETS = {
     '14': [1.3, 1.4, 1.5, 1.7, 2, 2.5, 3, 3.5, 4, 5, 6.5, 8, 10],
 }
 
+# Default CPC transit delay in seconds (time for particles to travel from saturator to CPC)
+DEFAULT_CPC_TRANSIT_DELAY = 3
+
 # Color palette for bin time-series plot (14 distinct colors for max bins)
 BIN_COLORS = [
     (31, 119, 180),   # Blue
@@ -51,6 +54,60 @@ BIN_COLORS = [
     (152, 223, 138),  # Light green
     (255, 152, 150),  # Light red
     (197, 176, 213),  # Light purple
+]
+
+# Color palette for cumulative (N<) curves - varied greens/teals
+CUMULATIVE_COLORS = [
+    (0, 200, 150),    # Teal green
+    (50, 205, 50),    # Lime green
+    (0, 255, 127),    # Spring green
+    (34, 139, 34),    # Forest green
+    (60, 179, 113),   # Medium sea green
+    (0, 250, 154),    # Medium spring green
+    (143, 188, 143),  # Dark sea green
+    (46, 139, 87),    # Sea green
+    (128, 128, 0),    # Olive
+    (85, 107, 47),    # Dark olive green
+    (107, 142, 35),   # Olive drab
+    (154, 205, 50),   # Yellow green
+    (0, 128, 128),    # Teal
+    (32, 178, 170),   # Light sea green
+]
+
+# Color palette for exceedance (N>) curves - warm/red tones
+EXCEEDANCE_COLORS = [
+    (255, 99, 71),    # Tomato
+    (255, 69, 0),     # Orange red
+    (255, 140, 0),    # Dark orange
+    (255, 165, 0),    # Orange
+    (255, 215, 0),    # Gold
+    (218, 165, 32),   # Goldenrod
+    (255, 192, 203),  # Pink
+    (255, 182, 193),  # Light pink
+    (219, 112, 147),  # Pale violet red
+    (199, 21, 133),   # Medium violet red
+    (255, 20, 147),   # Deep pink
+    (255, 105, 180),  # Hot pink
+    (238, 130, 238),  # Violet
+    (221, 160, 221),  # Plum
+]
+
+# Color palette for individual bins in "All" mode - blue/purple shades
+INDIVIDUAL_ALL_COLORS = [
+    (65, 105, 225),   # Royal blue
+    (100, 149, 237),  # Cornflower blue
+    (30, 144, 255),   # Dodger blue
+    (0, 191, 255),    # Deep sky blue
+    (135, 206, 250),  # Light sky blue
+    (70, 130, 180),   # Steel blue
+    (106, 90, 205),   # Slate blue
+    (123, 104, 238),  # Medium slate blue
+    (147, 112, 219),  # Medium purple
+    (138, 43, 226),   # Blue violet
+    (75, 0, 130),     # Indigo
+    (72, 61, 139),    # Dark slate blue
+    (0, 0, 205),      # Medium blue
+    (25, 25, 112),    # Midnight blue
 ]
 
 
@@ -225,6 +282,7 @@ class PSMContourTab(QWidget):
         self.calibration_loaded = False
         self.plot_initialized = False
         self._historical_data_loaded = False  # Track if we've loaded historical data
+        self._history_ever_loaded = False  # Track if history was ever loaded (persists after clear)
         self._loading_in_progress = False  # Track if loading is currently happening
         self._loader_thread = None  # Background thread for loading historical data
 
@@ -248,7 +306,7 @@ class PSMContourTab(QWidget):
         # CPC transit delay: time for particles to travel from saturator to CPC counter
         # Matches PSM Inversion Tool's CPC_time_lag = -3 seconds
         # Concentration is shifted forward (paired with satflow from 3 seconds earlier)
-        self.cpc_transit_delay = 3  # seconds
+        self.cpc_transit_delay = DEFAULT_CPC_TRANSIT_DELAY  # seconds
 
         # Scan buffer (stores completed scans)
         self.scan_buffer = []  # List of dicts: {'time': float, 'bin_centers': array, 'dN_dlogDp': array}
@@ -272,21 +330,29 @@ class PSMContourTab(QWidget):
 
         # Currently loaded file
         self.loaded_file_path = None
+        self._loaded_files_info = None  # Info string for settings menu
 
-        # File boundary markers for visualization
-        self.file_boundary_lines = []  # List of PlotCurveItem items
-        self.file_boundary_labels = []  # List of TextItem items
+        # File boundary tracking for hover display
+        self._last_file_ranges = []  # List of (file_name, x_start, x_end) tuples
 
         # Bin time-series plot state
         self.selected_bins = set()  # Indices of selected bins for time-series plot
         self.bin_curves = {}  # bin_index -> PlotCurveItem
         self.bin_checkboxes = []  # List of QCheckBox widgets
 
-        # Cumulative mode state
-        self.bin_plot_mode = "Individual"  # "Individual" or "Cumulative"
+        # Cumulative mode state (N<)
+        self.bin_plot_mode = "Individual"  # "Individual", "N<", "N>", or "All"
         self.selected_cumulative = set()  # Indices of selected cumulative cutoffs
         self.cumulative_curves = {}  # cutoff_index -> PlotCurveItem
         self.cumulative_checkboxes = []  # List of QCheckBox widgets
+
+        # Exceedance mode state (N>)
+        self.selected_exceedance = set()  # Indices of selected exceedance cutoffs
+        self.exceedance_curves = {}  # cutoff_index -> PlotCurveItem
+        self.exceedance_checkboxes = []  # List of QCheckBox widgets
+
+        # Group header labels (for "All" mode)
+        self.group_header_labels = []  # List of QLabel widgets
 
         # Create UI
         self.main_layout = QVBoxLayout()
@@ -385,23 +451,6 @@ class PSMContourTab(QWidget):
 
         top_bar.addSpacing(15)
 
-        # Follow latest toggle - auto-scroll to show newest data
-        self.follow_checkbox = QCheckBox("Follow")
-        self.follow_checkbox.setChecked(self.follow_latest)
-        self.follow_checkbox.setToolTip("Auto-scroll to show latest scan data")
-        self.follow_checkbox.setToolTipDuration(10000)  # 10 seconds
-        self.follow_checkbox.toggled.connect(self._on_follow_toggle)
-        top_bar.addWidget(self.follow_checkbox)
-
-        top_bar.addSpacing(10)
-
-        # File label to show which data file is loaded
-        self.file_label = QLabel("")
-        self.file_label.setStyleSheet("color: #666; font-size: 11px;")
-        top_bar.addWidget(self.file_label)
-
-        top_bar.addSpacing(10)
-
         # Date label showing current date
         self.date_label = QLabel("")
         self.date_label.setStyleSheet("color: #888; font-size: 11px;")
@@ -432,6 +481,12 @@ class PSMContourTab(QWidget):
             }
         """)
         top_bar.addWidget(self.scan_progress_bar)
+
+        # 10Hz indicator label (shown when 10Hz mode is enabled)
+        self.hz10_label = QLabel("10Hz")
+        self.hz10_label.setStyleSheet("color: #4CAF50; font-size: 10px; font-weight: bold;")
+        self.hz10_label.setVisible(False)  # Hidden by default
+        top_bar.addWidget(self.hz10_label)
 
         top_bar.addSpacing(10)
 
@@ -537,11 +592,18 @@ class PSMContourTab(QWidget):
         self.plot.addItem(self.value_label, ignoreBounds=True)
         self.value_label.hide()
 
+        # File name overlay label (bottom-left corner)
+        self.file_hover_label = pg.TextItem(text="", color=(150, 150, 150), anchor=(0, 1))
+        file_font = pg.QtGui.QFont()
+        file_font.setPointSize(8)
+        self.file_hover_label.setFont(file_font)
+        self.plot.addItem(self.file_hover_label, ignoreBounds=True)
+        self.file_hover_label.hide()
+
         # Connect mouse move signal for crosshair
         self.plot.scene().sigMouseMoved.connect(self._on_mouse_moved)
-
-        # Connect view range change to update file labels on zoom
-        self.plot.sigRangeChanged.connect(self._on_view_range_changed)
+        # Enable mouse tracking so sigMouseMoved fires without button press
+        self.graphics_widget.viewport().setMouseTracking(True)
 
         # Create stacked widget to toggle between contour and bin time-series views
         self.plot_stack = QStackedWidget()
@@ -641,9 +703,9 @@ class PSMContourTab(QWidget):
         selector_layout.setContentsMargins(5, 5, 5, 5)
         selector_layout.setSpacing(2)
 
-        # Mode dropdown (Individual / Cumulative)
+        # Mode dropdown (Individual / N< / N> / All)
         self.bin_mode_combo = QComboBox()
-        self.bin_mode_combo.addItems(["Individual", "Cumulative"])
+        self.bin_mode_combo.addItems(["Individual", "N<", "N>", "All"])
         self.bin_mode_combo.setFixedHeight(24)
         self.bin_mode_combo.setStyleSheet("""
             QComboBox {
@@ -666,6 +728,8 @@ class PSMContourTab(QWidget):
                 selection-background-color: #4a90d9;
             }
         """)
+        # Ensure dropdown shows all items without scrolling
+        self.bin_mode_combo.view().setMinimumHeight(80)
         self.bin_mode_combo.currentTextChanged.connect(self._on_bin_mode_changed)
         selector_layout.addWidget(self.bin_mode_combo)
 
@@ -683,7 +747,7 @@ class PSMContourTab(QWidget):
         self.checkbox_container = QWidget()
         self.checkbox_layout = QVBoxLayout(self.checkbox_container)
         self.checkbox_layout.setContentsMargins(5, 5, 5, 5)
-        self.checkbox_layout.setSpacing(2)
+        self.checkbox_layout.setSpacing(8)
         self.checkbox_layout.addStretch()  # Push checkboxes to top
 
         scroll_area.setWidget(self.checkbox_container)
@@ -736,8 +800,9 @@ class PSMContourTab(QWidget):
         self.bin_plot.setClipToView(True)
         self.bin_plot.setBackground('k')
 
-        # Add legend
+        # Add legend with white text for visibility on black background
         self.bin_plot_legend = self.bin_plot.addLegend(offset=(10, 10))
+        self.bin_plot_legend.setLabelTextColor('w')
 
         ts_layout.addWidget(self.bin_plot, stretch=1)
 
@@ -770,7 +835,11 @@ class PSMContourTab(QWidget):
             label = f"{lower:.1f}-{upper:.1f} nm"
 
             cb = QCheckBox(label)
-            color = BIN_COLORS[i % len(BIN_COLORS)]
+            # Use blue shades in "All" mode, otherwise use standard BIN_COLORS
+            if self.bin_plot_mode == "All":
+                color = INDIVIDUAL_ALL_COLORS[i % len(INDIVIDUAL_ALL_COLORS)]
+            else:
+                color = BIN_COLORS[i % len(BIN_COLORS)]
             cb.setStyleSheet(f"""
                 QCheckBox {{
                     color: rgb({color[0]}, {color[1]}, {color[2]});
@@ -792,8 +861,11 @@ class PSMContourTab(QWidget):
         """Handle bin checkbox toggle."""
         if checked:
             self.selected_bins.add(bin_idx)
-            # Create curve with color
-            color = BIN_COLORS[bin_idx % len(BIN_COLORS)]
+            # Use blue shades in "All" mode, otherwise use standard BIN_COLORS
+            if self.bin_plot_mode == "All":
+                color = INDIVIDUAL_ALL_COLORS[bin_idx % len(INDIVIDUAL_ALL_COLORS)]
+            else:
+                color = BIN_COLORS[bin_idx % len(BIN_COLORS)]
             pen = pg.mkPen(color=color, width=2)
             label = self._get_bin_label(bin_idx)
             curve = self.bin_plot.plot(pen=pen, name=label)
@@ -821,8 +893,18 @@ class PSMContourTab(QWidget):
         if self.bin_plot_mode == "Individual":
             for cb in self.bin_checkboxes:
                 cb.setChecked(True)
-        else:  # Cumulative
+        elif self.bin_plot_mode == "N<":
             for cb in self.cumulative_checkboxes:
+                cb.setChecked(True)
+        elif self.bin_plot_mode == "N>":
+            for cb in self.exceedance_checkboxes:
+                cb.setChecked(True)
+        elif self.bin_plot_mode == "All":
+            for cb in self.bin_checkboxes:
+                cb.setChecked(True)
+            for cb in self.cumulative_checkboxes:
+                cb.setChecked(True)
+            for cb in self.exceedance_checkboxes:
                 cb.setChecked(True)
 
     def _clear_all_bins(self):
@@ -830,8 +912,18 @@ class PSMContourTab(QWidget):
         if self.bin_plot_mode == "Individual":
             for cb in self.bin_checkboxes:
                 cb.setChecked(False)
-        else:  # Cumulative
+        elif self.bin_plot_mode == "N<":
             for cb in self.cumulative_checkboxes:
+                cb.setChecked(False)
+        elif self.bin_plot_mode == "N>":
+            for cb in self.exceedance_checkboxes:
+                cb.setChecked(False)
+        elif self.bin_plot_mode == "All":
+            for cb in self.bin_checkboxes:
+                cb.setChecked(False)
+            for cb in self.cumulative_checkboxes:
+                cb.setChecked(False)
+            for cb in self.exceedance_checkboxes:
                 cb.setChecked(False)
 
     def _create_cumulative_checkboxes(self):
@@ -862,7 +954,11 @@ class PSMContourTab(QWidget):
             label = f"< {upper:.1f} nm"
 
             cb = QCheckBox(label)
-            color = BIN_COLORS[i % len(BIN_COLORS)]
+            # Use distinct colors only in "All" mode, otherwise use standard BIN_COLORS
+            if self.bin_plot_mode == "All":
+                color = CUMULATIVE_COLORS[i % len(CUMULATIVE_COLORS)]
+            else:
+                color = BIN_COLORS[i % len(BIN_COLORS)]
             cb.setStyleSheet(f"""
                 QCheckBox {{
                     color: rgb({color[0]}, {color[1]}, {color[2]});
@@ -884,8 +980,11 @@ class PSMContourTab(QWidget):
         """Handle cumulative checkbox toggle."""
         if checked:
             self.selected_cumulative.add(cutoff_idx)
-            # Create curve with color
-            color = BIN_COLORS[cutoff_idx % len(BIN_COLORS)]
+            # Use distinct colors only in "All" mode, otherwise use standard BIN_COLORS
+            if self.bin_plot_mode == "All":
+                color = CUMULATIVE_COLORS[cutoff_idx % len(CUMULATIVE_COLORS)]
+            else:
+                color = BIN_COLORS[cutoff_idx % len(BIN_COLORS)]
             pen = pg.mkPen(color=color, width=2)
             label = self._get_cumulative_label(cutoff_idx)
             curve = self.bin_plot.plot(pen=pen, name=label)
@@ -904,11 +1003,90 @@ class PSMContourTab(QWidget):
         if hasattr(self, 'bin_limits_dp') and self.bin_limits_dp is not None:
             if cutoff_idx < len(self.bin_limits_dp) - 1:
                 upper = self.bin_limits_dp[cutoff_idx + 1]
-                return f"< {upper:.1f}"
-        return f"< Bin {cutoff_idx}"
+                return f"N&lt;{upper:.1f}"
+        return f"N&lt;Bin {cutoff_idx}"
+
+    def _create_exceedance_checkboxes(self):
+        """Create checkboxes for exceedance cutoffs (> X nm)."""
+        # Clear existing exceedance checkboxes
+        for cb in self.exceedance_checkboxes:
+            self.checkbox_layout.removeWidget(cb)
+            cb.deleteLater()
+        self.exceedance_checkboxes = []
+        self.selected_exceedance = set()
+
+        # Remove old exceedance curves from plot
+        if hasattr(self, 'bin_plot'):
+            for curve in self.exceedance_curves.values():
+                self.bin_plot.removeItem(curve)
+            if hasattr(self, 'bin_plot_legend') and self.bin_plot_legend:
+                self.bin_plot_legend.clear()
+        self.exceedance_curves = {}
+
+        if not hasattr(self, 'bin_limits_dp') or self.bin_limits_dp is None:
+            return
+
+        # Create checkbox for each bin lower boundary (exceedance > X nm)
+        num_bins = len(self.bin_limits_dp) - 1
+        for i in range(num_bins):
+            lower = self.bin_limits_dp[i]  # Lower boundary of bin i
+            label = f"> {lower:.1f} nm"
+
+            cb = QCheckBox(label)
+            # Use distinct colors only in "All" mode, otherwise use standard BIN_COLORS
+            if self.bin_plot_mode == "All":
+                color = EXCEEDANCE_COLORS[i % len(EXCEEDANCE_COLORS)]
+            else:
+                color = BIN_COLORS[i % len(BIN_COLORS)]
+            cb.setStyleSheet(f"""
+                QCheckBox {{
+                    color: rgb({color[0]}, {color[1]}, {color[2]});
+                    font-size: 10px;
+                }}
+                QCheckBox::indicator {{
+                    width: 12px;
+                    height: 12px;
+                }}
+            """)
+            cb.setToolTip(f"Show cumulative concentration for particles > {lower:.1f} nm")
+            cb.toggled.connect(lambda checked, idx=i: self._on_exceedance_toggled(idx, checked))
+
+            # Insert before the stretch
+            self.checkbox_layout.insertWidget(self.checkbox_layout.count() - 1, cb)
+            self.exceedance_checkboxes.append(cb)
+
+    def _on_exceedance_toggled(self, cutoff_idx: int, checked: bool):
+        """Handle exceedance checkbox toggle."""
+        if checked:
+            self.selected_exceedance.add(cutoff_idx)
+            # Use distinct colors only in "All" mode, otherwise use standard BIN_COLORS
+            if self.bin_plot_mode == "All":
+                color = EXCEEDANCE_COLORS[cutoff_idx % len(EXCEEDANCE_COLORS)]
+            else:
+                color = BIN_COLORS[cutoff_idx % len(BIN_COLORS)]
+            pen = pg.mkPen(color=color, width=2)
+            label = self._get_exceedance_label(cutoff_idx)
+            curve = self.bin_plot.plot(pen=pen, name=label)
+            self.exceedance_curves[cutoff_idx] = curve
+        else:
+            self.selected_exceedance.discard(cutoff_idx)
+            if cutoff_idx in self.exceedance_curves:
+                self.bin_plot.removeItem(self.exceedance_curves[cutoff_idx])
+                del self.exceedance_curves[cutoff_idx]
+
+        # Update the time-series plot
+        self._update_bin_timeseries()
+
+    def _get_exceedance_label(self, cutoff_idx: int) -> str:
+        """Get label for an exceedance cutoff index."""
+        if hasattr(self, 'bin_limits_dp') and self.bin_limits_dp is not None:
+            if cutoff_idx < len(self.bin_limits_dp):
+                lower = self.bin_limits_dp[cutoff_idx]
+                return f"N>{lower:.1f}"
+        return f"N>Bin {cutoff_idx}"
 
     def _on_bin_mode_changed(self, mode: str):
-        """Handle mode dropdown change between Individual and Cumulative."""
+        """Handle mode dropdown change between Individual, N<, N>, and All."""
         self.bin_plot_mode = mode
 
         # Clear all curves and legend
@@ -917,32 +1095,130 @@ class PSMContourTab(QWidget):
                 self.bin_plot.removeItem(curve)
             for curve in self.cumulative_curves.values():
                 self.bin_plot.removeItem(curve)
+            for curve in self.exceedance_curves.values():
+                self.bin_plot.removeItem(curve)
             if hasattr(self, 'bin_plot_legend') and self.bin_plot_legend:
                 self.bin_plot_legend.clear()
 
         self.bin_curves = {}
         self.cumulative_curves = {}
+        self.exceedance_curves = {}
         self.selected_bins = set()
         self.selected_cumulative = set()
+        self.selected_exceedance = set()
 
-        # Hide current checkboxes
+        # Hide all checkboxes and group headers
         for cb in self.bin_checkboxes:
             cb.hide()
             cb.setChecked(False)
         for cb in self.cumulative_checkboxes:
             cb.hide()
             cb.setChecked(False)
+        for cb in self.exceedance_checkboxes:
+            cb.hide()
+            cb.setChecked(False)
+        for lbl in self.group_header_labels:
+            lbl.hide()
 
-        # Show appropriate checkboxes
+        # Show appropriate checkboxes based on mode
+        # Recreate checkboxes to get correct colors for mode
         if mode == "Individual":
+            # Always recreate to get correct colors for this mode
+            self._create_bin_checkboxes()
             for cb in self.bin_checkboxes:
                 cb.show()
-        else:  # Cumulative
-            # Create cumulative checkboxes if not yet created
-            if not self.cumulative_checkboxes:
-                self._create_cumulative_checkboxes()
+        elif mode == "N<":
+            # Always recreate to get correct colors for this mode
+            self._create_cumulative_checkboxes()
             for cb in self.cumulative_checkboxes:
                 cb.show()
+        elif mode == "N>":
+            # Always recreate to get correct colors for this mode
+            self._create_exceedance_checkboxes()
+            for cb in self.exceedance_checkboxes:
+                cb.show()
+        elif mode == "All":
+            # Show all checkbox groups with headers
+            self._show_all_mode_checkboxes()
+
+    def _show_all_mode_checkboxes(self):
+        """Show all checkbox groups with headers for 'All' mode."""
+        # Create group headers if not exist
+        if not self.group_header_labels:
+            self._create_group_headers()
+
+        # Always recreate checkboxes to get correct colors for "All" mode
+        self._create_bin_checkboxes()
+        self._create_cumulative_checkboxes()
+        self._create_exceedance_checkboxes()
+
+        # Clear the layout (remove all widgets but keep them)
+        while self.checkbox_layout.count() > 0:
+            item = self.checkbox_layout.takeAt(0)
+            # Don't delete items, just remove from layout
+
+        # Add widgets in order: header + checkboxes for each group
+        # Individual
+        if len(self.group_header_labels) > 0:
+            self.checkbox_layout.addWidget(self.group_header_labels[0])
+            self.group_header_labels[0].show()
+        for cb in self.bin_checkboxes:
+            self.checkbox_layout.addWidget(cb)
+            cb.show()
+
+        # N< (cumulative) - header has top margin built in
+        if len(self.group_header_labels) > 1:
+            self.checkbox_layout.addWidget(self.group_header_labels[1])
+            self.group_header_labels[1].show()
+        for cb in self.cumulative_checkboxes:
+            self.checkbox_layout.addWidget(cb)
+            cb.show()
+
+        # N> (exceedance) - header has top margin built in
+        if len(self.group_header_labels) > 2:
+            self.checkbox_layout.addWidget(self.group_header_labels[2])
+            self.group_header_labels[2].show()
+        for cb in self.exceedance_checkboxes:
+            self.checkbox_layout.addWidget(cb)
+            cb.show()
+
+        # Add stretch at the end
+        self.checkbox_layout.addStretch()
+
+    def _create_group_headers(self):
+        """Create group header labels for 'All' mode."""
+        # Clear existing headers
+        for lbl in self.group_header_labels:
+            self.checkbox_layout.removeWidget(lbl)
+            lbl.deleteLater()
+        self.group_header_labels = []
+
+        # First header (no extra top space)
+        first_header_style = """
+            QLabel {
+                color: #aaaaaa;
+                font-size: 10px;
+                font-weight: bold;
+                padding: 2px 0px;
+            }
+        """
+
+        # Subsequent headers (with top padding for spacing)
+        spaced_header_style = """
+            QLabel {
+                color: #aaaaaa;
+                font-size: 10px;
+                font-weight: bold;
+                padding: 12px 0px 2px 0px;
+            }
+        """
+
+        headers = ["Individual:", "N<:", "N>:"]
+        for i, header_text in enumerate(headers):
+            lbl = QLabel(header_text)
+            lbl.setStyleSheet(first_header_style if i == 0 else spaced_header_style)
+            lbl.hide()  # Start hidden
+            self.group_header_labels.append(lbl)
 
     def _update_bin_timeseries(self):
         """Update time-series curves from scan_buffer."""
@@ -952,8 +1228,13 @@ class PSMContourTab(QWidget):
         # Check if any selections in current mode
         if self.bin_plot_mode == "Individual" and len(self.selected_bins) == 0:
             return
-        if self.bin_plot_mode == "Cumulative" and len(self.selected_cumulative) == 0:
+        if self.bin_plot_mode == "N<" and len(self.selected_cumulative) == 0:
             return
+        if self.bin_plot_mode == "N>" and len(self.selected_exceedance) == 0:
+            return
+        if self.bin_plot_mode == "All":
+            if len(self.selected_bins) == 0 and len(self.selected_cumulative) == 0 and len(self.selected_exceedance) == 0:
+                return
 
         try:
             # Get time window settings (same as contour)
@@ -970,8 +1251,8 @@ class PSMContourTab(QWidget):
                     return pd.Timestamp(ts)
                 return pd.Timestamp(ts)
 
-            if self.bin_plot_mode == "Individual":
-                # Extract data for each selected bin
+            # Update Individual bin curves
+            if self.bin_plot_mode in ("Individual", "All"):
                 for bin_idx in self.selected_bins:
                     if bin_idx not in self.bin_curves:
                         continue
@@ -992,8 +1273,8 @@ class PSMContourTab(QWidget):
                     if times and values:
                         self.bin_curves[bin_idx].setData(x=times, y=values)
 
-            else:  # Cumulative mode
-                # Extract cumulative data for each selected cutoff
+            # Update N< (cumulative) curves
+            if self.bin_plot_mode in ("N<", "All"):
                 for cutoff_idx in self.selected_cumulative:
                     if cutoff_idx not in self.cumulative_curves:
                         continue
@@ -1015,6 +1296,30 @@ class PSMContourTab(QWidget):
 
                     if times and values:
                         self.cumulative_curves[cutoff_idx].setData(x=times, y=values)
+
+            # Update N> (exceedance) curves
+            if self.bin_plot_mode in ("N>", "All"):
+                for cutoff_idx in self.selected_exceedance:
+                    if cutoff_idx not in self.exceedance_curves:
+                        continue
+
+                    times = []
+                    values = []
+
+                    for scan in self.scan_buffer:
+                        ts = to_timestamp(scan['time'])
+                        if ts < time_window_ago:
+                            continue
+
+                        dN_dlogDp = scan.get('dN_dlogDp', [])
+                        # Sum all bins from cutoff_idx to end (particles larger than cutoff)
+                        if cutoff_idx < len(dN_dlogDp):
+                            exceedance_value = sum(dN_dlogDp[cutoff_idx:])
+                            times.append(ts.timestamp())
+                            values.append(exceedance_value)
+
+                    if times and values:
+                        self.exceedance_curves[cutoff_idx].setData(x=times, y=values)
 
             # Update x-axis to show time properly
             if hasattr(self, 'bin_plot'):
@@ -1150,10 +1455,26 @@ class PSMContourTab(QWidget):
                 view_range = self.plot.viewRange()
                 self.value_label.setPos(view_range[0][0], view_range[1][1])
                 self.value_label.show()
+
+                # Find which file the cursor is over and show in bottom-left
+                current_file = None
+                if hasattr(self, '_last_file_ranges') and self._last_file_ranges:
+                    for file_name, x_start, x_end in self._last_file_ranges:
+                        if x_start <= x <= x_end:
+                            current_file = file_name
+                            break
+
+                if current_file and current_file != 'live':
+                    self.file_hover_label.setText(current_file.replace('.dat', ''))
+                    self.file_hover_label.setPos(view_range[0][0], view_range[1][0])
+                    self.file_hover_label.show()
+                else:
+                    self.file_hover_label.hide()
             else:
                 self.vLine.hide()
                 self.hLine.hide()
                 self.value_label.hide()
+                self.file_hover_label.hide()
         except Exception:
             pass  # Silently ignore errors during hover
 
@@ -1185,70 +1506,6 @@ class PSMContourTab(QWidget):
             return None
         except Exception:
             return None
-
-    def _on_view_range_changed(self, view_box=None, range_changed=None):
-        """Handle view range changes (zoom/pan) to update file boundary labels visibility."""
-        # Only update if we have scans and file boundaries to show
-        if not hasattr(self, 'scan_buffer') or len(self.scan_buffer) == 0:
-            return
-        if not hasattr(self, '_last_scans_in_range'):
-            return
-
-        # Redraw file boundaries with updated view range
-        try:
-            self._update_file_boundary_labels()
-        except Exception:
-            pass  # Silently ignore errors during updates
-
-    def _update_file_boundary_labels(self):
-        """Update file boundary labels based on current zoom level."""
-        if not hasattr(self, '_last_file_ranges') or not self._last_file_ranges:
-            return
-
-        # Get stored y_top - if None or not set, skip (will be set by next render)
-        y_top = getattr(self, '_last_y_top', None)
-        if y_top is None:
-            return
-
-        # Get current view range
-        view_range = self.plot.viewRange()
-        view_x_min, view_x_max = view_range[0]
-        view_width_hours = view_x_max - view_x_min
-
-        # Get plot widget width in pixels
-        plot_width_pixels = self.plot.width() if self.plot.width() > 0 else 800
-
-        # Remove old labels only (keep tick marks)
-        for label in self.file_boundary_labels:
-            self.plot.removeItem(label)
-        self.file_boundary_labels = []
-
-        for file_name, x_start, x_end in self._last_file_ranges:
-            range_width_hours = x_end - x_start
-
-            # Calculate what fraction of the view this file range occupies
-            view_fraction = range_width_hours / view_width_hours if view_width_hours > 0 else 0
-
-            # Calculate approximate pixel width for this file range
-            range_width_pixels = view_fraction * plot_width_pixels
-
-            # Estimate label width in pixels (~7 pixels per character at 8pt font)
-            base_name = file_name.replace('.dat', '')
-            estimated_label_pixels = len(base_name) * 7
-
-            # Only show label if it fits with some margin
-            if range_width_pixels >= estimated_label_pixels + 10:
-                # Position label centered in file's time range
-                x_center = (x_start + x_end) / 2
-                label = pg.TextItem(
-                    text=base_name,
-                    color='w',
-                    anchor=(0.5, 1)  # Anchor at center-bottom
-                )
-                label.setPos(x_center, y_top)
-                label.setFont(pg.QtGui.QFont('Arial', 8))
-                self.plot.addItem(label)
-                self.file_boundary_labels.append(label)
 
     def _get_cumulative_at_position(self, x, bin_idx):
         """Get cumulative dN/dlogDp below and above the current bin at given x position.
@@ -1349,6 +1606,7 @@ class PSMContourTab(QWidget):
             self.current_colormap = extra.get('contour_colormap', 'CET-R4')
             self.crosshair_enabled = extra.get('contour_crosshair', True)
             self.contour_10hz_enabled = extra.get('contour_10hz_enabled', False)
+            self.cpc_transit_delay = extra.get('cpc_transit_delay', DEFAULT_CPC_TRANSIT_DELAY)
             self.bin_preset = extra.get('contour_bin_preset', '6')
             self.custom_bin_limits = extra.get('contour_custom_bins', None)
 
@@ -1367,6 +1625,7 @@ class PSMContourTab(QWidget):
             self.device_config.extra_params['contour_colormap'] = self.current_colormap
             self.device_config.extra_params['contour_crosshair'] = self.crosshair_enabled
             self.device_config.extra_params['contour_10hz_enabled'] = self.contour_10hz_enabled
+            self.device_config.extra_params['cpc_transit_delay'] = self.cpc_transit_delay
             self.device_config.extra_params['contour_bin_preset'] = self.bin_preset
             self.device_config.extra_params['contour_custom_bins'] = self.custom_bin_limits
             if self.on_config_changed:
@@ -1741,6 +2000,13 @@ class PSMContourTab(QWidget):
         avg_action.setDefaultWidget(avg_widget)
         menu.addAction(avg_action)
 
+        # --- Follow latest checkbox ---
+        follow_action = menu.addAction("Follow latest scan")
+        follow_action.setCheckable(True)
+        follow_action.setChecked(self.follow_latest)
+        follow_action.setToolTip("Auto-scroll to show newest data")
+        follow_action.triggered.connect(self._on_follow_toggle)
+
         menu.addSeparator()
 
         # --- Time window selector ---
@@ -1781,19 +2047,48 @@ class PSMContourTab(QWidget):
         crosshair_action.setToolTip("Show crosshair and values when hovering over the plot")
         crosshair_action.triggered.connect(self._toggle_crosshair)
 
-        # --- 10Hz contour toggle ---
-        hz10_action = menu.addAction("10Hz contour mode (experimental)")
-        hz10_action.setCheckable(True)
-        hz10_action.setChecked(self.contour_10hz_enabled)
-        hz10_action.setToolTip("Use 10Hz data for live contour updates (requires 10Hz logging enabled)")
-        hz10_action.triggered.connect(self._toggle_10hz_contour)
-
         menu.addSeparator()
 
-        # --- Data actions ---
-        clear_buffer_action = menu.addAction("Clear scan buffer")
-        clear_buffer_action.setToolTip("Clear all stored scans (historical and live) and reset the contour plot")
-        clear_buffer_action.triggered.connect(self._clear_scan_buffer)
+        # --- Data actions with file info ---
+        clear_widget = QWidget()
+        clear_widget.setStyleSheet("QWidget { background: transparent; }")
+        clear_layout = QHBoxLayout(clear_widget)
+        clear_layout.setContentsMargins(10, 5, 10, 5)
+
+        clear_btn = QPushButton("Clear scan buffer")
+        clear_btn.setStyleSheet("""
+            QPushButton {
+                padding: 3px 8px;
+                border: 1px solid #555;
+                border-radius: 3px;
+                background: #444;
+                color: white;
+            }
+            QPushButton:hover {
+                background: #555;
+            }
+        """)
+        clear_btn.clicked.connect(self._clear_scan_buffer)
+        clear_btn.clicked.connect(menu.close)
+        clear_layout.addWidget(clear_btn)
+
+        # File info label (shows loaded files count)
+        files_info_label = QLabel("")
+        files_info_label.setStyleSheet("color: #888; font-size: 10px;")
+        if self._loaded_files_info:
+            files_info_label.setText(self._loaded_files_info)
+        clear_layout.addWidget(files_info_label)
+        clear_layout.addStretch()
+
+        clear_action = QWidgetAction(menu)
+        clear_action.setDefaultWidget(clear_widget)
+        menu.addAction(clear_action)
+
+        # Load history button (shown after first load, when top bar button is hidden)
+        if self._history_ever_loaded:
+            load_history_action = menu.addAction("Load history")
+            load_history_action.setToolTip("Load historical scan data from .dat files")
+            load_history_action.triggered.connect(self._start_historical_data_load)
 
         menu.addSeparator()
 
@@ -1888,6 +2183,59 @@ class PSMContourTab(QWidget):
         bin_action.setDefaultWidget(bin_widget)
         advanced_menu.addAction(bin_action)
 
+        # Add separator before CPC transit delay
+        advanced_menu.addSeparator()
+
+        # CPC transit delay widget
+        delay_widget = QWidget()
+        delay_widget.setStyleSheet("QWidget { background: transparent; }")
+        delay_layout = QHBoxLayout(delay_widget)
+        delay_layout.setContentsMargins(10, 5, 10, 5)
+        delay_layout.setSpacing(5)
+
+        delay_label = QLabel("CPC transit delay (s):")
+        delay_layout.addWidget(delay_label)
+
+        delay_spinbox = QDoubleSpinBox()
+        delay_spinbox.setRange(0.0, 10.0)
+        delay_spinbox.setSingleStep(0.1)
+        delay_spinbox.setDecimals(1)
+        delay_spinbox.setValue(self.cpc_transit_delay)
+        delay_spinbox.setFixedWidth(70)
+        delay_layout.addWidget(delay_spinbox)
+
+        # Default indicator label
+        delay_default_label = QLabel("(default)" if self.cpc_transit_delay == DEFAULT_CPC_TRANSIT_DELAY else "")
+        delay_default_label.setStyleSheet("color: #888; font-size: 10px;")
+        delay_layout.addWidget(delay_default_label)
+
+        # Reset button
+        delay_reset_btn = QPushButton("Reset")
+        delay_reset_btn.setFixedWidth(50)
+        delay_reset_btn.setStyleSheet("font-size: 10px; padding: 2px 5px;")
+        delay_reset_btn.setEnabled(self.cpc_transit_delay != DEFAULT_CPC_TRANSIT_DELAY)
+        delay_layout.addWidget(delay_reset_btn)
+
+        delay_layout.addStretch()
+
+        def on_delay_changed(value):
+            self.cpc_transit_delay = value
+            self._save_contour_settings()
+            # Update default indicator
+            is_default = abs(value - DEFAULT_CPC_TRANSIT_DELAY) < 0.01
+            delay_default_label.setText("(default)" if is_default else "")
+            delay_reset_btn.setEnabled(not is_default)
+
+        def on_delay_reset():
+            delay_spinbox.setValue(DEFAULT_CPC_TRANSIT_DELAY)
+
+        delay_spinbox.valueChanged.connect(on_delay_changed)
+        delay_reset_btn.clicked.connect(on_delay_reset)
+
+        delay_action = QWidgetAction(advanced_menu)
+        delay_action.setDefaultWidget(delay_widget)
+        advanced_menu.addAction(delay_action)
+
         # Show menu at button position
         menu.exec_(self.settings_btn.mapToGlobal(QPoint(0, self.settings_btn.height())))
 
@@ -1915,6 +2263,7 @@ class PSMContourTab(QWidget):
         self.scan_buffer = []
         self._current_scan = None
         self._prev_saturator_flow = None  # Reset 10Hz interpolation state
+        self._loaded_files_info = None  # Clear loaded files info
         self._render_contour()
 
     def _export_png(self):
@@ -2024,7 +2373,13 @@ class PSMContourTab(QWidget):
             return
 
         # Dispatch based on 10Hz availability
-        if self._should_use_10hz(data_holder):
+        use_10hz = self._should_use_10hz(data_holder)
+
+        # Update 10Hz indicator label
+        if hasattr(self, 'hz10_label'):
+            self.hz10_label.setVisible(use_10hz)
+
+        if use_10hz:
             self._update_contour_10hz(current_data, data_holder)
         else:
             self._update_contour_1hz(current_data)
@@ -2054,7 +2409,8 @@ class PSMContourTab(QWidget):
                 'times': [],
                 'satflows': [],
                 'concentrations': [],
-                'type': 'up'
+                'type': 'up',
+                'is_10hz': False
             }
 
         # DOWN scan starts when transitioning TO status "3"
@@ -2067,7 +2423,8 @@ class PSMContourTab(QWidget):
                 'times': [],
                 'satflows': [],
                 'concentrations': [],
-                'type': 'down'
+                'type': 'down',
+                'is_10hz': False
             }
 
         # Accumulate data during scan
@@ -2124,7 +2481,7 @@ class PSMContourTab(QWidget):
             if self._current_scan is not None:
                 self._finalize_scan()
             self._current_scan = {
-                'times': [], 'satflows': [], 'concentrations': [], 'type': 'up'
+                'times': [], 'satflows': [], 'concentrations': [], 'type': 'up', 'is_10hz': True
             }
             self._scan_start_time = pd.Timestamp.now()  # Track when scan started
             self._prev_saturator_flow = None  # Reset on new scan
@@ -2133,7 +2490,7 @@ class PSMContourTab(QWidget):
             if self._current_scan is not None:
                 self._finalize_scan()
             self._current_scan = {
-                'times': [], 'satflows': [], 'concentrations': [], 'type': 'down'
+                'times': [], 'satflows': [], 'concentrations': [], 'type': 'down', 'is_10hz': True
             }
             self._scan_start_time = pd.Timestamp.now()  # Track when scan started
             self._prev_saturator_flow = None  # Reset on new scan
@@ -2286,9 +2643,10 @@ class PSMContourTab(QWidget):
             times = np.array(self._current_scan['times'])
             satflows = np.array(self._current_scan['satflows'])
             concentrations = np.array(self._current_scan['concentrations'])
+            is_10hz = self._current_scan.get('is_10hz', False)
 
             # Bin and invert (time shift applied inside _bin_and_invert_scan)
-            dN_dlogDp = self._bin_and_invert_scan(satflows, concentrations)
+            dN_dlogDp = self._bin_and_invert_scan(satflows, concentrations, is_10hz)
 
             # Store scan result
             scan_result = {
@@ -2418,7 +2776,7 @@ class PSMContourTab(QWidget):
             # Update pen with new alpha
             self._flash_item.setPen(pg.mkPen(color=(76, 175, 80, self._flash_alpha), width=4))
 
-    def _bin_and_invert_scan(self, satflows: np.ndarray, concentrations: np.ndarray) -> np.ndarray:
+    def _bin_and_invert_scan(self, satflows: np.ndarray, concentrations: np.ndarray, is_10hz: bool = False) -> np.ndarray:
         """
         Bin scan data and perform inversion - matching the reference PSM Inversion Tool algorithm.
 
@@ -2430,6 +2788,11 @@ class PSMContourTab(QWidget):
         3. Calculate dN using diff() - first value is NaN, skip it
         4. For each bin: dN/dlogDp = dN / dlogDp / MaxDeteff
 
+        Args:
+            satflows: Array of saturator flow values
+            concentrations: Array of concentration values
+            is_10hz: If True, data was collected at 10Hz (10 samples/second), otherwise 1Hz
+
         Returns:
             Array of dN/dlogDp values for each bin
         """
@@ -2437,9 +2800,15 @@ class PSMContourTab(QWidget):
         df = pd.DataFrame({'satflow': satflows, 'concentration': concentrations})
 
         # Apply CPC transit delay: concentration measured at time T corresponds to
-        # particles that passed through the saturator at time T-3 seconds.
+        # particles that passed through the saturator at time T - cpc_transit_delay seconds.
         # Shift concentration backward to align with the correct satflow.
-        df['concentration'] = df['concentration'].shift(-self.cpc_transit_delay)
+        # For 10Hz data: 10 samples per second, use full precision (e.g., 3.2s = 32 rows)
+        # For 1Hz data: 1 sample per second, round to nearest whole second (e.g., 3.2s→3, 3.7s→4)
+        if is_10hz:
+            shift_rows = int(self.cpc_transit_delay * 10)
+        else:
+            shift_rows = round(self.cpc_transit_delay)
+        df['concentration'] = df['concentration'].shift(-shift_rows)
 
         # Use pd.cut to bin by satflow
         # bin_limits_flow is now in ascending order (matches original after flip)
@@ -2588,18 +2957,10 @@ class PSMContourTab(QWidget):
         Color: log10(dN/dlogDp), with gaps shown as black
         """
         if not self.calibration_loaded or len(self.scan_buffer) == 0:
-            # Clear plot and file boundary markers
+            # Clear plot
             self.image_item.clear()
-            for line in self.file_boundary_lines:
-                self.plot.removeItem(line)
-            for label in self.file_boundary_labels:
-                self.plot.removeItem(label)
-            self.file_boundary_lines = []
-            self.file_boundary_labels = []
-            # Clear stale state to prevent _update_file_boundary_labels from
-            # using outdated positions when new data is loaded
+            # Clear file range tracking for hover display
             self._last_file_ranges = []
-            self._last_y_top = None
             self._last_scans_in_range = None
             return
 
@@ -2719,21 +3080,15 @@ class PSMContourTab(QWidget):
             logging.error(f"Error rendering contour: {e}")
 
     def _draw_file_boundaries(self, scans_in_range, time_24h_ago, y_min, y_height):
-        """Draw vertical tick marks at file boundaries showing where files start/end.
+        """Track file boundaries for hover display (no visual markers drawn).
 
         Args:
+            scans_in_range: List of (timestamp, scan_dict) tuples
+            time_24h_ago: Start time for x-axis calculation
             y_min: Y position (bin index, typically 0)
             y_height: Height (number of bins)
         """
-        # Remove old markers
-        for line in self.file_boundary_lines:
-            self.plot.removeItem(line)
-        for label in self.file_boundary_labels:
-            self.plot.removeItem(label)
-        self.file_boundary_lines = []
-        self.file_boundary_labels = []
-
-        # Store scans for later zoom updates
+        # Store scans for later reference
         self._last_scans_in_range = scans_in_range
 
         if not scans_in_range:
@@ -2759,45 +3114,20 @@ class PSMContourTab(QWidget):
                 if file_ranges_ts:
                     file_ranges_ts[-1] = (file_ranges_ts[-1][0], file_ranges_ts[-1][1], ts)
 
-        # Draw vertical tick marks at file boundaries
+        # Convert file ranges to x-coordinates for hover lookup
         start_hour = time_24h_ago.hour + time_24h_ago.minute / 60
-        y_top = y_min + y_height
-
-        # Store y_top for label updates on zoom
-        self._last_y_top = y_top
-
-        # Tick extends from plot top upward
-        tick_height = y_height * 0.03
-        y_tick_bottom = y_top
-        y_tick_top = y_top + tick_height
-
-        # Convert file ranges to x-coordinates and store for zoom updates
         file_ranges_x = []  # List of (file_name, x_start, x_end) in plot coordinates
 
-        for i, (file_name, start_ts, end_ts) in enumerate(file_ranges_ts):
+        for file_name, start_ts, end_ts in file_ranges_ts:
             # Calculate x positions
             hours_start = (start_ts - time_24h_ago).total_seconds() / 3600
             hours_end = (end_ts - time_24h_ago).total_seconds() / 3600
             x_start = start_hour + hours_start
             x_end = start_hour + hours_end
-
             file_ranges_x.append((file_name, x_start, x_end))
 
-            # Draw vertical tick at file start (skip first file at very beginning)
-            if i > 0 or hours_start > 0.01:  # Only if not at the very start
-                tick = pg.PlotCurveItem(
-                    x=[x_start, x_start],
-                    y=[y_tick_bottom, y_tick_top],
-                    pen=pg.mkPen(color=(255, 255, 255, 180), width=1)
-                )
-                self.plot.addItem(tick)
-                self.file_boundary_lines.append(tick)
-
-        # Store file ranges in x-coordinates for zoom-based label updates
+        # Store file ranges in x-coordinates for hover lookup
         self._last_file_ranges = file_ranges_x
-
-        # Draw initial labels using the zoom-aware method
-        self._update_file_boundary_labels()
 
     def _apply_scan_averaging(self, data_matrix: np.ndarray, n: int) -> np.ndarray:
         """
@@ -2820,7 +3150,6 @@ class PSMContourTab(QWidget):
         Called when user clicks the Load History button.
         """
         if not self.calibration_loaded:
-            self.file_label.setText("Load calibration file first")
             return
 
         if self._loading_in_progress:
@@ -2832,7 +3161,6 @@ class PSMContourTab(QWidget):
 
         # Get file path from global config
         if not self.app_config:
-            self.file_label.setText("Configuration not ready")
             return
 
         file_path = self.app_config.data_settings.file_path
@@ -2928,11 +3256,11 @@ class PSMContourTab(QWidget):
                 except Exception as e:
                     logging.error(f"Error processing scan {i+1}: {e}")
 
-            # Update file label
+            # Store loaded files info for settings menu
             if len(filepaths) == 1:
-                self.file_label.setText(f"File: {os.path.basename(filepaths[0])}")
+                self._loaded_files_info = os.path.basename(filepaths[0]).replace('.dat', '')
             else:
-                self.file_label.setText(f"{len(filepaths)} files loaded")
+                self._loaded_files_info = f"{len(filepaths)} files"
 
             # Update scan counter
             if hasattr(self, 'scan_counter_label'):
@@ -2942,6 +3270,11 @@ class PSMContourTab(QWidget):
             self._render_contour()
 
             self._historical_data_loaded = True
+            self._history_ever_loaded = True
+
+            # Hide top bar button after first successful load (moves to settings menu)
+            if hasattr(self, 'load_history_btn'):
+                self.load_history_btn.hide()
 
         except Exception as e:
             logging.error(f"Error processing loaded data: {e}")
@@ -2956,7 +3289,7 @@ class PSMContourTab(QWidget):
 
     def _on_loading_error(self, error_message: str):
         """Handle errors from the loader thread."""
-        self.file_label.setText(error_message)
+        logging.error(f"Loading error: {error_message}")
         self._loading_in_progress = False
         self._hide_loading_overlay()
         self.load_history_btn.setEnabled(True)
@@ -2987,7 +3320,6 @@ class PSMContourTab(QWidget):
         self.load_history_btn.setEnabled(True)
         self.load_history_btn.setText("Load History")
         self._pending_scans = []
-        self.file_label.setText("Loading cancelled")
 
         # Reset cancel button state
         if hasattr(self, 'loading_cancel_btn'):
