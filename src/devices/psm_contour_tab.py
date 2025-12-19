@@ -2540,22 +2540,19 @@ class PSMContourTab(QWidget):
                     time_since_start = (base_time - self._scan_start_time).total_seconds()
 
                     # Generate 10 flow values at 100ms intervals
-                    # Apply CPC transit delay here: concentration measured at time t
-                    # corresponds to particles that were at the saturator at time (t - cpc_transit_delay).
-                    # Calculate flow for that earlier time to properly align with concentration.
+                    # Calculate flow based on time since scan start (like reference PSM Inversion Tool)
+                    # The CPC transit delay will be applied via shift in _bin_and_invert_scan
                     flows = np.zeros(10)
                     for i in range(10):
                         # Time offset: index 0 is -900ms, index 9 is now (0ms)
                         t = time_since_start + (i - 9) * 0.1
-                        # Calculate flow at the time particles were actually at saturator
-                        t_at_saturator = t - self.cpc_transit_delay
-                        if t_at_saturator < 0:
-                            t_at_saturator = 0
+                        if t < 0:
+                            t = 0
 
                         if self._current_scan['type'] == 'up':
-                            flows[i] = min_flow * (scan_power ** t_at_saturator)
+                            flows[i] = min_flow * (scan_power ** t)
                         else:  # down
-                            flows[i] = max_flow * ((1 / scan_power) ** t_at_saturator)
+                            flows[i] = max_flow * ((1 / scan_power) ** t)
 
                     # Clamp flows to valid range
                     flows = np.clip(flows, min_flow, max_flow)
@@ -2809,15 +2806,16 @@ class PSMContourTab(QWidget):
 
         # Apply CPC transit delay: concentration measured at time T corresponds to
         # particles that passed through the saturator at time T - cpc_transit_delay seconds.
+        # Shift concentration backward to align with the correct satflow.
+        # This matches the reference PSM Inversion Tool approach.
         #
-        # For 10Hz data: CPC transit delay is already applied when calculating flow values
-        # in _update_contour_10hz (flow is calculated for t - cpc_transit_delay). No shift needed.
-        #
-        # For 1Hz data: Flow is measured directly, so we shift concentration to align with
-        # the flow from cpc_transit_delay seconds earlier.
-        if not is_10hz:
+        # For 10Hz data: 10 samples per second
+        # For 1Hz data: 1 sample per second
+        if is_10hz:
+            shift_rows = int(self.cpc_transit_delay * 10)
+        else:
             shift_rows = round(self.cpc_transit_delay)
-            df['concentration'] = df['concentration'].shift(-shift_rows)
+        df['concentration'] = df['concentration'].shift(-shift_rows)
 
         # Use pd.cut to bin by satflow
         # bin_limits_flow is now in ascending order (matches original after flip)

@@ -75,7 +75,7 @@ def find_cpc_10hz_files(file_path: str, hours: int = 24) -> Dict[str, List[str]]
         hours: Number of hours to look back
 
     Returns:
-        Dict mapping CPC serial number to list of file paths, sorted by time
+        Dict mapping CPC serial number (or 'default' if no serial) to list of file paths, sorted by time
     """
     from datetime import timedelta
     import re
@@ -89,14 +89,16 @@ def find_cpc_10hz_files(file_path: str, hours: int = 24) -> Dict[str, List[str]]
         date_str = (now - timedelta(days=i)).strftime("%Y%m%d")
         dates_to_search.add(date_str)
 
-    # Search for 10Hz files: YYYYMMDD_*_CPC_*_10hz*.csv
+    # Search for 10Hz files: YYYYMMDD_*CPC*10hz*.csv
     all_matching_files = set()
     for date_str in dates_to_search:
         pattern = os.path.join(file_path, f"{date_str}_*CPC*10hz*.csv")
         all_matching_files.update(glob.glob(pattern))
 
     # Group files by CPC serial number
-    # Filename format: YYYYMMDD_HHMMSS_[SerialNumber]_CPC_[Nickname]_10hz_[FileTag].csv
+    # Filename formats:
+    # - With serial: YYYYMMDD_HHMMSS_SERIAL_CPC_NICKNAME_10hz_FILETAG.csv
+    # - Without serial: YYYYMMDD_HHMMSS_CPC_NICKNAME_10hz_FILETAG.csv
     serial_to_files: Dict[str, List[str]] = {}
 
     for filepath in all_matching_files:
@@ -104,14 +106,24 @@ def find_cpc_10hz_files(file_path: str, hours: int = 24) -> Dict[str, List[str]]
             continue
 
         filename = os.path.basename(filepath)
-        # Extract serial number - it's between the timestamp and _CPC
-        # Pattern: YYYYMMDD_HHMMSS_SERIAL_CPC_...
+
+        # Try to extract serial number - it's between the timestamp and _CPC
+        # Pattern with serial: YYYYMMDD_HHMMSS_SERIAL_CPC_...
         match = re.match(r'\d{8}_\d{6}_([^_]+)_CPC', filename)
         if match:
-            serial = match.group(1)
-            if serial not in serial_to_files:
-                serial_to_files[serial] = []
-            serial_to_files[serial].append(filepath)
+            potential_serial = match.group(1)
+            # Check if this looks like a serial (not 'CPC' itself)
+            if potential_serial.upper() != 'CPC':
+                serial = potential_serial
+            else:
+                serial = 'default'
+        else:
+            # No serial found, use 'default'
+            serial = 'default'
+
+        if serial not in serial_to_files:
+            serial_to_files[serial] = []
+        serial_to_files[serial].append(filepath)
 
     # Sort each serial's files chronologically
     for serial in serial_to_files:
@@ -185,13 +197,14 @@ def calculate_scan_flows_exponential(
     scan_type: str,
     min_flow: float,
     max_flow: float,
-    scan_time: float,
-    cpc_transit_delay: float = 3.0
+    scan_time: float
 ) -> np.ndarray:
     """
     Calculate saturator flow values using exponential profile for timestamps.
 
-    Mirrors the live 10Hz logic - applies CPC transit delay in flow calculation.
+    Matches the reference PSM Inversion Tool approach - calculates flow based on
+    time since scan start. CPC transit delay is applied via concentration shift
+    in _bin_and_invert_scan, not here.
 
     Args:
         timestamps: Array of pd.Timestamp values
@@ -200,7 +213,6 @@ def calculate_scan_flows_exponential(
         min_flow: Minimum saturator flow (lpm)
         max_flow: Maximum saturator flow (lpm)
         scan_time: Scan duration in seconds
-        cpc_transit_delay: CPC transit delay in seconds
 
     Returns:
         Array of saturator flow values
@@ -213,17 +225,13 @@ def calculate_scan_flows_exponential(
     for i, ts in enumerate(timestamps):
         # Time since scan started
         t = (ts - scan_start_time).total_seconds()
-
-        # Apply CPC transit delay: concentration measured at time t
-        # corresponds to particles at saturator at time t - delay
-        t_at_saturator = t - cpc_transit_delay
-        if t_at_saturator < 0:
-            t_at_saturator = 0
+        if t < 0:
+            t = 0
 
         if scan_type == 'up':
-            flows[i] = min_flow * (scan_power ** t_at_saturator)
+            flows[i] = min_flow * (scan_power ** t)
         else:  # down
-            flows[i] = max_flow * ((1 / scan_power) ** t_at_saturator)
+            flows[i] = max_flow * ((1 / scan_power) ** t)
 
     # Clamp to valid range
     flows = np.clip(flows, min_flow, max_flow)
@@ -234,8 +242,7 @@ def calculate_scan_flows_exponential(
 def merge_10hz_data_into_scans(
     scans: List[Dict],
     ten_hz_df: pd.DataFrame,
-    scan_timing_params: dict,
-    cpc_transit_delay: float = 3.0
+    scan_timing_params: dict
 ) -> List[Dict]:
     """
     Merge 10Hz concentration data into detected scans.
@@ -244,11 +251,13 @@ def merge_10hz_data_into_scans(
     replaces the 1Hz data with 10Hz data and calculates flows using
     the exponential formula.
 
+    CPC transit delay is applied later in _bin_and_invert_scan via
+    concentration shift, matching the reference PSM Inversion Tool approach.
+
     Args:
         scans: List of scan dicts from detect_scans_from_dat()
         ten_hz_df: DataFrame with 'timestamp' and 'concentration' columns
         scan_timing_params: Dict with up_scan_time, down_scan_time, min_flow, max_flow
-        cpc_transit_delay: CPC transit delay in seconds
 
     Returns:
         Enhanced scans list with 10Hz data where available
@@ -315,8 +324,7 @@ def merge_10hz_data_into_scans(
                 scan_type=scan_type,
                 min_flow=min_flow,
                 max_flow=max_flow,
-                scan_time=scan_time,
-                cpc_transit_delay=cpc_transit_delay
+                scan_time=scan_time
             )
 
             # Create enhanced scan with 10Hz data
@@ -712,8 +720,15 @@ def load_historical_scans(
             # Find 10Hz files for the connected CPC
             cpc_10hz_files = find_cpc_10hz_files(file_path, hours=hours)
 
-            if connected_cpc_serial in cpc_10hz_files:
+            # Look for 10Hz files matching the CPC serial, or use 'default' if no serial match
+            ten_hz_files = None
+            if connected_cpc_serial and connected_cpc_serial in cpc_10hz_files:
                 ten_hz_files = cpc_10hz_files[connected_cpc_serial]
+            elif 'default' in cpc_10hz_files:
+                # Use default (no serial) files if no specific serial match
+                ten_hz_files = cpc_10hz_files['default']
+
+            if ten_hz_files:
 
                 if progress_callback:
                     progress_callback(len(filepaths), len(filepaths),
@@ -738,8 +753,7 @@ def load_historical_scans(
                     merged_scans = merge_10hz_data_into_scans(
                         scans=merged_scans,
                         ten_hz_df=combined_10hz,
-                        scan_timing_params=scan_timing_params,
-                        cpc_transit_delay=cpc_transit_delay
+                        scan_timing_params=scan_timing_params
                     )
 
                     # Count how many scans got 10Hz data
