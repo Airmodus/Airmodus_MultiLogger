@@ -311,6 +311,12 @@ class PSMContourTab(QWidget):
         self._prev_saturator_flow = None  # For 10Hz saturator flow interpolation
         self._scan_start_time = None  # Timestamp when current scan phase started (for exponential flow calc)
 
+        # 10Hz trailing data buffer - collects concentration data after scan ends
+        # so we can shift concentration without creating NaN at end of scan
+        self._pending_scan = None  # Scan waiting for trailing data before finalization
+        self._trailing_buffer = []  # Concentration values collected after scan ends
+        self._trailing_start_time = None  # When we started collecting trailing data
+
         # CPC transit delay: time for particles to travel from saturator to CPC counter
         # Matches PSM Inversion Tool's CPC_time_lag = -3 seconds
         # Concentration is shifted forward (paired with satflow from 3 seconds earlier)
@@ -2271,6 +2277,9 @@ class PSMContourTab(QWidget):
         self.scan_buffer = []
         self._current_scan = None
         self._prev_saturator_flow = None  # Reset 10Hz interpolation state
+        self._pending_scan = None  # Reset pending scan state
+        self._trailing_buffer = []
+        self._trailing_start_time = None
         self._loaded_files_info = None  # Clear loaded files info
         self._render_contour()
 
@@ -2457,7 +2466,10 @@ class PSMContourTab(QWidget):
         """Handle 10Hz data collection for contour plot.
 
         Collects 10 concentration values from CPC's ten_hz_data buffer
-        and interpolates saturator flow from previous to current value.
+        and calculates saturator flow using exponential scan profile.
+
+        Uses a trailing buffer to collect concentration data after scan ends,
+        so that the time-shift in _bin_and_invert_scan doesn't create NaN values.
         """
         # Get CPC widget and 10Hz data
         cpc_id = int(self.device_config.extra_params.get('connected_cpc'))
@@ -2479,26 +2491,67 @@ class PSMContourTab(QWidget):
             self._prev_saturator_flow = current_flow
             return
 
-        # Detect scan start transitions
+        # Get corrections for concentration
+        dilution_corr = current_data.cpc_dilution_correction
+        poly_corr = current_data.poly_correction
+        corrections_valid = not (np.isnan(dilution_corr) or np.isnan(poly_corr) or poly_corr == 0)
+
+        # Extract corrected 10Hz concentrations
+        corrected_concs = []
+        if corrections_valid:
+            for i in range(10):
+                try:
+                    conc_float = float(ten_hz_data[i])
+                    if not np.isnan(conc_float):
+                        corrected_concs.append(conc_float * dilution_corr / poly_corr)
+                except (ValueError, TypeError):
+                    pass
+
+        # Check if we're collecting trailing data for a pending scan
+        if self._pending_scan is not None and self._trailing_start_time is not None:
+            # Add concentration values to trailing buffer
+            self._trailing_buffer.extend(corrected_concs)
+
+            # Check if we have enough trailing data (cpc_transit_delay seconds worth)
+            trailing_duration = (pd.Timestamp.now() - self._trailing_start_time).total_seconds()
+            required_trailing_points = int(self.cpc_transit_delay * 10)  # 10Hz
+
+            if len(self._trailing_buffer) >= required_trailing_points or trailing_duration >= self.cpc_transit_delay + 1:
+                # Finalize the pending scan with trailing data
+                self._finalize_pending_scan_with_trailing()
+
+        # Detect scan phase transitions
+        # UP scan starts when transitioning TO status "1"
         if scan_status == "1" and self._prev_scan_status != "1":
-            if self._current_scan is not None:
-                self._finalize_scan()
+            # Move current scan to pending if it exists
+            if self._current_scan is not None and len(self._current_scan['times']) >= 3:
+                self._pending_scan = self._current_scan
+                self._trailing_buffer = list(corrected_concs)  # Start with current data
+                self._trailing_start_time = pd.Timestamp.now()
+
+            # Start new UP scan
             self._current_scan = {
                 'times': [], 'satflows': [], 'concentrations': [], 'type': 'up', 'is_10hz': True
             }
-            self._scan_start_time = pd.Timestamp.now()  # Track when scan started
-            self._prev_saturator_flow = None  # Reset on new scan
+            self._scan_start_time = pd.Timestamp.now()
+            self._prev_saturator_flow = None
 
+        # DOWN scan starts when transitioning TO status "3"
         elif scan_status == "3" and self._prev_scan_status != "3":
-            if self._current_scan is not None:
-                self._finalize_scan()
+            # Move current scan to pending if it exists
+            if self._current_scan is not None and len(self._current_scan['times']) >= 3:
+                self._pending_scan = self._current_scan
+                self._trailing_buffer = list(corrected_concs)  # Start with current data
+                self._trailing_start_time = pd.Timestamp.now()
+
+            # Start new DOWN scan
             self._current_scan = {
                 'times': [], 'satflows': [], 'concentrations': [], 'type': 'down', 'is_10hz': True
             }
-            self._scan_start_time = pd.Timestamp.now()  # Track when scan started
-            self._prev_saturator_flow = None  # Reset on new scan
+            self._scan_start_time = pd.Timestamp.now()
+            self._prev_saturator_flow = None
 
-        # Accumulate data during scan
+        # Accumulate data during active scan
         if self._current_scan is not None:
             include_point = False
             if self._current_scan['type'] == 'up' and scan_status in ["1", "2"]:
@@ -2506,55 +2559,31 @@ class PSMContourTab(QWidget):
             elif self._current_scan['type'] == 'down' and scan_status in ["3", "0"]:
                 include_point = True
 
-            if include_point and not np.isnan(current_flow):
-                # Skip if corrections not available
-                dilution_corr = current_data.cpc_dilution_correction
-                poly_corr = current_data.poly_correction
-                if np.isnan(dilution_corr) or np.isnan(poly_corr) or poly_corr == 0:
-                    # Store flow for next interpolation but don't add data
-                    self._prev_saturator_flow = current_flow
-                    self._prev_scan_status = scan_status
-                    return
-
+            if include_point and not np.isnan(current_flow) and corrections_valid:
                 # Calculate saturator flow for 10 points using exponential scan profile
                 if self._scan_start_time is None or self.bin_limits_flow is None:
-                    # Fallback to current flow if we don't have timing info
                     flows = np.full(10, current_flow)
                 else:
-                    # Get scan parameters
                     up_scan_time, down_scan_time = self._get_scan_times()
                     min_flow = self.bin_limits_flow.min()
                     max_flow = self.bin_limits_flow.max()
-
-                    # Select scan time based on scan type
-                    if self._current_scan['type'] == 'up':
-                        scan_time = up_scan_time
-                    else:
-                        scan_time = down_scan_time
-
-                    # Calculate scan power for exponential profile
+                    scan_time = up_scan_time if self._current_scan['type'] == 'up' else down_scan_time
                     scan_power = (max_flow / min_flow) ** (1.0 / scan_time)
 
-                    # Calculate time since scan started
                     base_time = pd.Timestamp.now()
                     time_since_start = (base_time - self._scan_start_time).total_seconds()
 
                     # Generate 10 flow values at 100ms intervals
-                    # Calculate flow based on time since scan start (like reference PSM Inversion Tool)
-                    # The CPC transit delay will be applied via shift in _bin_and_invert_scan
                     flows = np.zeros(10)
                     for i in range(10):
-                        # Time offset: index 0 is -900ms, index 9 is now (0ms)
                         t = time_since_start + (i - 9) * 0.1
                         if t < 0:
                             t = 0
-
                         if self._current_scan['type'] == 'up':
                             flows[i] = min_flow * (scan_power ** t)
-                        else:  # down
+                        else:
                             flows[i] = max_flow * ((1 / scan_power) ** t)
 
-                    # Clamp flows to valid range
                     flows = np.clip(flows, min_flow, max_flow)
 
                 # Add 10 data points
@@ -2566,9 +2595,7 @@ class PSMContourTab(QWidget):
                         continue
 
                     if not np.isnan(conc_float):
-                        # Apply dilution and poly corrections
                         corrected_conc = conc_float * dilution_corr / poly_corr
-                        # Time offset: index 0 is -900ms, index 9 is now (0ms)
                         time_offset = pd.Timedelta(milliseconds=(i - 9) * 100)
                         self._current_scan['times'].append(base_time + time_offset)
                         self._current_scan['satflows'].append(flows[i])
@@ -2580,6 +2607,60 @@ class PSMContourTab(QWidget):
         # Update scan progress UI
         self._update_scan_progress(scan_status, current_flow)
         self._prev_scan_status = scan_status
+
+    def _finalize_pending_scan_with_trailing(self):
+        """Finalize a pending scan using trailing concentration data for time-shift."""
+        if self._pending_scan is None:
+            return
+
+        try:
+            # Show processing status
+            if hasattr(self, 'scan_status_label'):
+                self.scan_status_label.setText("Processing...")
+                self.scan_status_label.setStyleSheet("color: #FFC107; font-size: 11px; min-width: 70px;")
+
+            # Convert to numpy arrays
+            times = np.array(self._pending_scan['times'])
+            satflows = np.array(self._pending_scan['satflows'])
+            concentrations = np.array(self._pending_scan['concentrations'])
+            is_10hz = self._pending_scan.get('is_10hz', False)
+
+            # Get required trailing points (10Hz = 10 points per second)
+            required_trailing = int(self.cpc_transit_delay * 10)
+            trailing_concs = self._trailing_buffer[:required_trailing] if len(self._trailing_buffer) >= required_trailing else self._trailing_buffer
+
+            # Bin and invert with trailing data
+            dN_dlogDp = self._bin_and_invert_scan_with_trailing(satflows, concentrations, trailing_concs, is_10hz)
+
+            # Store scan result
+            scan_result = {
+                'time': times[0],
+                'bin_centers': self.bin_centers_dp.copy(),
+                'dN_dlogDp': dN_dlogDp,
+                'source_file': 'live'
+            }
+
+            self.scan_buffer.append(scan_result)
+
+            # Update scan counter with flash effect
+            self._update_scan_counter_with_flash()
+
+            # Reset progress bar
+            if hasattr(self, 'scan_progress_bar'):
+                self.scan_progress_bar.setValue(0)
+
+            # Update plot
+            self._render_contour()
+
+            # Flash the newly added scan on the plot
+            self._flash_last_scan()
+
+        except Exception as e:
+            logging.error(f"Error finalizing pending scan: {e}")
+        finally:
+            self._pending_scan = None
+            self._trailing_buffer = []
+            self._trailing_start_time = None
 
     def _update_scan_progress(self, scan_status: str, current_satflow: float):
         """Update the scan progress bar and status label."""
@@ -2875,6 +2956,92 @@ class PSMContourTab(QWidget):
                     dN_dlogDp[output_idx] = dN_val / abs(dlogDp) / max_det_eff
 
         # Flip array so index 0 = smallest diameter, matching bin_limits_dp ordering
+        return np.flip(dN_dlogDp)
+
+    def _bin_and_invert_scan_with_trailing(self, satflows: np.ndarray, concentrations: np.ndarray,
+                                            trailing_concs: list, is_10hz: bool = True) -> np.ndarray:
+        """
+        Bin scan data and perform inversion with trailing concentration data.
+
+        This method appends trailing concentration data before applying the time-shift,
+        so that the shift doesn't create NaN values at the end of the scan.
+
+        The trailing concentrations come from the wait state or next scan phase,
+        collected after the current scan ended.
+
+        Args:
+            satflows: Array of saturator flow values from the scan
+            concentrations: Array of concentration values from the scan
+            trailing_concs: List of trailing concentration values collected after scan ended
+            is_10hz: If True, data was collected at 10Hz (always True for this method)
+
+        Returns:
+            Array of dN/dlogDp values for each bin
+        """
+        # Calculate shift amount
+        shift_rows = int(self.cpc_transit_delay * 10) if is_10hz else round(self.cpc_transit_delay)
+
+        # Extend satflows with the last flow value repeated for trailing data
+        # (trailing data is from wait state where flow is constant at min or max)
+        last_flow = satflows[-1] if len(satflows) > 0 else 0
+        extended_satflows = np.concatenate([satflows, np.full(len(trailing_concs), last_flow)])
+
+        # Extend concentrations with trailing data
+        extended_concentrations = np.concatenate([concentrations, np.array(trailing_concs)])
+
+        # Create DataFrame
+        df = pd.DataFrame({'satflow': extended_satflows, 'concentration': extended_concentrations})
+
+        # Apply time-shift - now we have trailing data so shift won't create NaN at end
+        df['concentration'] = df['concentration'].shift(-shift_rows)
+
+        # Trim back to original scan length (the satflows we care about)
+        df = df.iloc[:len(satflows)]
+
+        # Use pd.cut to bin by satflow
+        df['bins'] = pd.cut(df['satflow'], self.bin_limits_flow)
+
+        # Calculate mean concentration per bin
+        bin_means = df.groupby('bins', observed=True)['concentration'].mean()
+
+        # Calculate dN using diff
+        dN = bin_means.diff()
+
+        # Get calibration data
+        cal_satflow = self.calibration_df['cal_satflow'].values
+        cal_diameter = self.calibration_df['cal_diameter'].values
+        cal_maxdeteff = self.calibration_df['cal_maxdeteff'].values
+
+        # Initialize output array
+        dN_dlogDp = np.zeros(self.num_bins)
+
+        bin_intervals = bin_means.index.tolist()
+
+        for i, interval in enumerate(bin_intervals):
+            if i == 0:
+                continue  # Skip first bin (NaN from diff)
+
+            lower_flow = interval.left
+            upper_flow = interval.right
+
+            # Convert flow to diameter
+            lower_dp = np.interp(lower_flow, np.flip(cal_satflow), np.flip(cal_diameter))
+            upper_dp = np.interp(upper_flow, np.flip(cal_satflow), np.flip(cal_diameter))
+
+            dlogDp = np.log10(lower_dp) - np.log10(upper_dp)
+            max_det_eff = np.interp(upper_dp, cal_diameter, cal_maxdeteff)
+
+            dN_val = dN.iloc[i]
+
+            if pd.isna(dN_val) or dN_val < 0:
+                dN_val = 0
+
+            if abs(dlogDp) > 0.001 and max_det_eff > 0:
+                output_idx = i - 1
+                if 0 <= output_idx < self.num_bins:
+                    dN_dlogDp[output_idx] = dN_val / abs(dlogDp) / max_det_eff
+
+        # Flip array so index 0 = smallest diameter
         return np.flip(dN_dlogDp)
 
     def _step_inversion(self, binned_concentrations: np.ndarray) -> np.ndarray:
@@ -3368,19 +3535,27 @@ class PSMContourTab(QWidget):
         Process a historical scan and add it to the scan buffer.
 
         Args:
-            scan_data: Dict with keys 'times', 'satflows', 'concentrations_psm', and optionally 'is_10hz'
+            scan_data: Dict with keys 'times', 'satflows', 'concentrations_psm',
+                      optionally 'is_10hz' and 'trailing_concentrations'
         """
         times = scan_data['times']
         satflows = scan_data['satflows']
         concentrations_psm = scan_data['concentrations_psm']
         is_10hz = scan_data.get('is_10hz', False)
+        trailing_concs = scan_data.get('trailing_concentrations', [])
 
         if len(times) < 3:
             return  # Skip incomplete scans
 
-        # Bin and invert (time shift applied inside _bin_and_invert_scan for 1Hz data)
-        # For 10Hz data, the CPC transit delay is already applied in flow calculation
-        dN_dlogDp = self._bin_and_invert_scan(satflows, concentrations_psm, is_10hz)
+        # Bin and invert
+        # For 10Hz data with trailing concentrations, use the method that handles trailing data
+        if is_10hz and len(trailing_concs) > 0:
+            dN_dlogDp = self._bin_and_invert_scan_with_trailing(
+                satflows, concentrations_psm, trailing_concs, is_10hz
+            )
+        else:
+            # For 1Hz data or 10Hz without trailing data, use standard method
+            dN_dlogDp = self._bin_and_invert_scan(satflows, concentrations_psm, is_10hz)
 
         # Store scan result
         scan_result = {

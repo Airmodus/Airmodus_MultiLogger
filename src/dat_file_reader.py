@@ -242,7 +242,8 @@ def calculate_scan_flows_exponential(
 def merge_10hz_data_into_scans(
     scans: List[Dict],
     ten_hz_df: pd.DataFrame,
-    scan_timing_params: dict
+    scan_timing_params: dict,
+    cpc_transit_delay: float = 3.0
 ) -> List[Dict]:
     """
     Merge 10Hz concentration data into detected scans.
@@ -251,13 +252,14 @@ def merge_10hz_data_into_scans(
     replaces the 1Hz data with 10Hz data and calculates flows using
     the exponential formula.
 
-    CPC transit delay is applied later in _bin_and_invert_scan via
-    concentration shift, matching the reference PSM Inversion Tool approach.
+    Also extracts trailing concentration data (from after scan ends) for use
+    in time-shifting, so the shift doesn't create NaN values at the end.
 
     Args:
         scans: List of scan dicts from detect_scans_from_dat()
         ten_hz_df: DataFrame with 'timestamp' and 'concentration' columns
         scan_timing_params: Dict with up_scan_time, down_scan_time, min_flow, max_flow
+        cpc_transit_delay: CPC transit delay in seconds (for trailing data extraction)
 
     Returns:
         Enhanced scans list with 10Hz data where available
@@ -327,11 +329,19 @@ def merge_10hz_data_into_scans(
                 scan_time=scan_time
             )
 
+            # Extract trailing concentration data (for time-shift)
+            # Get concentration values from after scan ends, for cpc_transit_delay seconds
+            trailing_end = scan_end + pd.Timedelta(seconds=cpc_transit_delay + 0.5)
+            trailing_mask = (ten_hz_df['timestamp'] > scan_end) & (ten_hz_df['timestamp'] <= trailing_end)
+            trailing_10hz = ten_hz_df[trailing_mask].copy()
+            trailing_concs = trailing_10hz['concentration'].values.tolist() if len(trailing_10hz) > 0 else []
+
             # Create enhanced scan with 10Hz data
             enhanced_scan = {
                 'times': timestamps_10hz,
                 'satflows': flows_10hz,
                 'concentrations_psm': scan_10hz['concentration'].values,
+                'trailing_concentrations': trailing_concs,
                 'type': scan_type,
                 'is_10hz': True
             }
@@ -753,7 +763,8 @@ def load_historical_scans(
                     merged_scans = merge_10hz_data_into_scans(
                         scans=merged_scans,
                         ten_hz_df=combined_10hz,
-                        scan_timing_params=scan_timing_params
+                        scan_timing_params=scan_timing_params,
+                        cpc_transit_delay=cpc_transit_delay
                     )
 
                     # Count how many scans got 10Hz data
