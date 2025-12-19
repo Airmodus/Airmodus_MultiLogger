@@ -180,13 +180,17 @@ class HistoricalDataLoader(QThread):
     finished_loading = pyqtSignal(list, list)  # filepaths, all scans
     error = pyqtSignal(str)  # error message
 
-    def __init__(self, file_path, serial_number, device_nickname, file_tag, hours):
+    def __init__(self, file_path, serial_number, device_nickname, file_tag, hours,
+                 connected_cpc_serial=None, scan_timing_params=None, cpc_transit_delay=3.0):
         super().__init__()
         self.file_path = file_path
         self.serial_number = serial_number
         self.device_nickname = device_nickname
         self.file_tag = file_tag
         self.hours = hours
+        self.connected_cpc_serial = connected_cpc_serial
+        self.scan_timing_params = scan_timing_params
+        self.cpc_transit_delay = cpc_transit_delay
         self._cancelled = False
 
     def cancel(self):
@@ -204,13 +208,17 @@ class HistoricalDataLoader(QThread):
             self.progress.emit(0, 0, "Finding data files...")
 
             # Load historical scans with progress callback
+            # Include 10Hz params for enhanced resolution when available
             filepaths, scans = load_historical_scans(
                 file_path=self.file_path,
                 serial_number=self.serial_number,
                 device_nickname=self.device_nickname,
                 file_tag=self.file_tag,
                 hours=self.hours,
-                progress_callback=self._emit_progress
+                progress_callback=self._emit_progress,
+                connected_cpc_serial=self.connected_cpc_serial,
+                scan_timing_params=self.scan_timing_params,
+                cpc_transit_delay=self.cpc_transit_delay
             )
 
             if self._cancelled:
@@ -3190,13 +3198,40 @@ class PSMContourTab(QWidget):
         self.scan_buffer = []
         self._pending_scans = []  # Collect scans for batch processing
 
+        # Get connected CPC serial number for 10Hz data lookup
+        connected_cpc_serial = None
+        cpc_id = self.device_config.extra_params.get('connected_cpc', 'None')
+        if cpc_id != 'None':
+            try:
+                cpc_id_int = int(cpc_id)
+                for device_cfg in self.app_config.devices:
+                    if device_cfg.device_id == cpc_id_int:
+                        connected_cpc_serial = device_cfg.serial_number
+                        break
+            except (ValueError, TypeError):
+                pass
+
+        # Get scan timing parameters for 10Hz flow calculation
+        scan_timing_params = None
+        if self.bin_limits_flow is not None and len(self.bin_limits_flow) >= 2:
+            up_time, down_time = self._get_scan_times()
+            scan_timing_params = {
+                'up_scan_time': up_time,
+                'down_scan_time': down_time,
+                'min_flow': float(self.bin_limits_flow.min()),
+                'max_flow': float(self.bin_limits_flow.max())
+            }
+
         # Create and start loader thread
         self._loader_thread = HistoricalDataLoader(
             file_path=file_path,
             serial_number=serial_number,
             device_nickname=device_nickname,
             file_tag=file_tag,
-            hours=self.time_window_hours
+            hours=self.time_window_hours,
+            connected_cpc_serial=connected_cpc_serial,
+            scan_timing_params=scan_timing_params,
+            cpc_transit_delay=self.cpc_transit_delay
         )
 
         # Connect signals
@@ -3335,17 +3370,19 @@ class PSMContourTab(QWidget):
         Process a historical scan and add it to the scan buffer.
 
         Args:
-            scan_data: Dict with keys 'times', 'satflows', 'concentrations_psm'
+            scan_data: Dict with keys 'times', 'satflows', 'concentrations_psm', and optionally 'is_10hz'
         """
         times = scan_data['times']
         satflows = scan_data['satflows']
         concentrations_psm = scan_data['concentrations_psm']
+        is_10hz = scan_data.get('is_10hz', False)
 
         if len(times) < 3:
             return  # Skip incomplete scans
 
-        # Bin and invert (time shift applied inside _bin_and_invert_scan)
-        dN_dlogDp = self._bin_and_invert_scan(satflows, concentrations_psm)
+        # Bin and invert (time shift applied inside _bin_and_invert_scan for 1Hz data)
+        # For 10Hz data, the CPC transit delay is already applied in flow calculation
+        dN_dlogDp = self._bin_and_invert_scan(satflows, concentrations_psm, is_10hz)
 
         # Store scan result
         scan_result = {

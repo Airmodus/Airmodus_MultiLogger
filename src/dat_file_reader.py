@@ -66,6 +66,276 @@ def find_psm_files_last_24h(file_path: str, hours: int = 24) -> List[str]:
     return sorted([f for f in all_matching_files if os.path.getsize(f) > 500])
 
 
+def find_cpc_10hz_files(file_path: str, hours: int = 24) -> Dict[str, List[str]]:
+    """
+    Find 10Hz CPC CSV files matching the time window.
+
+    Args:
+        file_path: Directory where CSV files are saved
+        hours: Number of hours to look back
+
+    Returns:
+        Dict mapping CPC serial number to list of file paths, sorted by time
+    """
+    from datetime import timedelta
+    import re
+
+    # Get dates to search based on hours parameter
+    now = datetime.now()
+    dates_to_search = set()
+
+    days_back = (hours // 24) + 1
+    for i in range(days_back + 1):
+        date_str = (now - timedelta(days=i)).strftime("%Y%m%d")
+        dates_to_search.add(date_str)
+
+    # Search for 10Hz files: YYYYMMDD_*_CPC_*_10hz*.csv
+    all_matching_files = set()
+    for date_str in dates_to_search:
+        pattern = os.path.join(file_path, f"{date_str}_*CPC*10hz*.csv")
+        all_matching_files.update(glob.glob(pattern))
+
+    # Group files by CPC serial number
+    # Filename format: YYYYMMDD_HHMMSS_[SerialNumber]_CPC_[Nickname]_10hz_[FileTag].csv
+    serial_to_files: Dict[str, List[str]] = {}
+
+    for filepath in all_matching_files:
+        if os.path.getsize(filepath) < 100:
+            continue
+
+        filename = os.path.basename(filepath)
+        # Extract serial number - it's between the timestamp and _CPC
+        # Pattern: YYYYMMDD_HHMMSS_SERIAL_CPC_...
+        match = re.match(r'\d{8}_\d{6}_([^_]+)_CPC', filename)
+        if match:
+            serial = match.group(1)
+            if serial not in serial_to_files:
+                serial_to_files[serial] = []
+            serial_to_files[serial].append(filepath)
+
+    # Sort each serial's files chronologically
+    for serial in serial_to_files:
+        serial_to_files[serial] = sorted(serial_to_files[serial])
+
+    return serial_to_files
+
+
+def read_cpc_10hz_csv(filepath: str) -> pd.DataFrame:
+    """
+    Read CPC 10Hz CSV file and return DataFrame with expanded timestamps.
+
+    Each row in the CSV has 1-second timestamp + 10 concentration values.
+    This expands to 10 rows with 100ms interval timestamps.
+
+    Returns:
+        DataFrame with columns:
+        - timestamp: pd.Timestamp (100ms resolution)
+        - concentration: float (raw CPC concentration)
+    """
+    try:
+        df = pd.read_csv(filepath, encoding='UTF-8')
+
+        if len(df.columns) < 11:
+            logging.warning(f"10Hz file {filepath} has insufficient columns")
+            return pd.DataFrame(columns=['timestamp', 'concentration'])
+
+        timestamps = []
+        concentrations = []
+
+        timestamp_col = df.columns[0]
+
+        for _, row in df.iterrows():
+            try:
+                # Parse base timestamp
+                ts_str = str(row[timestamp_col]).strip()
+                base_ts = pd.to_datetime(ts_str, format='%Y.%m.%d %H:%M:%S')
+
+                # Expand to 10 rows with 100ms intervals
+                # Index 0 = -900ms (oldest), Index 9 = 0ms (newest/current)
+                for i in range(10):
+                    conc_val = row.iloc[i + 1]  # Columns 1-10 are concentrations
+                    try:
+                        conc = float(conc_val)
+                    except (ValueError, TypeError):
+                        conc = np.nan
+
+                    if not np.isnan(conc):
+                        # Time offset: i=0 is -900ms, i=9 is 0ms
+                        time_offset = pd.Timedelta(milliseconds=(i - 9) * 100)
+                        timestamps.append(base_ts + time_offset)
+                        concentrations.append(conc)
+
+            except Exception as e:
+                logging.debug(f"Error parsing row in 10Hz file: {e}")
+                continue
+
+        return pd.DataFrame({
+            'timestamp': timestamps,
+            'concentration': concentrations
+        })
+
+    except Exception as e:
+        logging.error(f"Error reading 10Hz file {filepath}: {e}")
+        return pd.DataFrame(columns=['timestamp', 'concentration'])
+
+
+def calculate_scan_flows_exponential(
+    timestamps: np.ndarray,
+    scan_start_time: pd.Timestamp,
+    scan_type: str,
+    min_flow: float,
+    max_flow: float,
+    scan_time: float,
+    cpc_transit_delay: float = 3.0
+) -> np.ndarray:
+    """
+    Calculate saturator flow values using exponential profile for timestamps.
+
+    Mirrors the live 10Hz logic - applies CPC transit delay in flow calculation.
+
+    Args:
+        timestamps: Array of pd.Timestamp values
+        scan_start_time: When the scan started
+        scan_type: 'up' or 'down'
+        min_flow: Minimum saturator flow (lpm)
+        max_flow: Maximum saturator flow (lpm)
+        scan_time: Scan duration in seconds
+        cpc_transit_delay: CPC transit delay in seconds
+
+    Returns:
+        Array of saturator flow values
+    """
+    # Calculate scan power for exponential profile
+    scan_power = (max_flow / min_flow) ** (1.0 / scan_time)
+
+    flows = np.zeros(len(timestamps))
+
+    for i, ts in enumerate(timestamps):
+        # Time since scan started
+        t = (ts - scan_start_time).total_seconds()
+
+        # Apply CPC transit delay: concentration measured at time t
+        # corresponds to particles at saturator at time t - delay
+        t_at_saturator = t - cpc_transit_delay
+        if t_at_saturator < 0:
+            t_at_saturator = 0
+
+        if scan_type == 'up':
+            flows[i] = min_flow * (scan_power ** t_at_saturator)
+        else:  # down
+            flows[i] = max_flow * ((1 / scan_power) ** t_at_saturator)
+
+    # Clamp to valid range
+    flows = np.clip(flows, min_flow, max_flow)
+
+    return flows
+
+
+def merge_10hz_data_into_scans(
+    scans: List[Dict],
+    ten_hz_df: pd.DataFrame,
+    scan_timing_params: dict,
+    cpc_transit_delay: float = 3.0
+) -> List[Dict]:
+    """
+    Merge 10Hz concentration data into detected scans.
+
+    For each scan, if sufficient 10Hz data exists within its time range,
+    replaces the 1Hz data with 10Hz data and calculates flows using
+    the exponential formula.
+
+    Args:
+        scans: List of scan dicts from detect_scans_from_dat()
+        ten_hz_df: DataFrame with 'timestamp' and 'concentration' columns
+        scan_timing_params: Dict with up_scan_time, down_scan_time, min_flow, max_flow
+        cpc_transit_delay: CPC transit delay in seconds
+
+    Returns:
+        Enhanced scans list with 10Hz data where available
+    """
+    if ten_hz_df.empty or not scan_timing_params:
+        return scans
+
+    min_flow = scan_timing_params.get('min_flow')
+    max_flow = scan_timing_params.get('max_flow')
+    up_scan_time = scan_timing_params.get('up_scan_time', 110)
+    down_scan_time = scan_timing_params.get('down_scan_time', 110)
+
+    if min_flow is None or max_flow is None:
+        return scans
+
+    enhanced_scans = []
+
+    for scan in scans:
+        times = scan['times']
+        if len(times) < 3:
+            enhanced_scans.append(scan)
+            continue
+
+        scan_start = times[0]
+        scan_end = times[-1]
+
+        # Handle both Timestamp and datetime64
+        if isinstance(scan_start, np.datetime64):
+            scan_start = pd.Timestamp(scan_start)
+        if isinstance(scan_end, np.datetime64):
+            scan_end = pd.Timestamp(scan_end)
+
+        # Find 10Hz data within scan time range
+        mask = (ten_hz_df['timestamp'] >= scan_start) & (ten_hz_df['timestamp'] <= scan_end)
+        scan_10hz = ten_hz_df[mask].copy()
+
+        # Calculate expected number of 10Hz points
+        scan_duration = (scan_end - scan_start).total_seconds()
+        expected_points = scan_duration * 10  # 10 points per second
+
+        # Use 10Hz data if we have sufficient coverage (>= 50%)
+        if len(scan_10hz) >= expected_points * 0.5 and len(scan_10hz) >= 30:
+            # Determine scan type from satflow direction in original data
+            scan_type = scan.get('type', 'up')
+            if scan_type not in ['up', 'down']:
+                # Detect from flow direction
+                satflows = scan['satflows']
+                if len(satflows) >= 2:
+                    scan_type = 'up' if satflows[-1] > satflows[0] else 'down'
+                else:
+                    scan_type = 'up'
+
+            # Select appropriate scan time
+            scan_time = up_scan_time if scan_type == 'up' else down_scan_time
+
+            # Calculate flows using exponential formula
+            timestamps_10hz = scan_10hz['timestamp'].values
+            # Convert to pandas Timestamps if needed
+            timestamps_10hz = pd.to_datetime(timestamps_10hz)
+
+            flows_10hz = calculate_scan_flows_exponential(
+                timestamps=timestamps_10hz,
+                scan_start_time=scan_start,
+                scan_type=scan_type,
+                min_flow=min_flow,
+                max_flow=max_flow,
+                scan_time=scan_time,
+                cpc_transit_delay=cpc_transit_delay
+            )
+
+            # Create enhanced scan with 10Hz data
+            enhanced_scan = {
+                'times': timestamps_10hz,
+                'satflows': flows_10hz,
+                'concentrations_psm': scan_10hz['concentration'].values,
+                'type': scan_type,
+                'is_10hz': True
+            }
+            enhanced_scans.append(enhanced_scan)
+        else:
+            # Keep original 1Hz scan
+            scan['is_10hz'] = False
+            enhanced_scans.append(scan)
+
+    return enhanced_scans
+
+
 def _calculate_concentration_psm(satflow: float, excess_flow: float, cpc_conc: float,
                                    is_psm2: bool, vacuum_flow: float = 0.0,
                                    cpc_flow: float = 1.0) -> float:
@@ -331,11 +601,15 @@ def load_historical_scans(
     device_nickname: str = "",
     file_tag: str = "",
     hours: int = 24,
-    progress_callback: Optional[callable] = None
+    progress_callback: Optional[callable] = None,
+    connected_cpc_serial: Optional[str] = None,
+    scan_timing_params: Optional[dict] = None,
+    cpc_transit_delay: float = 3.0
 ) -> Tuple[Optional[List[str]], List[Dict[str, np.ndarray]]]:
     """
     Load and merge scans from ALL PSM .dat files in the specified time window.
     Handles multiple files per day and merges them intelligently.
+    Optionally merges 10Hz CPC data for higher resolution.
 
     For overlapping timestamps, prefers data from the file with the longest
     continuous data range.
@@ -347,11 +621,14 @@ def load_historical_scans(
         file_tag: File tag from settings (unused, kept for compatibility)
         hours: Number of hours to look back (default 24)
         progress_callback: Optional callback(current, total, message) for progress updates
+        connected_cpc_serial: CPC serial number to match 10Hz files (optional)
+        scan_timing_params: Dict with up_scan_time, down_scan_time, min_flow, max_flow (optional)
+        cpc_transit_delay: CPC transit delay in seconds (default 3.0)
 
     Returns:
         Tuple of (filepaths, scans):
         - filepaths: List of loaded file paths (or None if none found)
-        - scans: Merged list of scan dicts with 'times', 'satflows', 'concentrations'
+        - scans: Merged list of scan dicts with 'times', 'satflows', 'concentrations_psm', 'is_10hz'
     """
     # Find all files from the specified time window
     if progress_callback:
@@ -425,6 +702,55 @@ def load_historical_scans(
 
     # Sort merged scans by time
     merged_scans.sort(key=lambda s: s['times'][0] if len(s['times']) > 0 else pd.Timestamp.min)
+
+    # Try to merge 10Hz data if CPC serial and timing params are provided
+    if connected_cpc_serial and scan_timing_params and merged_scans:
+        if progress_callback:
+            progress_callback(len(filepaths), len(filepaths), "Looking for 10Hz data...")
+
+        try:
+            # Find 10Hz files for the connected CPC
+            cpc_10hz_files = find_cpc_10hz_files(file_path, hours=hours)
+
+            if connected_cpc_serial in cpc_10hz_files:
+                ten_hz_files = cpc_10hz_files[connected_cpc_serial]
+
+                if progress_callback:
+                    progress_callback(len(filepaths), len(filepaths),
+                                    f"Loading {len(ten_hz_files)} 10Hz file(s)...")
+
+                # Read and combine all 10Hz files
+                all_10hz_data = []
+                for f in ten_hz_files:
+                    df_10hz = read_cpc_10hz_csv(f)
+                    if not df_10hz.empty:
+                        all_10hz_data.append(df_10hz)
+
+                if all_10hz_data:
+                    combined_10hz = pd.concat(all_10hz_data, ignore_index=True)
+                    combined_10hz = combined_10hz.sort_values('timestamp').reset_index(drop=True)
+
+                    if progress_callback:
+                        progress_callback(len(filepaths), len(filepaths),
+                                        f"Merging {len(combined_10hz)} 10Hz points...")
+
+                    # Merge 10Hz data into scans
+                    merged_scans = merge_10hz_data_into_scans(
+                        scans=merged_scans,
+                        ten_hz_df=combined_10hz,
+                        scan_timing_params=scan_timing_params,
+                        cpc_transit_delay=cpc_transit_delay
+                    )
+
+                    # Count how many scans got 10Hz data
+                    count_10hz = sum(1 for s in merged_scans if s.get('is_10hz', False))
+                    if progress_callback:
+                        progress_callback(len(filepaths), len(filepaths),
+                                        f"Enhanced {count_10hz}/{len(merged_scans)} scans with 10Hz data")
+
+        except Exception as e:
+            logging.error(f"Error loading 10Hz data: {e}")
+            # Continue with 1Hz data if 10Hz loading fails
 
     return filepaths, merged_scans
 
