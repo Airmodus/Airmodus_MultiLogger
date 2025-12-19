@@ -2300,16 +2300,11 @@ class PSMContourTab(QWidget):
         """Check if 10Hz mode should be used for live inversion.
 
         Returns True only if:
-        - contour_10hz_enabled is True (user setting)
         - data_holder is available
         - 10Hz logging is enabled in PSM config
         - A CPC is connected
         - CPC widget has valid ten_hz_data
         """
-        # Check if 10Hz contour mode is enabled (user toggle)
-        if not self.contour_10hz_enabled:
-            return False
-
         if data_holder is None:
             return False
 
