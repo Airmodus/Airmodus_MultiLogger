@@ -3034,11 +3034,9 @@ class PSMContourTab(QWidget):
         Returns:
             Array of dN/dlogDp values for each bin
         """
-        # Debug: log satflow range
+        # Debug: log satflow range and bin_means
         if len(satflows) > 0:
-            print(f"[10Hz Inversion] satflows range: {satflows.min():.3f} - {satflows.max():.3f}, "
-                  f"bin_limits_flow: {self.bin_limits_flow[0]:.3f} - {self.bin_limits_flow[-1]:.3f}, "
-                  f"n_points: {len(satflows)}")
+            print(f"[10Hz Inversion] satflows: {satflows.min():.3f} - {satflows.max():.3f}, n={len(satflows)}")
 
         # Calculate shift amount
         shift_rows = int(self.cpc_transit_delay * 10) if is_10hz else round(self.cpc_transit_delay)
@@ -3078,8 +3076,8 @@ class PSMContourTab(QWidget):
         dN = bin_means.diff()
 
         # Debug: log bin_means and dN
-        print(f"[10Hz Inversion] bin_means: {bin_means.values}")
-        print(f"[10Hz Inversion] dN: {dN.values}")
+        print(f"[10Hz Inversion] bin_means: {[f'{v:.1f}' if not np.isnan(v) else 'nan' for v in bin_means.values]}")
+        print(f"[10Hz Inversion] dN: {[f'{v:.1f}' if not np.isnan(v) else 'nan' for v in dN.values]}")
 
         # Get calibration data
         cal_satflow = self.calibration_df['cal_satflow'].values
@@ -3116,7 +3114,9 @@ class PSMContourTab(QWidget):
                     dN_dlogDp[output_idx] = dN_val / abs(dlogDp) / max_det_eff
 
         # Flip array so index 0 = smallest diameter
-        return np.flip(dN_dlogDp)
+        result = np.flip(dN_dlogDp)
+        print(f"[10Hz Inversion] dN_dlogDp (flipped): {[f'{v:.1f}' for v in result]}")
+        return result
 
     def _step_inversion(self, binned_concentrations: np.ndarray) -> np.ndarray:
         """
