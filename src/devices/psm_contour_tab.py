@@ -3029,6 +3029,12 @@ class PSMContourTab(QWidget):
         Returns:
             Array of dN/dlogDp values for each bin
         """
+        # Debug: log satflow range
+        if len(satflows) > 0:
+            print(f"[10Hz Inversion] satflows range: {satflows.min():.3f} - {satflows.max():.3f}, "
+                  f"bin_limits_flow: {self.bin_limits_flow[0]:.3f} - {self.bin_limits_flow[-1]:.3f}, "
+                  f"n_points: {len(satflows)}")
+
         # Calculate shift amount
         shift_rows = int(self.cpc_transit_delay * 10) if is_10hz else round(self.cpc_transit_delay)
 
@@ -3065,6 +3071,10 @@ class PSMContourTab(QWidget):
 
         # Calculate dN using diff
         dN = bin_means.diff()
+
+        # Debug: log bin_means and dN
+        print(f"[10Hz Inversion] bin_means: {bin_means.values}")
+        print(f"[10Hz Inversion] dN: {dN.values}")
 
         # Get calibration data
         cal_satflow = self.calibration_df['cal_satflow'].values
@@ -3436,14 +3446,16 @@ class PSMContourTab(QWidget):
                 pass
 
         # Get scan timing parameters for 10Hz flow calculation
+        # Use actual PSM scan range (stationary phase flows) instead of calibration-derived limits
+        # This ensures historical 10Hz data covers the full scan range (e.g., 0.15-1.90 lpm)
         scan_timing_params = None
         if self.bin_limits_flow is not None and len(self.bin_limits_flow) >= 2:
             up_time, down_time = self._get_scan_times()
             scan_timing_params = {
                 'up_scan_time': up_time,
                 'down_scan_time': down_time,
-                'min_flow': float(self.bin_limits_flow.min()),
-                'max_flow': float(self.bin_limits_flow.max())
+                'min_flow': float(self._stationary_low_flow),
+                'max_flow': float(self._stationary_high_flow)
             }
 
         # Create and start loader thread
