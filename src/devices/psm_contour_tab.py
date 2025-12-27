@@ -2942,7 +2942,14 @@ class PSMContourTab(QWidget):
 
         # Use pd.cut to bin by satflow
         # bin_limits_flow is now in ascending order (matches original after flip)
-        df['bins'] = pd.cut(df['satflow'], self.bin_limits_flow)
+        # Extend bin edges to cover actual data range (PSM may scan beyond calibration range)
+        bin_limits = self.bin_limits_flow.copy()
+        data_min, data_max = df['satflow'].min(), df['satflow'].max()
+        if data_min < bin_limits[0]:
+            bin_limits[0] = data_min - 0.001  # Extend lower edge
+        if data_max > bin_limits[-1]:
+            bin_limits[-1] = data_max + 0.001  # Extend upper edge
+        df['bins'] = pd.cut(df['satflow'], bin_limits)
 
         # Calculate mean concentration per bin (like reference groupRawData)
         # Use observed=False to ensure ALL bin intervals appear, even empty ones
@@ -3043,7 +3050,14 @@ class PSMContourTab(QWidget):
         df = df.iloc[:len(satflows)]
 
         # Use pd.cut to bin by satflow
-        df['bins'] = pd.cut(df['satflow'], self.bin_limits_flow)
+        # Extend bin edges to cover actual data range (PSM may scan beyond calibration range)
+        bin_limits = self.bin_limits_flow.copy()
+        data_min, data_max = df['satflow'].min(), df['satflow'].max()
+        if data_min < bin_limits[0]:
+            bin_limits[0] = data_min - 0.001  # Extend lower edge
+        if data_max > bin_limits[-1]:
+            bin_limits[-1] = data_max + 0.001  # Extend upper edge
+        df['bins'] = pd.cut(df['satflow'], bin_limits)
 
         # Calculate mean concentration per bin
         # Use observed=False to ensure ALL bin intervals appear, even empty ones
