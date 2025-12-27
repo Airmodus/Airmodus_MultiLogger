@@ -918,10 +918,6 @@ class PSMWidget(ComplexDevice):
         if hasattr(self, 'set_app_config'):
             self.set_app_config(app_config)
 
-        # Restore 10 Hz toggle state
-        if '10_hz' in device_config.extra_params:
-            self.measure_tab.ten_hz_checkbox.update_state(int(device_config.extra_params['10_hz']))
-
         # Restore measure tab settings (scan/step/fixed parameters)
         self.measure_tab.restore_settings(device_config.extra_params)
 

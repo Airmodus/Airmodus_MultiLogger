@@ -85,13 +85,6 @@ def cpc_flow_send(psm_widget, value, device_widgets):
             if cpc_widget.connection:
                 cpc_widget.connection.send_set_val(value, ":SET:FLOW ", decimals=3)
 
-# change PSM's 10 Hz parameter based on toggle state
-def ten_hz_clicked(psm_widget, config):
-    # Get toggle state (toggle manages its own state, we just sync to config)
-    is_enabled = bool(psm_widget.measure_tab.ten_hz_checkbox.state)
-    psm_widget.device_config.extra_params['10_hz'] = is_enabled
-
-
 # when command is entered, send message to device and update .par file
 def command_entered(dev_id, device_widgets, config):
     try:
@@ -264,7 +257,7 @@ def compute_unique_short_ids(serial_numbers):
 __all__ = [
     'compile_cpc_settings', 'compile_psm_settings',
     '_manage_plot_array', '_roll_pulse_array', 'psm_update', 'psm_flow_send', 'cpc_flow_send',
-    'ten_hz_clicked', 'command_entered',
+    'command_entered',
     'parse_idn_response', 'create_data_response', 'create_error_response',
     'compute_unique_short_ids'
 ]

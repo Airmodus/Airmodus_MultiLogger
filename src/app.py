@@ -17,7 +17,6 @@ from utils import (
     psm_update,
     psm_flow_send,
     cpc_flow_send,
-    ten_hz_clicked,
     command_entered
 )
 from plots import (
