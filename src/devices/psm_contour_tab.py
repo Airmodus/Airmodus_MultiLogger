@@ -1910,22 +1910,23 @@ class PSMContourTab(QWidget):
             Tuple of (up_scan_time, down_scan_time) in seconds
         """
         # Try to get from parent PSM widget's measure tab
+        # The hierarchy is: PSMContourTab -> QStackedWidget -> PSMWidget
         try:
-            # self is PSMContourTab, parent should be PSMWidget
-            parent = self.parent()
-            if parent and hasattr(parent, 'measure_tab'):
-                measure_tab = parent.measure_tab
-                up_time = measure_tab.set_up_scan_time.value_spinbox.value()
-                down_time = measure_tab.set_down_scan_time.value_spinbox.value()
-                print(f"[DEBUG] Got scan times from measure_tab: up={up_time}s, down={down_time}s")
-                return (up_time, down_time)
-            else:
-                print(f"[DEBUG] No measure_tab found, parent={parent}, has measure_tab={hasattr(parent, 'measure_tab') if parent else 'N/A'}")
+            # Traverse up the widget hierarchy to find PSMWidget with measure_tab
+            widget = self.parent()
+            for _ in range(5):  # Check up to 5 levels up
+                if widget is None:
+                    break
+                if hasattr(widget, 'measure_tab'):
+                    measure_tab = widget.measure_tab
+                    up_time = measure_tab.set_up_scan_time.value_spinbox.value()
+                    down_time = measure_tab.set_down_scan_time.value_spinbox.value()
+                    return (up_time, down_time)
+                widget = widget.parent()
         except Exception as e:
-            print(f"[DEBUG] Exception getting scan times: {e}")
+            logging.debug(f"Exception getting scan times: {e}")
 
         # Fallback defaults (typical 240s total: 10+110+10+110)
-        print("[DEBUG] Using fallback scan times: 110, 110")
         return (110, 110)
 
     def _calculate_flow_bins(self, fixed_bin_limits: np.ndarray) -> np.ndarray:
