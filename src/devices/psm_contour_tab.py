@@ -1917,11 +1917,15 @@ class PSMContourTab(QWidget):
                 measure_tab = parent.measure_tab
                 up_time = measure_tab.set_up_scan_time.value_spinbox.value()
                 down_time = measure_tab.set_down_scan_time.value_spinbox.value()
+                print(f"[DEBUG] Got scan times from measure_tab: up={up_time}s, down={down_time}s")
                 return (up_time, down_time)
-        except Exception:
-            pass
+            else:
+                print(f"[DEBUG] No measure_tab found, parent={parent}, has measure_tab={hasattr(parent, 'measure_tab') if parent else 'N/A'}")
+        except Exception as e:
+            print(f"[DEBUG] Exception getting scan times: {e}")
 
         # Fallback defaults (typical 240s total: 10+110+10+110)
+        print("[DEBUG] Using fallback scan times: 110, 110")
         return (110, 110)
 
     def _calculate_flow_bins(self, fixed_bin_limits: np.ndarray) -> np.ndarray:
