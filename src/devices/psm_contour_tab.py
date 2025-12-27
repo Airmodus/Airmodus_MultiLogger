@@ -317,6 +317,12 @@ class PSMContourTab(QWidget):
         self._trailing_buffer = []  # Concentration values collected after scan ends
         self._trailing_start_time = None  # When we started collecting trailing data
 
+        # Actual min/max flow from stationary phases (for 10Hz exponential flow calculation)
+        # These are updated during scan status 0 (low) and status 2 (high) phases
+        # Used instead of bin_limits_flow to ensure 10Hz flows cover actual PSM scan range
+        self._stationary_low_flow = 0.15  # Default, updated when scan_status == "0"
+        self._stationary_high_flow = 1.90  # Default, updated when scan_status == "2"
+
         # CPC transit delay: time for particles to travel from saturator to CPC counter
         # Matches PSM Inversion Tool's CPC_time_lag = -3 seconds
         # Concentration is shifted forward (paired with satflow from 3 seconds earlier)
@@ -2520,6 +2526,15 @@ class PSMContourTab(QWidget):
                 # Finalize the pending scan with trailing data
                 self._finalize_pending_scan_with_trailing()
 
+        # Track actual min/max flow from stationary phases for 10Hz exponential calculation
+        # This ensures calculated flows cover the actual PSM scan range, not just the calibration range
+        if scan_status == "0" and not np.isnan(current_flow) and current_flow > 0:
+            # Low flow stationary phase - update min flow
+            self._stationary_low_flow = current_flow
+        elif scan_status == "2" and not np.isnan(current_flow) and current_flow > 0:
+            # High flow stationary phase - update max flow
+            self._stationary_high_flow = current_flow
+
         # Detect scan phase transitions
         # UP scan starts when transitioning TO status "1"
         if scan_status == "1" and self._prev_scan_status != "1":
@@ -2565,8 +2580,11 @@ class PSMContourTab(QWidget):
                     flows = np.full(10, current_flow)
                 else:
                     up_scan_time, down_scan_time = self._get_scan_times()
-                    min_flow = self.bin_limits_flow.min()
-                    max_flow = self.bin_limits_flow.max()
+                    # Use actual measured min/max flow from stationary phases, NOT bin_limits_flow
+                    # This ensures 10Hz flows cover the actual PSM scan range (e.g., 0.15-1.90 lpm)
+                    # instead of the calibration-derived range which may be narrower
+                    min_flow = self._stationary_low_flow
+                    max_flow = self._stationary_high_flow
                     scan_time = up_scan_time if self._current_scan['type'] == 'up' else down_scan_time
                     scan_power = (max_flow / min_flow) ** (1.0 / scan_time)
 
