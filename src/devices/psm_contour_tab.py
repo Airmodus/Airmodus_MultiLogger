@@ -1608,6 +1608,20 @@ class PSMContourTab(QWidget):
         self.contour_10hz_enabled = enabled
         self._save_contour_settings()
 
+    def _get_10hz_enabled(self) -> bool:
+        """Get current 10Hz logging state from device config."""
+        if hasattr(self, 'device_config') and self.device_config:
+            return bool(self.device_config.extra_params.get('10_hz', False))
+        return False
+
+    def _toggle_10hz_logging(self, enabled: bool):
+        """Toggle 10Hz logging mode and save to config."""
+        if hasattr(self, 'device_config') and self.device_config:
+            self.device_config.extra_params['10_hz'] = enabled
+            # Trigger config save if callback is available
+            if hasattr(self, 'on_config_changed') and self.on_config_changed:
+                self.on_config_changed()
+
     def initialize_after_config_set(self):
         """
         Initialize contour tab after app_config is set.
@@ -2255,6 +2269,16 @@ class PSMContourTab(QWidget):
         delay_action = QWidgetAction(advanced_menu)
         delay_action.setDefaultWidget(delay_widget)
         advanced_menu.addAction(delay_action)
+
+        # Add separator before 10Hz toggle
+        advanced_menu.addSeparator()
+
+        # 10Hz logging toggle
+        ten_hz_action = advanced_menu.addAction("10 Hz logging")
+        ten_hz_action.setCheckable(True)
+        ten_hz_action.setChecked(self._get_10hz_enabled())
+        ten_hz_action.setToolTip("Enable 10 Hz data logging rate for higher resolution inversion")
+        ten_hz_action.triggered.connect(self._toggle_10hz_logging)
 
         # Show menu at button position
         menu.exec_(self.settings_btn.mapToGlobal(QPoint(0, self.settings_btn.height())))
@@ -2921,7 +2945,9 @@ class PSMContourTab(QWidget):
         df['bins'] = pd.cut(df['satflow'], self.bin_limits_flow)
 
         # Calculate mean concentration per bin (like reference groupRawData)
-        bin_means = df.groupby('bins', observed=True)['concentration'].mean()
+        # Use observed=False to ensure ALL bin intervals appear, even empty ones
+        # This is critical for 10Hz mode where some bins may have no data points
+        bin_means = df.groupby('bins', observed=False)['concentration'].mean()
 
         # Calculate dN using diff (like reference line 187)
         # bin_means is sorted by interval (ascending flow = ascending index)
@@ -3020,7 +3046,8 @@ class PSMContourTab(QWidget):
         df['bins'] = pd.cut(df['satflow'], self.bin_limits_flow)
 
         # Calculate mean concentration per bin
-        bin_means = df.groupby('bins', observed=True)['concentration'].mean()
+        # Use observed=False to ensure ALL bin intervals appear, even empty ones
+        bin_means = df.groupby('bins', observed=False)['concentration'].mean()
 
         # Calculate dN using diff
         dN = bin_means.diff()

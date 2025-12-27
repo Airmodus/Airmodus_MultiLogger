@@ -116,7 +116,7 @@ def setup_cpc_connections(widget, device_config, connection, app):
 
 def setup_psm_connections(widget, device_config, connection, app):
     """Set up PSM-specific connections."""
-    from utils import command_entered, ten_hz_clicked, psm_update, psm_flow_send, cpc_flow_send
+    from utils import command_entered, psm_update, psm_flow_send, cpc_flow_send
 
     device_id = device_config.device_id
     device_type = device_config.device_type
@@ -143,8 +143,6 @@ def setup_psm_connections(widget, device_config, connection, app):
                 widget.on_config_changed()
 
     widget.measure_tab.update_button.clicked.connect(on_update_clicked)
-    widget.measure_tab.ten_hz_checkbox.toggled.connect(
-        lambda: ten_hz_clicked(widget, app.config))
 
     # Temperature setpoints
     temps = [

@@ -1468,7 +1468,7 @@ class PSMMeasureTab(QWidget):
         main_layout = QVBoxLayout()
         main_layout.setSpacing(8)
 
-        # === HEADER ROW: Mode selector, Start button, 10Hz checkbox (all on left) ===
+        # === HEADER ROW: Mode selector, Start button ===
         header_widget = QWidget()
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
@@ -1494,16 +1494,12 @@ class PSMMeasureTab(QWidget):
         self.update_button.setMinimumHeight(32)
         self._device_mode = None  # Track device mode for button logic
 
-        # 10 Hz toggle switch
-        self.ten_hz_checkbox = ToggleSwitch("10 Hz", "Enable 10 Hz data logging rate")
-
-        # Layout: Mode selector, status, action button, stretch, 10Hz on right
+        # Layout: Mode selector, status, action button
         header_layout.addWidget(mode_label)
         header_layout.addWidget(self.mode_selector)
         header_layout.addWidget(self.status_label)
         header_layout.addWidget(self.update_button)
-        header_layout.addStretch()  # Push 10Hz to right
-        header_layout.addWidget(self.ten_hz_checkbox)
+        header_layout.addStretch()
         header_widget.setLayout(header_layout)
         main_layout.addWidget(header_widget)
 
@@ -1571,8 +1567,6 @@ class PSMMeasureTab(QWidget):
 
         # Connect fixed mode control to preview
         self.set_flow.value_spinbox.valueChanged.connect(self._update_fixed_preview)
-
-        self.ten_hz = self.ten_hz_checkbox
 
         # Dirty state tracking for Update button
         self._saved_settings = {}
