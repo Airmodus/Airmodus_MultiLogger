@@ -34,6 +34,10 @@ class CPCWidget(ComplexDevice):
     def __init__(self, device_config, *args, **kwargs):
         super().__init__(device_config, *args, **kwargs)
 
+        # Track last known device settings to prevent spinbox jumping
+        # Only update spinbox when DEVICE value changes, not when spinbox differs
+        self._last_device_settings = {}
+
         # CPC-specific data (device owns its data)
         self.ten_hz_data = full(10, nan)  # 10 Hz logging data buffer
         self.pulse_analysis_index = None  # None = not in analysis mode, 0-6 = threshold index
@@ -202,45 +206,42 @@ class CPCWidget(ComplexDevice):
         return total_errors # return total number of errors
     
     def update_settings(self, settings):
-        # update GUI set values if they differ from CPC set values
-        # TODO remove repetition
+        # Update GUI set values only when DEVICE value changes (not spinbox differs)
+        # This prevents the jumping bug where stale device values overwrite user input
 
-        # saturator temperature
-        if self.set_tab.set_saturator_temp.value_spinbox.value() != settings[8]:
-            # update value
-            self.set_tab.set_saturator_temp.value_spinbox.setValue(settings[8])
-            # if saturator temperature is nan, clear visible value
+        # saturator temperature - only update if device value changed
+        prev_sat = self._last_device_settings.get('saturator_temp')
+        if prev_sat != settings[8]:
+            self._last_device_settings['saturator_temp'] = settings[8]
             if str(settings[8]) == 'nan':
                 self.set_tab.set_saturator_temp.value_spinbox.clear()
-            # if text is empty (without suffix), set text with value
-            # TODO ? change this to text().split(" ")[0] == ""
-            elif self.set_tab.set_saturator_temp.value_spinbox.text()[:-3] == "":
-                self.set_tab.set_saturator_temp.value_spinbox.lineEdit().setText(str(settings[8]))
+            else:
+                self.set_tab.set_saturator_temp.value_spinbox.setValue(settings[8])
+                if self.set_tab.set_saturator_temp.value_spinbox.text()[:-3] == "":
+                    self.set_tab.set_saturator_temp.value_spinbox.lineEdit().setText(str(settings[8]))
 
-        # condenser temperature
-        if self.set_tab.set_condenser_temp.value_spinbox.value() != settings[6]:
-            # update value
-            self.set_tab.set_condenser_temp.value_spinbox.setValue(settings[6])
-            # if condenser temperature is nan, clear visible value
+        # condenser temperature - only update if device value changed
+        prev_con = self._last_device_settings.get('condenser_temp')
+        if prev_con != settings[6]:
+            self._last_device_settings['condenser_temp'] = settings[6]
             if str(settings[6]) == 'nan':
                 self.set_tab.set_condenser_temp.value_spinbox.clear()
-            # if text is empty (without suffix), set text with value
-            elif self.set_tab.set_condenser_temp.value_spinbox.text()[:-3] == "":
-                self.set_tab.set_condenser_temp.value_spinbox.lineEdit().setText(str(settings[6]))
+            else:
+                self.set_tab.set_condenser_temp.value_spinbox.setValue(settings[6])
+                if self.set_tab.set_condenser_temp.value_spinbox.text()[:-3] == "":
+                    self.set_tab.set_condenser_temp.value_spinbox.lineEdit().setText(str(settings[6]))
 
-        # averaging time
-        if self.set_tab.set_averaging_time.value_spinbox.value() != settings[5]:
-            # update value
-            if str(settings[5]) == 'nan': # if nan, set to 0
-                self.set_tab.set_averaging_time.value_spinbox.setValue(0)
-            else: # else update value
-                self.set_tab.set_averaging_time.value_spinbox.setValue(settings[5])
-            # if averaging time is nan, clear visible value
+        # averaging time - only update if device value changed
+        prev_avg = self._last_device_settings.get('averaging_time')
+        if prev_avg != settings[5]:
+            self._last_device_settings['averaging_time'] = settings[5]
             if str(settings[5]) == 'nan':
+                self.set_tab.set_averaging_time.value_spinbox.setValue(0)
                 self.set_tab.set_averaging_time.value_spinbox.clear()
-            # if text is empty (without suffix), update value set text with value
-            elif self.set_tab.set_averaging_time.value_spinbox.text()[:-2] == "":
-                self.set_tab.set_averaging_time.value_spinbox.lineEdit().setText(str(settings[5]))
+            else:
+                self.set_tab.set_averaging_time.value_spinbox.setValue(settings[5])
+                if self.set_tab.set_averaging_time.value_spinbox.text()[:-2] == "":
+                    self.set_tab.set_averaging_time.value_spinbox.lineEdit().setText(str(settings[5]))
         
         # update mode settings (Advanced mode)
         self.set_tab.autofill.update_state(settings[1]) # autofill

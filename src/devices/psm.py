@@ -63,6 +63,10 @@ class PSMWidget(ComplexDevice):
         super().__init__(device_config, *args, **kwargs)
         self._needs_cpc_dropdown_update = False  # Flag for lazy dropdown updates
 
+        # Track last known device settings to prevent spinbox jumping
+        # Only update spinbox when DEVICE value changes, not when spinbox differs
+        self._last_device_settings = {}
+
         # Update device type label to show version (2.0 or Retrofit)
         if hasattr(self, 'device_type_label'):
             self.device_type_label.setText(self.display_device_type)
@@ -357,15 +361,25 @@ class PSMWidget(ComplexDevice):
         return liquid_errors # return total number of liquid errors
 
     def update_settings(self, settings):
-        # Update advanced mode setpoints
-        self.set_tab.set_growth_tube_temp.value_spinbox.setValue(float(settings[1]))
-        self.set_tab.set_saturator_temp.value_spinbox.setValue(float(settings[2]))
-        self.set_tab.set_inlet_temp.value_spinbox.setValue(float(settings[3]))
-        self.set_tab.set_heater_temp.value_spinbox.setValue(float(settings[4]))
-        self.set_tab.set_drainage_temp.value_spinbox.setValue(float(settings[5]))
-        self.set_tab.set_cpc_inlet_flow.value_spinbox.setValue(float(settings[6]))
+        # Update advanced mode setpoints only when DEVICE value changes
+        # This prevents the jumping bug where stale device values overwrite user input
+        setpoint_fields = [
+            ('growth_tube_temp', 'set_growth_tube_temp', 1),
+            ('saturator_temp', 'set_saturator_temp', 2),
+            ('inlet_temp', 'set_inlet_temp', 3),
+            ('heater_temp', 'set_heater_temp', 4),
+            ('drainage_temp', 'set_drainage_temp', 5),
+            ('cpc_inlet_flow', 'set_cpc_inlet_flow', 6),
+        ]
 
-        # Update simple mode setpoints for delta calculation
+        for key, attr, idx in setpoint_fields:
+            new_val = float(settings[idx])
+            prev_val = self._last_device_settings.get(key)
+            if prev_val != new_val:
+                self._last_device_settings[key] = new_val
+                getattr(self.set_tab, attr).value_spinbox.setValue(new_val)
+
+        # Update simple mode setpoints for delta calculation (always update - display only)
         self.control_tab.simple_growth_tube_temp.set_setpoint(float(settings[1]))
         self.control_tab.simple_saturator_temp.set_setpoint(float(settings[2]))
         self.control_tab.simple_inlet_temp.set_setpoint(float(settings[3]))
