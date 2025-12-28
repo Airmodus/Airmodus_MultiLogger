@@ -72,6 +72,11 @@ class PSMDataGenerator:
         self.setting_temp_inlet = 25.0
         self.setting_temp_heater = 40.0
         self.setting_temp_drain = 30.0
+
+        # Liquid control settings
+        self.autofill_on = True
+        self.drain_on = True
+        self.drying_on = False
         self.setting_flow = 1.0
 
     def set_scan_params(self, bottom_wait, up_time, top_wait, down_time, min_flow, max_flow):
@@ -149,6 +154,17 @@ class PSMDataGenerator:
         else:
             scan_status = self._update_fixed_flow(dt)
 
+        # Build notes hex from liquid control settings
+        # Bits (inverted order): 0=drain_level, 3=drain(0=on,1=off), 4=drying(0=off,1=on), 5=autofill(0=on,1=off), 6=sat_level
+        notes = 0
+        if not self.drain_on:
+            notes |= (1 << 3)  # bit 3: drain off
+        if self.drying_on:
+            notes |= (1 << 4)  # bit 4: drying on
+        if not self.autofill_on:
+            notes |= (1 << 5)  # bit 5: autofill off
+        notes_hex = f"0x{notes:04X}"
+
         values = [
             f"{self.current_flow:.4f}",
             f"{self.base_excess_flow:.2f}",
@@ -167,7 +183,7 @@ class PSMDataGenerator:
             "1.000",
             str(scan_status),
             "0x0000",
-            "0x0000"
+            notes_hex
         ]
         return ",".join(values)
 
@@ -458,6 +474,23 @@ class PSMSimulator:
                 print(f"[FIXED] flow={flow}")
             except Exception as e:
                 print(f"[ERR] Failed to parse FIXED params: {e}")
+        elif ':SET:AFLL' in cmd_upper:
+            try:
+                value = int(command.split(' ', 1)[1])
+                self.data_generator.autofill_on = bool(value)
+                print(f"[AFLL] autofill={'ON' if value else 'OFF'}")
+            except Exception as e:
+                print(f"[ERR] Failed to parse AFLL: {e}")
+        elif ':SET:DRN' in cmd_upper:
+            try:
+                value = int(command.split(' ', 1)[1])
+                self.data_generator.drain_on = bool(value)
+                print(f"[DRN] drain={'ON' if value else 'OFF'}")
+            except Exception as e:
+                print(f"[ERR] Failed to parse DRN: {e}")
+        elif ':SET:DRY' in cmd_upper or ':SET:RUN' in cmd_upper:
+            self.data_generator.drying_on = ':SET:DRY' in cmd_upper
+            print(f"[DRY] drying={'ON' if self.data_generator.drying_on else 'OFF'}")
         elif ':SET:' in cmd_upper:
             if self.verbose:
                 print(f"[OK] Setting accepted: {command}")

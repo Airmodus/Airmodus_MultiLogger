@@ -332,18 +332,24 @@ class PSMWidget(ComplexDevice):
         autofill_on = inverted_note_bin[5] == "0"
         # 0 = drain on, 1 = drain off
         drain_on = inverted_note_bin[3] == "0"
+        # 0 = drying off, 1 = drying on
+        drying_on = inverted_note_bin[4] == "1"
 
-        # Update advanced mode toggles
-        self.set_tab.autofill.update_state(1 if autofill_on else 0)
-        self.set_tab.drain.update_state(1 if drain_on else 0)
+        import time
+        now = time.time()
+
+        # Update advanced mode toggles (respecting cooldowns)
+        if now >= self.control_tab._autofill_cooldown:
+            self.set_tab.autofill.update_state(1 if autofill_on else 0)
+        if now >= self.control_tab._drain_cooldown:
+            self.set_tab.drain.update_state(1 if drain_on else 0)
+        if now >= self.control_tab._drying_cooldown:
+            self.set_tab.drying.update_state(1 if drying_on else 0)
 
         # Update simple mode bottles toggle based on actual device state
         # Bottles "ON" = both autofill AND drain are on
         # Show custom indicator if states don't match
         self.control_tab.update_bottles_state(autofill_on, drain_on)
-
-        # 0 = drying off, 1 = drying on (advanced mode only)
-        self.set_tab.drying.update_state(int(inverted_note_bin[4]))
         # 0 = saturator liquid level OK, 1 = saturator liquid level LOW
         self.control_tab.liquid_saturator.change_color(inverted_note_bin[6])
         self.control_tab.simple_liquid_saturator.change_color(inverted_note_bin[6])
@@ -1173,6 +1179,11 @@ class PSMControlTab(QWidget):
         super().__init__()
         self.is_psm2 = is_psm2
         self._advanced_mode = False
+        # Cooldown timestamps to ignore device feedback after user clicks toggles
+        self._bottles_toggle_cooldown = 0
+        self._autofill_cooldown = 0
+        self._drain_cooldown = 0
+        self._drying_cooldown = 0
 
         # Main layout with mode toggle at top
         outer_layout = QVBoxLayout(self)
@@ -1240,6 +1251,11 @@ class PSMControlTab(QWidget):
         - "Bottles: OFF" if both are off
         - Custom indicator if states don't match (advanced mode config)
         """
+        import time
+        # Ignore device feedback briefly after user clicks toggle (debounce)
+        if time.time() < self._bottles_toggle_cooldown:
+            return
+
         if autofill_on and drain_on:
             # Normal operation - both on
             self.simple_bottles_connected.update_state(1)

@@ -212,15 +212,29 @@ def setup_psm_connections(widget, device_config, connection, app):
         lambda: psm_update(device_id, app.data_holder.device_widgets))
 
     # Advanced mode liquid operations - separate controls for autofill and drain
-    widget.set_tab.autofill.clicked.connect(
-        lambda: connection.send_message(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
-    widget.set_tab.drain.clicked.connect(
-        lambda: connection.send_message(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
-    widget.set_tab.drying.clicked.connect(
-        lambda: connection.send_message(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
+    def on_autofill_toggled():
+        import time
+        widget.control_tab._autofill_cooldown = time.time() + 2.0
+        connection.send_message(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked())))
+    widget.set_tab.autofill.clicked.connect(on_autofill_toggled)
+
+    def on_drain_toggled():
+        import time
+        widget.control_tab._drain_cooldown = time.time() + 2.0
+        connection.send_message(":SET:DRN " + str(int(widget.set_tab.drain.isChecked())))
+    widget.set_tab.drain.clicked.connect(on_drain_toggled)
+
+    def on_drying_toggled():
+        import time
+        widget.control_tab._drying_cooldown = time.time() + 2.0
+        connection.send_message(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())])
+    widget.set_tab.drying.clicked.connect(on_drying_toggled)
 
     # Simple mode "Bottles Connected" toggle - controls autofill+drain and flow mode
     def on_bottles_connected_toggled():
+        import time
+        # Set cooldown to ignore device feedback for 2 seconds after user click
+        widget.control_tab._bottles_toggle_cooldown = time.time() + 2.0
         is_connected = widget.control_tab.simple_bottles_connected.isChecked()
         state = str(int(is_connected))
         connection.send_message(":SET:AFLL " + state)
