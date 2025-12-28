@@ -1173,6 +1173,7 @@ class PSMControlTab(QWidget):
         super().__init__()
         self.is_psm2 = is_psm2
         self._advanced_mode = False
+        self._bottles_toggle_cooldown = 0  # Timestamp to ignore device feedback after user click
 
         # Main layout with mode toggle at top
         outer_layout = QVBoxLayout(self)
@@ -1240,6 +1241,11 @@ class PSMControlTab(QWidget):
         - "Bottles: OFF" if both are off
         - Custom indicator if states don't match (advanced mode config)
         """
+        import time
+        # Ignore device feedback briefly after user clicks toggle (debounce)
+        if time.time() < self._bottles_toggle_cooldown:
+            return
+
         if autofill_on and drain_on:
             # Normal operation - both on
             self.simple_bottles_connected.update_state(1)

@@ -221,6 +221,9 @@ def setup_psm_connections(widget, device_config, connection, app):
 
     # Simple mode "Bottles Connected" toggle - controls autofill+drain and flow mode
     def on_bottles_connected_toggled():
+        import time
+        # Set cooldown to ignore device feedback for 2 seconds after user click
+        widget.control_tab._bottles_toggle_cooldown = time.time() + 2.0
         is_connected = widget.control_tab.simple_bottles_connected.isChecked()
         state = str(int(is_connected))
         connection.send_message(":SET:AFLL " + state)
