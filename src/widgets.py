@@ -205,6 +205,168 @@ class IndicatorWidget(QFrame):
         self.name_label.setToolTip(tooltip)
 
 
+class SimpleStatusWidget(QFrame):
+    """Simple read-only status widget for Simple Mode control tab.
+
+    Shows parameter name and current value with color-coded status:
+    - GREEN: Within acceptable range (±0.5°C for temps, ±5% for flows)
+    - YELLOW: Outside acceptable range but no firmware error (shows delta)
+    - RED: Firmware error from STATUS_HEX (shows error description)
+    """
+
+    def __init__(self, name, unit="", is_temperature=True, error_name="Sensor Error"):
+        super().__init__()
+        self.name = name
+        self.unit = unit
+        self.is_temperature = is_temperature
+        self.error_name = error_name  # Error description to show on firmware error
+
+        # State tracking
+        self._setpoint = None
+        self._current_value = None
+        self._has_firmware_error = False
+
+        # Frame styling - match SetStatusWidget/IndicatorWidget
+        self.setFrameStyle(QFrame.StyledPanel)
+        self._frame_normal = "QFrame { border: 1px solid #555; border-radius: 4px; background: #2d2d2d; } QLabel { background: transparent; border: none; }"
+        self._frame_warning = "QFrame { border: 2px solid #f39c12; border-radius: 4px; background: rgba(243, 156, 18, 0.1); } QLabel { background: transparent; border: none; }"
+        self._frame_error = "QFrame { border: 2px solid #e74c3c; border-radius: 4px; background: rgba(231, 76, 60, 0.15); } QLabel { background: transparent; border: none; }"
+        self.setStyleSheet(self._frame_normal)
+
+        # Main horizontal layout - match IndicatorWidget margins
+        main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(8)
+
+        # Status indicator bar (left side) - match IndicatorWidget size
+        self._status_indicator = QFrame()
+        self._status_indicator.setFixedSize(6, 40)
+        self._status_indicator.setStyleSheet(STATUS_GRAY)
+        main_layout.addWidget(self._status_indicator)
+
+        # Content area - match IndicatorWidget layout
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(2)
+
+        # Name label (smaller, gray) - centered like IndicatorWidget
+        self.name_label = QLabel(self.name)
+        name_font = self.font()
+        name_font.setPointSize(11)
+        self.name_label.setFont(name_font)
+        self.name_label.setStyleSheet("QLabel { color: #888; }")
+        self.name_label.setAlignment(Qt.AlignCenter)
+        content_layout.addWidget(self.name_label)
+
+        # Value label (large, bold) - centered like IndicatorWidget
+        self.value_label = QLabel("--")
+        value_font = self.font()
+        value_font.setPointSize(18)  # Match IndicatorWidget
+        value_font.setBold(True)
+        self.value_label.setFont(value_font)
+        self.value_label.setStyleSheet("QLabel { color: #ddd; }")
+        self.value_label.setAlignment(Qt.AlignCenter)
+        self.value_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        content_layout.addWidget(self.value_label)
+
+        # Delta/Error info label (centered below value)
+        self.info_label = QLabel("")
+        info_font = self.font()
+        info_font.setPointSize(10)
+        self.info_label.setFont(info_font)
+        self.info_label.setStyleSheet("QLabel { color: #888; }")
+        self.info_label.setAlignment(Qt.AlignCenter)
+        content_layout.addWidget(self.info_label)
+
+        main_layout.addLayout(content_layout, 1)
+        self.setLayout(main_layout)
+
+    def set_setpoint(self, value):
+        """Set the reference setpoint for delta calculation."""
+        try:
+            self._setpoint = float(value)
+        except (ValueError, TypeError):
+            self._setpoint = None
+        self._update_display()
+
+    def change_value(self, value):
+        """Update the displayed value and recalculate status."""
+        # Parse numeric value from string (remove units)
+        try:
+            if isinstance(value, str):
+                # Remove common unit suffixes
+                clean_value = value.replace('°C', '').replace('lpm', '').replace('mbar', '').strip()
+                self._current_value = float(clean_value)
+            else:
+                self._current_value = float(value)
+        except (ValueError, TypeError):
+            self._current_value = None
+
+        # Update display
+        if isinstance(value, str):
+            self.value_label.setText(value)
+        else:
+            self.value_label.setText(f"{value}{self.unit}")
+
+        self._update_display()
+
+    def change_color(self, bit):
+        """Handle firmware error state from STATUS_HEX."""
+        self._has_firmware_error = (int(bit) == 1)
+        self._update_display()
+
+    def _update_display(self):
+        """Update visual state based on firmware error and delta."""
+        if self._has_firmware_error:
+            # Firmware error - always RED
+            self.setStyleSheet(self._frame_error)
+            self._status_indicator.setStyleSheet(STATUS_RED)
+            self.info_label.setText(f"⚠ {self.error_name}")
+            self.info_label.setStyleSheet("QLabel { color: #e74c3c; font-weight: bold; }")
+            return
+
+        # No firmware error - check delta from setpoint
+        if self._setpoint is not None and self._current_value is not None:
+            delta = self._current_value - self._setpoint
+
+            # Calculate threshold based on type
+            if self.is_temperature:
+                threshold = 0.5  # ±0.5°C
+            else:
+                # For flows, use 5% of setpoint
+                threshold = abs(self._setpoint * 0.05) if self._setpoint != 0 else 0.05
+
+            if abs(delta) <= threshold:
+                # Within acceptable range - GREEN
+                self.setStyleSheet(self._frame_normal)
+                self._status_indicator.setStyleSheet(STATUS_GREEN)
+                self.info_label.setText("")
+                self.info_label.setStyleSheet("QLabel { color: #888; }")
+            else:
+                # Outside acceptable range - YELLOW
+                self.setStyleSheet(self._frame_warning)
+                self._status_indicator.setStyleSheet(STATUS_YELLOW)
+                # Format delta with sign
+                if delta > 0:
+                    delta_str = f"+{delta:.1f}"
+                else:
+                    delta_str = f"{delta:.1f}"
+                if self.is_temperature:
+                    delta_str += "°C"
+                self.info_label.setText(delta_str)
+                self.info_label.setStyleSheet("QLabel { color: #f39c12; font-weight: bold; }")
+        else:
+            # No setpoint or value yet - show gray
+            self.setStyleSheet(self._frame_normal)
+            self._status_indicator.setStyleSheet(STATUS_GRAY)
+            self.info_label.setText("")
+            self.info_label.setStyleSheet("QLabel { color: #888; }")
+
+    def setToolTip(self, tooltip):
+        """Set tooltip on the name label."""
+        self.name_label.setToolTip(tooltip)
+
+
 class ToggleButton(QPushButton):
     def __init__(self, name, *args, **kwargs):
         super().__init__()
@@ -634,6 +796,17 @@ class SetWidget(QFrame):
         self.value_spinbox.lineEdit().setAlignment(Qt.AlignCenter)
         self.value_spinbox.setMaximumWidth(180)
         layout.addWidget(self.value_spinbox, alignment=Qt.AlignCenter)
+
+        # Source note label (shows where value comes from, e.g., "From CPC #1")
+        self.source_note = QLabel("")
+        source_font = self.font()
+        source_font.setPointSize(9)
+        self.source_note.setFont(source_font)
+        self.source_note.setStyleSheet("QLabel { color: #888; }")
+        self.source_note.setAlignment(Qt.AlignCenter)
+        self.source_note.hide()
+        layout.addWidget(self.source_note, alignment=Qt.AlignCenter)
+
         # set layout
         self.setLayout(layout)
         # store default stylesheet
@@ -657,6 +830,16 @@ class SetWidget(QFrame):
     def setToolTip(self, tooltip):
         """Set tooltip on the name label only, not the whole widget."""
         self.name_label.setToolTip(tooltip)
+
+    def set_source_note(self, text):
+        """Show source note (e.g., 'From CPC #1') below the spinbox."""
+        self.source_note.setText(text)
+        self.source_note.show()
+
+    def clear_source_note(self):
+        """Hide the source note."""
+        self.source_note.setText("")
+        self.source_note.hide()
 
 
 class SetStatusWidget(QFrame):
@@ -758,7 +941,41 @@ class SetStatusWidget(QFrame):
         self.actual_label.setMinimumWidth(100)
         values_grid.addWidget(self.actual_label, 1, 1)
 
-        # Row 2: (empty) | Delta + trend
+        # Row 2 left: Calibration label + reset button
+        cal_row = QHBoxLayout()
+        cal_row.setSpacing(4)
+        cal_row.setContentsMargins(0, 0, 0, 0)
+
+        self.cal_label = QLabel("")  # Shows "Cal: 10.0°C"
+        cal_font = self.font()
+        cal_font.setPointSize(9)
+        self.cal_label.setFont(cal_font)
+        self.cal_label.setStyleSheet("QLabel { color: #888; }")
+        self.cal_label.setAlignment(Qt.AlignCenter)
+        cal_row.addWidget(self.cal_label, stretch=1)
+
+        self.reset_button = QPushButton("↺")
+        self.reset_button.setFixedSize(20, 20)
+        self.reset_button.setToolTip("Reset to calibration value")
+        self.reset_button.setStyleSheet("""
+            QPushButton {
+                background-color: #555;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #666;
+            }
+        """)
+        self.reset_button.clicked.connect(self._reset_to_factory)
+        self.reset_button.hide()  # Only shown when value differs from calibration
+        cal_row.addWidget(self.reset_button)
+
+        values_grid.addLayout(cal_row, 2, 0)
+
+        # Row 2 right: Delta + trend
         delta_row = QHBoxLayout()
         delta_row.setSpacing(4)
 
@@ -780,6 +997,16 @@ class SetStatusWidget(QFrame):
         delta_row.addWidget(self.trend_label)
 
         values_grid.addLayout(delta_row, 2, 1)
+
+        # Row 3 left: Calibration warning (only shown when value differs)
+        self.cal_warning = QLabel("")
+        cal_warning_font = self.font()
+        cal_warning_font.setPointSize(8)
+        self.cal_warning.setFont(cal_warning_font)
+        self.cal_warning.setStyleSheet("QLabel { color: #f39c12; }")
+        self.cal_warning.setAlignment(Qt.AlignCenter)
+        self.cal_warning.hide()
+        values_grid.addWidget(self.cal_warning, 3, 0)
 
         # Backward compatibility - value_input no longer used
         self.value_input = None
@@ -803,6 +1030,12 @@ class SetStatusWidget(QFrame):
         self._current_actual = None
         self._has_error = False
 
+        # Factory calibration value (set via set_factory_value)
+        self.factory_value = None
+
+        # Connect spinbox changes to update calibration display
+        self.value_spinbox.valueChanged.connect(self._update_calibration_display)
+
         # Install event filter on name_label to track tooltip
         self.name_label.installEventFilter(self)
 
@@ -821,6 +1054,41 @@ class SetStatusWidget(QFrame):
         """Restore tooltip if it was visible before update."""
         if self._tooltip_visible and self._tooltip_pos and self.name_label.toolTip():
             QToolTip.showText(self._tooltip_pos, self.name_label.toolTip(), self.name_label)
+
+    def set_factory_value(self, value):
+        """Set the factory calibration reference value."""
+        try:
+            self.factory_value = float(value)
+            self.cal_label.setText(f"Cal: {value}{self.suffix}")
+            self._update_calibration_display()
+        except (ValueError, TypeError):
+            self.factory_value = None
+
+    def _reset_to_factory(self):
+        """Reset spinbox to factory calibration value."""
+        if self.factory_value is not None:
+            self.value_spinbox.setValue(self.factory_value)
+            # setValue triggers valueChanged which updates calibration display
+
+    def _update_calibration_display(self):
+        """Update calibration-related UI elements based on current vs factory value."""
+        if self.factory_value is None:
+            self.cal_label.hide()
+            self.reset_button.hide()
+            self.cal_warning.hide()
+            return
+
+        self.cal_label.show()
+        current = self.value_spinbox.value()
+        diff = abs(current - self.factory_value)
+
+        if diff > 0.01:  # Values differ from calibration
+            self.reset_button.show()
+            self.cal_warning.setText("(modified)")
+            self.cal_warning.show()
+        else:  # Values match calibration
+            self.reset_button.hide()
+            self.cal_warning.hide()
 
     def _parse_value(self, value_str):
         """Parse numeric value from string (removes units)."""
@@ -854,7 +1122,11 @@ class SetStatusWidget(QFrame):
         return ""  # Stable - no arrow
 
     def _update_status_indicator(self, actual, setpoint):
-        """Update status indicator color and frame style based on delta."""
+        """Update status indicator color and frame style based on delta.
+
+        Colors: GREEN = within range, YELLOW = outside range (warning only)
+        RED is reserved for firmware errors (set via change_color method).
+        """
         if actual is None or setpoint is None or setpoint == 0:
             self._status_indicator.setStyleSheet(STATUS_GRAY)
             self.setStyleSheet(self._frame_normal)
@@ -863,28 +1135,22 @@ class SetStatusWidget(QFrame):
         delta = abs(actual - setpoint)
 
         if self.is_temperature:
-            # Temperature thresholds: ±0.5°C green, ±1°C yellow, else red
+            # Temperature thresholds: ±0.5°C green, else yellow (no red for delta)
             if delta <= 0.5:
                 self._status_indicator.setStyleSheet(STATUS_GREEN)
                 self.setStyleSheet(self._frame_normal)
-            elif delta <= 1.0:
+            else:
                 self._status_indicator.setStyleSheet(STATUS_YELLOW)
                 self.setStyleSheet(self._frame_warning)
-            else:
-                self._status_indicator.setStyleSheet(STATUS_RED)
-                self.setStyleSheet(self._frame_error)
         else:
-            # Flow rate thresholds: ±5% green, ±10% yellow, else red
+            # Flow rate thresholds: ±5% green, else yellow (no red for delta)
             pct = (delta / setpoint) * 100 if setpoint != 0 else 0
             if pct <= 5:
                 self._status_indicator.setStyleSheet(STATUS_GREEN)
                 self.setStyleSheet(self._frame_normal)
-            elif pct <= 10:
+            else:
                 self._status_indicator.setStyleSheet(STATUS_YELLOW)
                 self.setStyleSheet(self._frame_warning)
-            else:
-                self._status_indicator.setStyleSheet(STATUS_RED)
-                self.setStyleSheet(self._frame_error)
 
     def change_value(self, value):
         """Update the actual value display (called by device update)."""
@@ -909,23 +1175,19 @@ class SetStatusWidget(QFrame):
             else:
                 self.delta_label.setText(f"Δ {delta_sign}{delta:.3f}")
 
-            # Color delta based on magnitude
+            # Color delta based on magnitude (green = OK, yellow = warning, no red for delta)
             abs_delta = abs(delta)
             if self.is_temperature:
                 if abs_delta <= 0.5:
                     self.delta_label.setStyleSheet("QLabel { color: #27ae60; }")  # Green
-                elif abs_delta <= 1.0:
-                    self.delta_label.setStyleSheet("QLabel { color: #f39c12; }")  # Yellow
                 else:
-                    self.delta_label.setStyleSheet("QLabel { color: #e74c3c; }")  # Red
+                    self.delta_label.setStyleSheet("QLabel { color: #f39c12; }")  # Yellow (warning)
             else:
                 pct = (abs_delta / setpoint) * 100 if setpoint != 0 else 0
                 if pct <= 5:
-                    self.delta_label.setStyleSheet("QLabel { color: #27ae60; }")
-                elif pct <= 10:
-                    self.delta_label.setStyleSheet("QLabel { color: #f39c12; }")
+                    self.delta_label.setStyleSheet("QLabel { color: #27ae60; }")  # Green
                 else:
-                    self.delta_label.setStyleSheet("QLabel { color: #e74c3c; }")
+                    self.delta_label.setStyleSheet("QLabel { color: #f39c12; }")  # Yellow (warning)
 
             # Update trend arrow (only shows ↑ or ↓, empty when stable)
             trend = self._calculate_trend()

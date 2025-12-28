@@ -180,17 +180,22 @@ def setup_psm_connections(widget, device_config, connection, app):
     widget.set_tab.set_cpc_sample_flow.value_spinbox.editingFinished.connect(
         lambda: cpc_flow_send(widget, widget.set_tab.set_cpc_sample_flow.value_spinbox.value(), app.data_holder.device_widgets))
 
-    # CO flow (PSM Retrofit only) - Save to extra_params
+    # CO flow (PSM Retrofit only) - Save to extra_params and sync simple mode
     from config import PSM
     if device_type == PSM:
+        def update_co_flow_value(value):
+            device_config.extra_params.update({'co_flow': str(round(value, 3))})
+            # Sync to simple mode display
+            if hasattr(widget.control_tab, 'simple_co_flow'):
+                widget.control_tab.simple_co_flow.change_value(f"{value:.3f} lpm")
+
         widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(
             lambda: psm_update(device_id, app.data_holder.device_widgets))
         widget.set_tab.set_co_flow.value_spinbox.editingFinished.connect(
             lambda: psm_update(device_id, app.data_holder.device_widgets))
-        widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(
-            lambda value: device_config.extra_params.update({'co_flow': str(round(value, 3))}))
+        widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(update_co_flow_value)
         widget.set_tab.set_co_flow.value_spinbox.editingFinished.connect(
-            lambda: device_config.extra_params.update({'co_flow': str(round(widget.set_tab.set_co_flow.value_spinbox.value(), 3))}))
+            lambda: update_co_flow_value(widget.set_tab.set_co_flow.value_spinbox.value()))
 
     # Command input
     widget.set_tab.command_widget.command_input.returnPressed.connect(
@@ -198,13 +203,23 @@ def setup_psm_connections(widget, device_config, connection, app):
     widget.set_tab.command_widget.command_input.returnPressed.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
 
-    # Liquid operations
-    widget.set_tab.autofill.clicked.connect(
-        lambda: connection.send_message(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
-    widget.set_tab.drain.clicked.connect(
-        lambda: connection.send_message(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
+    # Liquid operations - autofill and drain are always toggled together
+    def on_autofill_toggled():
+        state = str(int(widget.set_tab.autofill.isChecked()))
+        connection.send_message(":SET:AFLL " + state)
+        connection.send_message(":SET:DRN " + state)
+    widget.set_tab.autofill.clicked.connect(on_autofill_toggled)
     widget.set_tab.drying.clicked.connect(
         lambda: connection.send_message(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
+
+    # Simple mode toggle connections (same functionality)
+    def on_simple_autofill_toggled():
+        state = str(int(widget.control_tab.simple_autofill.isChecked()))
+        connection.send_message(":SET:AFLL " + state)
+        connection.send_message(":SET:DRN " + state)
+    widget.control_tab.simple_autofill.clicked.connect(on_simple_autofill_toggled)
+    widget.control_tab.simple_drying.clicked.connect(
+        lambda: connection.send_message(widget.set_tab.drying.messages[int(widget.control_tab.simple_drying.isChecked())]))
 
 
 def setup_ediluter_connections(widget, device_config, connection, app):

@@ -190,6 +190,39 @@ class PSMDataGenerator:
         values = ["1.0", "0.5", "1.0", "0", "0", "0"]
         return ",".join(values)
 
+    def generate_syst_pout(self):
+        """Generate :SYST:POUT response (factory calibration values).
+
+        Format: 19 values total
+        - Index 0: Base temp (30.0)
+        - Index 1-7: Temperature limits (max/min pairs)
+        - Index 8-12: Factory calibration temps (growth tube, saturator, inlet, heater, drainage)
+        - Index 13-18: Calibration coefficients
+        """
+        # Factory calibration values (these are the "golden" reference values)
+        factory_growth_tube = 90.0
+        factory_saturator = 80.0
+        factory_inlet = 25.0
+        factory_heater = 40.0
+        factory_drainage = 30.0
+
+        values = [
+            "30.0",           # 0: Base temp
+            "110.0", "-110.0",  # 1-2: Temp limit 1 max/min
+            "110.0", "-110.0",  # 3-4: Temp limit 2 max/min
+            "110.0", "-110.00", # 5-6: Temp limit 3 max/min
+            "110.00",         # 7: Temp limit max
+            f"{factory_growth_tube:.2f}",   # 8: Factory growth tube temp
+            f"{factory_saturator:.2f}",     # 9: Factory saturator temp
+            f"{factory_inlet:.2f}",         # 10: Factory inlet temp
+            f"{factory_heater:.3f}",        # 11: Factory heater temp
+            f"{factory_drainage:.3f}",      # 12: Factory drainage temp
+            "2.5000", "0.0000",  # 13-14: Calibration coefficients
+            "1.0000", "0.0000",  # 15-16: Calibration coefficients
+            "1.0000", "0.0000"   # 17-18: Calibration coefficients
+        ]
+        return ",".join(values)
+
     def drift(self):
         """Slowly drift base values for more realistic long-term behavior."""
         self.base_temp_growth_tube += random.uniform(-0.05, 0.05)
@@ -301,6 +334,7 @@ class PSMSimulator:
         print("PSM auto-pushes measurement data and responds to:")
         print("  :SYST:PRNT - Settings")
         print("  :SYST:VCMP - Dilution parameters")
+        print("  :SYST:POUT - Factory calibration values")
         print("  *IDN       - Device identification")
         print("-" * 50)
         print("Configure this port in MultiLogger for your PSM device")
@@ -385,6 +419,9 @@ class PSMSimulator:
         elif ':SYST:VCMP' in cmd_upper:
             data = self.data_generator.generate_syst_vcmp()
             response = f":SYST:VCMP {data}"
+        elif ':SYST:POUT' in cmd_upper:
+            data = self.data_generator.generate_syst_pout()
+            response = f":SYST:POUT {data}"
         elif ':SYST:VER' in cmd_upper:
             response = "Firmware version: 0.6.8"
         elif ':SET:FLOW:SCAN' in cmd_upper:

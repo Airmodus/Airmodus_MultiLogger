@@ -42,7 +42,8 @@ from widgets import (
     ToggleButton,
     ToggleSwitch,
     IndicatorWidget,
-    StepsWidget
+    StepsWidget,
+    SimpleStatusWidget
 )
 
 from plots.device_plots import SinglePlot
@@ -294,7 +295,23 @@ class PSMWidget(ComplexDevice):
             if type(self.psm_status_widgets[i]) != str: # filter placeholder strings
                 # change color of error label according to error bit
                 self.psm_status_widgets[i].change_color(inverted_status_bin[i])
-        
+
+        # Update simple mode widgets with same error states
+        # Bit mapping: 0=growth_tube, 1=saturator, 2=flow_sat, 3=heater, 4=inlet,
+        #              7=pressure_inlet, 8=flow_excess, 10=cabin, 11=drainage, 12=pressure_crit
+        self.control_tab.simple_growth_tube_temp.change_color(inverted_status_bin[0])
+        self.control_tab.simple_saturator_temp.change_color(inverted_status_bin[1])
+        self.control_tab.simple_flow_saturator.change_color(inverted_status_bin[2])
+        self.control_tab.simple_heater_temp.change_color(inverted_status_bin[3])
+        self.control_tab.simple_inlet_temp.change_color(inverted_status_bin[4])
+        self.control_tab.simple_pressure_inlet.change_color(inverted_status_bin[7])
+        self.control_tab.simple_flow_excess.change_color(inverted_status_bin[8])
+        self.control_tab.simple_cabin_temp.change_color(inverted_status_bin[10])
+        self.control_tab.simple_drainage_temp.change_color(inverted_status_bin[11])
+        self.control_tab.simple_pressure_critical.change_color(inverted_status_bin[12])
+        if self.is_psm2 and hasattr(self.control_tab, 'simple_flow_vacuum'):
+            self.control_tab.simple_flow_vacuum.change_color(inverted_status_bin[14])
+
         return total_errors # return total number of errors
     
     # convert PSM notes hex to binary and update liquid mode settings
@@ -305,58 +322,113 @@ class PSMWidget(ComplexDevice):
         note_bin = note_bin[2:].zfill(note_length) # remove 0b from string and fill with 0s
         total_notes = note_bin.count("1") # count number of 1s in note_bin
         inverted_note_bin = note_bin[::-1] # invert note_bin for liquid setting parsing
-        # update liquid mode settings in GUI
+
+        # update liquid mode settings in GUI (advanced mode)
         # 0 = autofill on, 1 = autofill off
         if inverted_note_bin[5] == "0":
             self.set_tab.autofill.update_state(1)
+            self.control_tab.simple_autofill.update_state(1)
         elif inverted_note_bin[5] == "1":
             self.set_tab.autofill.update_state(0)
+            self.control_tab.simple_autofill.update_state(0)
         # 0 = drying off, 1 = drying on
         self.set_tab.drying.update_state(int(inverted_note_bin[4]))
-        # 0 = drain on, 1 = drain off
-        if inverted_note_bin[3] == "0":
-            self.set_tab.drain.update_state(1)
-        elif inverted_note_bin[3] == "1":
-            self.set_tab.drain.update_state(0)
+        self.control_tab.simple_drying.update_state(int(inverted_note_bin[4]))
+
+        # Drain state is no longer shown separately - it follows autofill
         # 0 = saturator liquid level OK, 1 = saturator liquid level LOW
         self.control_tab.liquid_saturator.change_color(inverted_note_bin[6])
+        self.control_tab.simple_liquid_saturator.change_color(inverted_note_bin[6])
         if inverted_note_bin[6] == "1":
             liquid_errors += 1
+            self.control_tab.simple_liquid_saturator.change_value("LOW")
+        else:
+            self.control_tab.simple_liquid_saturator.change_value("OK")
+
         # 0 = drain liquid level OK, 1 = drain liquid level HIGH
         self.control_tab.liquid_drain.change_color(inverted_note_bin[0])
+        self.control_tab.simple_liquid_drain.change_color(inverted_note_bin[0])
         if inverted_note_bin[0] == "1":
             liquid_errors += 1
+            self.control_tab.simple_liquid_drain.change_value("HIGH")
+        else:
+            self.control_tab.simple_liquid_drain.change_value("OK")
 
         return liquid_errors # return total number of liquid errors
 
     def update_settings(self, settings):
+        # Update advanced mode setpoints
         self.set_tab.set_growth_tube_temp.value_spinbox.setValue(float(settings[1]))
         self.set_tab.set_saturator_temp.value_spinbox.setValue(float(settings[2]))
         self.set_tab.set_inlet_temp.value_spinbox.setValue(float(settings[3]))
         self.set_tab.set_heater_temp.value_spinbox.setValue(float(settings[4]))
         self.set_tab.set_drainage_temp.value_spinbox.setValue(float(settings[5]))
         self.set_tab.set_cpc_inlet_flow.value_spinbox.setValue(float(settings[6]))
-    
+
+        # Update simple mode setpoints for delta calculation
+        self.control_tab.simple_growth_tube_temp.set_setpoint(float(settings[1]))
+        self.control_tab.simple_saturator_temp.set_setpoint(float(settings[2]))
+        self.control_tab.simple_inlet_temp.set_setpoint(float(settings[3]))
+        self.control_tab.simple_heater_temp.set_setpoint(float(settings[4]))
+        self.control_tab.simple_drainage_temp.set_setpoint(float(settings[5]))
+
+        # Update simple mode CPC flow displays (read-only)
+        self.control_tab.simple_cpc_inlet_flow.change_value(str(settings[6]) + " lpm")
+
+    def update_factory_calibration_display(self):
+        """Update SetStatusWidgets with factory calibration values."""
+        if not hasattr(self, 'factory_calibration'):
+            return
+
+        cal = self.factory_calibration
+        self.control_tab.set_growth_tube_temp.set_factory_value(cal['growth_tube_temp'])
+        self.control_tab.set_saturator_temp.set_factory_value(cal['saturator_temp'])
+        self.control_tab.set_inlet_temp.set_factory_value(cal['inlet_temp'])
+        self.control_tab.set_heater_temp.set_factory_value(cal['heater_temp'])
+        self.control_tab.set_drainage_temp.set_factory_value(cal['drainage_temp'])
+
     # update all data values in status tab
     def update_values(self, current_list):
-        # update temperature values
+        # update temperature values (advanced mode)
         self.status_tab.temp_growth_tube.change_value(str(current_list[2]) + " °C")
         self.status_tab.temp_saturator.change_value(str(current_list[3]) + " °C")
         self.status_tab.temp_inlet.change_value(str(current_list[4]) + " °C")
         self.status_tab.temp_heater.change_value(str(current_list[5]) + " °C")
         self.status_tab.temp_drainage.change_value(str(current_list[6]) + " °C")
         self.status_tab.temp_cabin.change_value(str(current_list[7]) + " °C")
-        # update flow values
+
+        # update temperature values (simple mode)
+        self.control_tab.simple_growth_tube_temp.change_value(str(current_list[2]) + " °C")
+        self.control_tab.simple_saturator_temp.change_value(str(current_list[3]) + " °C")
+        self.control_tab.simple_inlet_temp.change_value(str(current_list[4]) + " °C")
+        self.control_tab.simple_heater_temp.change_value(str(current_list[5]) + " °C")
+        self.control_tab.simple_drainage_temp.change_value(str(current_list[6]) + " °C")
+        self.control_tab.simple_cabin_temp.change_value(str(current_list[7]) + " °C")
+
+        # update flow values (advanced mode)
         # self.status.flow_cpc is updated in PSMWidget's update_settings()
         self.status_tab.flow_saturator.change_value(str(current_list[0]) + " lpm")
         self.status_tab.flow_excess.change_value(str(current_list[1]) + " lpm")
         # self.status_tab.flow_inlet is updated in update_plot_data()
-        # update pressure values
+
+        # update flow values (simple mode)
+        self.control_tab.simple_flow_saturator.change_value(str(current_list[0]) + " lpm")
+        self.control_tab.simple_flow_excess.change_value(str(current_list[1]) + " lpm")
+        # simple_flow_inlet is not shown in simple mode (it's derived, not a direct measurement)
+
+        # update pressure values (advanced mode)
         self.status_tab.pressure_inlet.change_value(str(current_list[9]) + " kPa")
         self.status_tab.pressure_critical_orifice.change_value(str(current_list[12]) + " kPa")
+
+        # update pressure values (simple mode)
+        self.control_tab.simple_pressure_inlet.change_value(str(current_list[9]) + " kPa")
+        self.control_tab.simple_pressure_critical.change_value(str(current_list[12]) + " kPa")
+
         # update vacuum flow if PSM 2.0 (check hasattr in case widget created before firmware known)
         if self.is_psm2 and hasattr(self.status_tab, 'flow_vacuum'):
             self.status_tab.flow_vacuum.change_value(str(current_list[13]) + " lpm")
+            if hasattr(self.control_tab, 'simple_flow_vacuum'):
+                self.control_tab.simple_flow_vacuum.change_value(str(current_list[13]) + " lpm")
         # liquid level values are updated in PSMWidget's update_notes()
 
     def get_read_command(self):
@@ -694,6 +766,29 @@ class PSMWidget(ComplexDevice):
                         'show_in_command_widget': True
                     }
 
+            # Handle :SYST:POUT - factory calibration values
+            elif command == ":SYST:POUT":
+                # Parse factory calibration values (indices 8-12 are temp setpoints)
+                if len(data) >= 13:
+                    self.factory_calibration = {
+                        'growth_tube_temp': float(data[8]),
+                        'saturator_temp': float(data[9]),
+                        'inlet_temp': float(data[10]),
+                        'heater_temp': float(data[11]),
+                        'drainage_temp': float(data[12]),
+                    }
+                    # Update UI to show factory values
+                    self.update_factory_calibration_display()
+
+                return {
+                    'type': 'calibration',
+                    'command': command,
+                    'data': data,
+                    'raw': message,
+                    'update_gui': False,
+                    'show_in_command_widget': True
+                }
+
             # Handle :STAT:SELF:LOG - self-test errors
             elif command == ":STAT:SELF:LOG":
                 error_length = len(PSM_ERRORS)
@@ -859,6 +954,8 @@ class PSMWidget(ComplexDevice):
         """
         if self.needs_settings_fetch:
             dev_conn.send_message(":SYST:PRNT")
+            # Also fetch factory calibration values
+            dev_conn.send_delayed_message(":SYST:POUT", 100)
 
         if self.settings and not self.settings.dilution_parameters:
             dev_conn.send_delayed_message(":SYST:VCMP", 150)
@@ -909,7 +1006,8 @@ class PSMWidget(ComplexDevice):
             'connected_cpc': 'None',
             'calibration_file_path': '',
             'firmware_version': '',
-            'co_flow': ''
+            'co_flow': '',
+            'control_tab_advanced_mode': False  # Simple mode by default
         }
 
     def restore_ui_state(self, device_config, app_config):
@@ -933,8 +1031,20 @@ class PSMWidget(ComplexDevice):
             try:
                 co_flow_val = float(device_config.extra_params['co_flow'])
                 self.set_tab.set_co_flow.value_spinbox.setValue(round(co_flow_val, 3))
+                # Also update simple mode display
+                if hasattr(self.control_tab, 'simple_co_flow'):
+                    self.control_tab.simple_co_flow.change_value(f"{co_flow_val:.3f} lpm")
             except (ValueError, AttributeError):
                 pass
+
+        # Restore control tab mode (simple/advanced)
+        if 'control_tab_advanced_mode' in device_config.extra_params:
+            advanced_mode = device_config.extra_params.get('control_tab_advanced_mode', False)
+            self.control_tab.set_advanced_mode(advanced_mode)
+            # Connect mode change to save
+            self.control_tab.mode_changed.connect(
+                lambda mode: device_config.extra_params.update({'control_tab_advanced_mode': mode})
+            )
 
     def _connect_measure_tab_save(self, device_config):
         """Connect measure tab value changes to save settings."""
@@ -997,6 +1107,16 @@ class PSMWidget(ComplexDevice):
                     cpc_sample_flow = float(cpc_settings.measured_cpc_flow) if cpc_settings else 0.0
                     if self.set_tab.set_cpc_sample_flow.value_spinbox.value() != cpc_sample_flow:
                         self.set_tab.set_cpc_sample_flow.value_spinbox.setValue(cpc_sample_flow)
+                    # Disable spinbox and show source note (auto-synced from CPC)
+                    self.set_tab.set_cpc_sample_flow.value_spinbox.setEnabled(False)
+                    self.set_tab.set_cpc_sample_flow.set_source_note(f"From CPC #{connected_cpc_id_int}")
+                    # Update simple mode display
+                    if hasattr(self.control_tab, 'simple_cpc_sample_flow'):
+                        self.control_tab.simple_cpc_sample_flow.change_value(str(cpc_sample_flow) + " lpm")
+                else:
+                    # TSI CPC or other - user must input manually
+                    self.set_tab.set_cpc_sample_flow.value_spinbox.setEnabled(True)
+                    self.set_tab.set_cpc_sample_flow.clear_source_note()
 
     def perform_pre_plot_calculations(self, data_holder):
         """Calculate PSM dilution-corrected CPC values."""
@@ -1007,12 +1127,219 @@ class PSMWidget(ComplexDevice):
 class PSMControlTab(QWidget):
     """Combined control tab merging Set and Status functionality.
 
-    Compact layout designed to fit on one screen without scrolling.
+    Supports two modes:
+    - Simple Mode (default): Clean read-only view with status indicators
+    - Advanced Mode: Full control with setpoints and serial commands
     """
+
+    # Signal emitted when mode changes (for persistence)
+    mode_changed = pyqtSignal(bool)  # True = advanced mode
+
     def __init__(self, is_psm2: bool, *args, **kwargs):
         super().__init__()
+        self.is_psm2 = is_psm2
+        self._advanced_mode = False
 
-        # Scroll area for when content exceeds screen (e.g., Serial Commands expanded)
+        # Main layout with mode toggle at top
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        # Mode toggle header
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(8, 4, 8, 4)
+
+        header_layout.addStretch()
+
+        self.mode_toggle_btn = QPushButton("⚙ Advanced Mode")
+        self.mode_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #555;
+                color: white;
+                padding: 4px 12px;
+                border: none;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #666;
+            }
+        """)
+        self.mode_toggle_btn.clicked.connect(self._toggle_mode)
+        header_layout.addWidget(self.mode_toggle_btn)
+
+        outer_layout.addWidget(header_widget)
+
+        # Stacked widget for simple/advanced views
+        self.mode_stack = QStackedWidget()
+        outer_layout.addWidget(self.mode_stack)
+
+        # Create both views
+        self._create_simple_mode_view()
+        self._create_advanced_mode_view()
+
+        # Start in simple mode
+        self.mode_stack.setCurrentIndex(0)
+
+    def _toggle_mode(self):
+        """Toggle between simple and advanced modes."""
+        self._advanced_mode = not self._advanced_mode
+        if self._advanced_mode:
+            self.mode_stack.setCurrentIndex(1)
+            self.mode_toggle_btn.setText("◀ Simple Mode")
+        else:
+            self.mode_stack.setCurrentIndex(0)
+            self.mode_toggle_btn.setText("⚙ Advanced Mode")
+        self.mode_changed.emit(self._advanced_mode)
+
+    def set_advanced_mode(self, advanced: bool):
+        """Set mode programmatically (for restoring from settings)."""
+        if advanced != self._advanced_mode:
+            self._toggle_mode()
+
+    def _create_simple_mode_view(self):
+        """Create the simple mode view with read-only status widgets."""
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        content_widget = QWidget()
+        main_layout = QVBoxLayout(content_widget)
+        main_layout.setSpacing(6)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+
+        # === TEMPERATURES GROUP (Simple) ===
+        temp_group = QGroupBox("🌡️ Temperatures")
+        temp_group.setStyleSheet(self._get_group_style("#e67e22"))
+        temp_layout = QGridLayout()
+        temp_layout.setSpacing(4)
+
+        # Simple widgets for temperatures
+        self.simple_growth_tube_temp = SimpleStatusWidget("Growth tube T", " °C", is_temperature=True, error_name="Growth Tube Error")
+        temp_layout.addWidget(self.simple_growth_tube_temp, 0, 0)
+        self.simple_saturator_temp = SimpleStatusWidget("Saturator T", " °C", is_temperature=True, error_name="Saturator Error")
+        temp_layout.addWidget(self.simple_saturator_temp, 0, 1)
+        self.simple_inlet_temp = SimpleStatusWidget("Inlet T", " °C", is_temperature=True, error_name="Inlet Error")
+        temp_layout.addWidget(self.simple_inlet_temp, 0, 2)
+
+        self.simple_heater_temp = SimpleStatusWidget("Heater T", " °C", is_temperature=True, error_name="Heater Error")
+        temp_layout.addWidget(self.simple_heater_temp, 1, 0)
+        self.simple_drainage_temp = SimpleStatusWidget("Drainage T", " °C", is_temperature=True, error_name="Drainage Error")
+        temp_layout.addWidget(self.simple_drainage_temp, 1, 1)
+        self.simple_cabin_temp = SimpleStatusWidget("Cabin T", " °C", is_temperature=True, error_name="Cabin Error")
+        temp_layout.addWidget(self.simple_cabin_temp, 1, 2)
+
+        # Equal column stretch for consistent layout
+        temp_layout.setColumnStretch(0, 1)
+        temp_layout.setColumnStretch(1, 1)
+        temp_layout.setColumnStretch(2, 1)
+
+        temp_group.setLayout(temp_layout)
+        main_layout.addWidget(temp_group)
+
+        # === FLOW RATES GROUP (Simple) ===
+        # Match advanced mode layout: 3 columns (for PSM Retrofit CO flow)
+        flow_group = QGroupBox("💨 Flow Rates")
+        flow_group.setStyleSheet(self._get_group_style("#3498db"))
+        flow_layout = QGridLayout()
+        flow_layout.setSpacing(4)
+
+        # Row 0: CPC inlet, CPC sample, CO flow (PSM Retrofit only)
+        self.simple_cpc_inlet_flow = SimpleStatusWidget("CPC inlet", " lpm", is_temperature=False, error_name="Flow Error")
+        flow_layout.addWidget(self.simple_cpc_inlet_flow, 0, 0)
+        self.simple_cpc_sample_flow = SimpleStatusWidget("CPC sample", " lpm", is_temperature=False, error_name="Flow Error")
+        flow_layout.addWidget(self.simple_cpc_sample_flow, 0, 1)
+        # CO flow for PSM Retrofit (hidden for PSM 2.0)
+        self.simple_co_flow = SimpleStatusWidget("CO flow", " lpm", is_temperature=False, error_name="Flow Error")
+        flow_layout.addWidget(self.simple_co_flow, 0, 2)
+        if self.is_psm2:
+            self.simple_co_flow.hide()
+
+        # Row 1: Saturator, Excess
+        self.simple_flow_saturator = SimpleStatusWidget("Saturator", " lpm", is_temperature=False, error_name="Flow Error")
+        flow_layout.addWidget(self.simple_flow_saturator, 1, 0)
+        self.simple_flow_excess = SimpleStatusWidget("Excess", " lpm", is_temperature=False, error_name="Flow Error")
+        flow_layout.addWidget(self.simple_flow_excess, 1, 1)
+
+        # Row 2: Inlet, Vacuum (PSM 2.0 only)
+        self.simple_flow_inlet = SimpleStatusWidget("Inlet", " lpm", is_temperature=False, error_name="Flow Error")
+        flow_layout.addWidget(self.simple_flow_inlet, 2, 0)
+        if self.is_psm2:
+            self.simple_flow_vacuum = SimpleStatusWidget("Vacuum", " lpm", is_temperature=False, error_name="Vacuum Error")
+            flow_layout.addWidget(self.simple_flow_vacuum, 2, 1)
+
+        # Equal column stretch for consistent layout
+        flow_layout.setColumnStretch(0, 1)
+        flow_layout.setColumnStretch(1, 1)
+        flow_layout.setColumnStretch(2, 1)
+
+        flow_group.setLayout(flow_layout)
+        main_layout.addWidget(flow_group)
+
+        # === CONTROLS, PRESSURES & LEVELS (combined row - Simple) ===
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+
+        # Controls (still interactive in simple mode)
+        controls_group = QGroupBox("🎛️ Controls")
+        controls_group.setStyleSheet(self._get_group_style("#27ae60"))
+        controls_layout = QVBoxLayout()
+        controls_layout.setSpacing(2)
+        controls_layout.setContentsMargins(4, 4, 4, 4)
+
+        # Share toggle switches between modes
+        self.simple_autofill = ToggleSwitch("Autofill", "Automatically refill saturator liquid when low")
+        controls_layout.addWidget(self.simple_autofill)
+        self.simple_drying = ToggleSwitch("Drying", "Run drying cycle to remove moisture")
+        controls_layout.addWidget(self.simple_drying)
+
+        controls_group.setLayout(controls_layout)
+        status_row.addWidget(controls_group, 1)
+
+        # Pressures (Simple)
+        pressure_group = QGroupBox("📊 Pressures")
+        pressure_group.setStyleSheet(self._get_group_style("#9b59b6"))
+        pressure_layout = QVBoxLayout()
+        pressure_layout.setSpacing(4)
+        pressure_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.simple_pressure_inlet = SimpleStatusWidget("Inlet", " mbar", is_temperature=False, error_name="Pressure Error")
+        pressure_layout.addWidget(self.simple_pressure_inlet)
+        if self.is_psm2:
+            self.simple_pressure_critical = SimpleStatusWidget("Vacuum line", " mbar", is_temperature=False, error_name="Pressure Error")
+        else:
+            self.simple_pressure_critical = SimpleStatusWidget("Crit. orifice", " mbar", is_temperature=False, error_name="Pressure Error")
+        pressure_layout.addWidget(self.simple_pressure_critical)
+
+        pressure_group.setLayout(pressure_layout)
+        status_row.addWidget(pressure_group, 1)
+
+        # Liquid Levels (Simple)
+        liquid_group = QGroupBox("💧 Levels")
+        liquid_group.setStyleSheet(self._get_group_style("#1abc9c"))
+        liquid_layout = QVBoxLayout()
+        liquid_layout.setSpacing(4)
+        liquid_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.simple_liquid_saturator = SimpleStatusWidget("Saturator", "", is_temperature=False, error_name="Level LOW")
+        liquid_layout.addWidget(self.simple_liquid_saturator)
+        self.simple_liquid_drain = SimpleStatusWidget("Drain", "", is_temperature=False, error_name="Level HIGH")
+        liquid_layout.addWidget(self.simple_liquid_drain)
+
+        liquid_group.setLayout(liquid_layout)
+        status_row.addWidget(liquid_group, 1)
+
+        main_layout.addLayout(status_row)
+        main_layout.addStretch()
+
+        scroll_area.setWidget(content_widget)
+        self.mode_stack.addWidget(scroll_area)
+
+    def _create_advanced_mode_view(self):
+        """Create the advanced mode view with full controls."""
+        # Scroll area for when content exceeds screen
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setFrameShape(QFrame.NoFrame)
@@ -1067,6 +1394,11 @@ class PSMControlTab(QWidget):
         self.temp_cabin.setToolTip("Cabin temperature - internal instrument temperature (read-only)")
         temp_layout.addWidget(self.temp_cabin, 1, 2)
 
+        # Equal column stretch for consistent layout
+        temp_layout.setColumnStretch(0, 1)
+        temp_layout.setColumnStretch(1, 1)
+        temp_layout.setColumnStretch(2, 1)
+
         temp_group.setLayout(temp_layout)
         main_layout.addWidget(temp_group)
 
@@ -1105,7 +1437,7 @@ class PSMControlTab(QWidget):
         self.set_co_flow = SetWidget("CO flow", " lpm", decimals=3)
         self.set_co_flow.setToolTip("Cut-off flow rate for PSM Retrofit")
         flow_layout.addWidget(self.set_co_flow, 0, 2)
-        if is_psm2:
+        if self.is_psm2:
             self.set_co_flow.hide()
 
         # Row 1: Read-only flow indicators (first two)
@@ -1121,10 +1453,15 @@ class PSMControlTab(QWidget):
         self.flow_inlet.setToolTip("Inlet flow - total sample inlet flow rate")
         flow_layout.addWidget(self.flow_inlet, 2, 0)
 
-        if is_psm2:
+        if self.is_psm2:
             self.flow_vacuum = IndicatorWidget("Vacuum")
             self.flow_vacuum.setToolTip("Vacuum flow - vacuum pump flow rate")
             flow_layout.addWidget(self.flow_vacuum, 2, 1)
+
+        # Equal column stretch for consistent layout
+        flow_layout.setColumnStretch(0, 1)
+        flow_layout.setColumnStretch(1, 1)
+        flow_layout.setColumnStretch(2, 1)
 
         flow_group.setLayout(flow_layout)
         main_layout.addWidget(flow_group)
@@ -1156,11 +1493,8 @@ class PSMControlTab(QWidget):
         controls_layout.setSpacing(2)
         controls_layout.setContentsMargins(4, 4, 4, 4)
 
-        self.autofill = ToggleSwitch("Autofill", "Automatically refill saturator liquid when low")
+        self.autofill = ToggleSwitch("Autofill", "Automatically refill saturator liquid when low (also enables drain)")
         controls_layout.addWidget(self.autofill)
-
-        self.drain = ToggleSwitch("Drain", "Enable liquid drainage from the system")
-        controls_layout.addWidget(self.drain)
 
         self.drying = ToggleSwitch("Drying", "Run drying cycle to remove moisture")
         controls_layout.addWidget(self.drying)
@@ -1193,7 +1527,7 @@ class PSMControlTab(QWidget):
         self.pressure_inlet = IndicatorWidget("Inlet")
         self.pressure_inlet.setToolTip("Inlet pressure - sample inlet pressure")
         pressure_layout.addWidget(self.pressure_inlet)
-        if is_psm2:
+        if self.is_psm2:
             self.pressure_critical_orifice = IndicatorWidget("Vacuum line")
             self.pressure_critical_orifice.setToolTip("Vacuum line pressure - vacuum system pressure")
         else:
@@ -1270,11 +1604,29 @@ class PSMControlTab(QWidget):
         main_layout.addWidget(self.commands_group)
         main_layout.addStretch()
 
-        # Set up scroll area
+        # Set up scroll area and add to mode stack
         scroll_area.setWidget(content_widget)
-        outer_layout = QVBoxLayout(self)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
-        outer_layout.addWidget(scroll_area)
+        self.mode_stack.addWidget(scroll_area)
+
+    def _get_group_style(self, color):
+        """Return group box stylesheet with the given accent color."""
+        return f"""
+            QGroupBox {{
+                border: 1px solid {color};
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px;
+                color: {color};
+                font-weight: bold;
+                font-size: 14px;
+            }}
+        """
 
     def _on_commands_toggled(self, checked):
         """Show/hide command widget content when group is toggled."""

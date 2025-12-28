@@ -666,8 +666,10 @@ class PSMPlotConfig(BasePlotConfig):
         # Store inlet flow in PSM settings
         if psm_settings:
             psm_settings.inlet_flow_rate = round(inlet_flow, 3)
-        # Show inlet flow in PSM widget
+        # Show inlet flow in PSM widget (both advanced and simple mode)
         psm_widget.status_tab.flow_inlet.change_value(str(round(inlet_flow, 3)))
+        if hasattr(psm_widget.control_tab, 'simple_flow_inlet'):
+            psm_widget.control_tab.simple_flow_inlet.change_value(str(round(inlet_flow, 3)) + " lpm")
 
         # Calculate polynomial correction factor
         if psm_data.poly_correction == 0:
