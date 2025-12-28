@@ -295,7 +295,7 @@ class SimpleStatusWidget(QFrame):
         try:
             if isinstance(value, str):
                 # Remove common unit suffixes
-                clean_value = value.replace('°C', '').replace('lpm', '').replace('mbar', '').replace('kPa', '').replace('%', '').replace('mA', '').strip()
+                clean_value = value.replace('°C', '').replace('lpm', '').replace('mbar', '').replace('kPa', '').replace('%', '').replace('mA', '').replace(' s', '').strip()
                 # Handle text status values (OK, LOW, HIGH, etc.) - treat as valid non-numeric values
                 if clean_value.upper() in ('OK', 'LOW', 'HIGH', 'OVERFILL', 'ON', 'OFF', '---', '--'):
                     self._current_value = 0.0  # Mark as having a value (for green status)

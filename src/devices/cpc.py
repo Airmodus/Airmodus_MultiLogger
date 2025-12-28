@@ -310,6 +310,18 @@ class CPCWidget(ComplexDevice):
         self.status_tab.laser_power.change_value(laser_text)
         self.control_tab.simple_laser_power.change_value(laser_text)
 
+        # update pulse quality (both modes) - uses pulse_ratio from current_data
+        if hasattr(self, 'current_data') and self.current_data:
+            pulse_ratio = getattr(self.current_data, 'pulse_ratio', None)
+            if pulse_ratio is not None and str(pulse_ratio) != 'nan':
+                pulse_text = f"{pulse_ratio:.2f} %"
+            else:
+                pulse_text = "---"
+        else:
+            pulse_text = "---"
+        self.status_tab.pulse_quality.change_value(pulse_text)
+        self.control_tab.simple_pulse_quality.change_value(pulse_text)
+
     def get_read_command(self):
         """Get CPC read command(s)."""
         # Note: Actual command sending logic is in DeviceManager.get_dev_data()
