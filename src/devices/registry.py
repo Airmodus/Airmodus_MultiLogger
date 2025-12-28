@@ -211,23 +211,24 @@ def setup_psm_connections(widget, device_config, connection, app):
     widget.set_tab.command_widget.command_input.returnPressed.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
 
-    # Liquid operations - autofill and drain are always toggled together
-    def on_autofill_toggled():
-        state = str(int(widget.set_tab.autofill.isChecked()))
-        connection.send_message(":SET:AFLL " + state)
-        connection.send_message(":SET:DRN " + state)
-    widget.set_tab.autofill.clicked.connect(on_autofill_toggled)
+    # Advanced mode liquid operations - separate controls for autofill and drain
+    widget.set_tab.autofill.clicked.connect(
+        lambda: connection.send_message(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
+    widget.set_tab.drain.clicked.connect(
+        lambda: connection.send_message(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
     widget.set_tab.drying.clicked.connect(
         lambda: connection.send_message(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
 
-    # Simple mode toggle connections (same functionality)
-    def on_simple_autofill_toggled():
-        state = str(int(widget.control_tab.simple_autofill.isChecked()))
+    # Simple mode "Bottles Connected" toggle - controls autofill+drain and flow mode
+    def on_bottles_connected_toggled():
+        is_connected = widget.control_tab.simple_bottles_connected.isChecked()
+        state = str(int(is_connected))
         connection.send_message(":SET:AFLL " + state)
         connection.send_message(":SET:DRN " + state)
-    widget.control_tab.simple_autofill.clicked.connect(on_simple_autofill_toggled)
-    widget.control_tab.simple_drying.clicked.connect(
-        lambda: connection.send_message(widget.set_tab.drying.messages[int(widget.control_tab.simple_drying.isChecked())]))
+        # If bottles disconnected (OFF), set idle mode with low flow
+        if not is_connected:
+            connection.send_message(":SET:FLOW:FXD 0.1")
+    widget.control_tab.simple_bottles_connected.clicked.connect(on_bottles_connected_toggled)
 
 
 def setup_ediluter_connections(widget, device_config, connection, app):

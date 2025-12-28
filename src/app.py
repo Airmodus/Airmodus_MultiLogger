@@ -688,6 +688,16 @@ class MainWindow(QMainWindow):
         if firmware_version:
             extra_params['firmware_version'] = firmware_version
 
+        # For PSM devices, show bottle setup dialog
+        if device_type == PSM:
+            from dialogs import PSMBottleDialog
+            bottle_dialog = PSMBottleDialog(self)
+            if bottle_dialog.exec_() == bottle_dialog.Accepted:
+                extra_params['bottles_connected'] = bottle_dialog.bottles_connected()
+            else:
+                # User closed dialog - default to bottles connected for safety
+                extra_params['bottles_connected'] = True
+
         # Create device configuration
         device_config = DeviceConfig(
             device_id=self._next_device_id,

@@ -7,7 +7,8 @@ Accessed via gear icon in status bar.
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                               QPushButton, QLabel, QLineEdit, QCheckBox,
-                              QFileDialog, QWidget, QSpinBox, QTabWidget)
+                              QFileDialog, QWidget, QSpinBox, QTabWidget,
+                              QGroupBox, QMessageBox)
 from PyQt5.QtCore import Qt
 from datetime import datetime as dt
 import logging
@@ -96,6 +97,32 @@ class DataSettingsDialog(QDialog):
         data_form.addRow("Resume on startup:", self.resume_startup_checkbox)
 
         data_layout.addLayout(data_form)
+
+        # === Diagnostics Export Section ===
+        data_layout.addSpacing(20)
+
+        diagnostics_group = QGroupBox("Diagnostics")
+        diagnostics_layout = QHBoxLayout()
+        diagnostics_layout.setContentsMargins(10, 10, 10, 10)
+
+        self.view_diagnostics_button = QPushButton("View Diagnostics")
+        self.view_diagnostics_button.setToolTip(
+            "View device status and errors in a readable format"
+        )
+        self.view_diagnostics_button.clicked.connect(self._view_diagnostics)
+        diagnostics_layout.addWidget(self.view_diagnostics_button)
+
+        self.export_diagnostics_button = QPushButton("Export to File...")
+        self.export_diagnostics_button.setToolTip(
+            "Export comprehensive diagnostic information to a JSON file for debugging field device issues"
+        )
+        self.export_diagnostics_button.clicked.connect(self._export_diagnostics)
+        diagnostics_layout.addWidget(self.export_diagnostics_button)
+        diagnostics_layout.addStretch()
+
+        diagnostics_group.setLayout(diagnostics_layout)
+        data_layout.addWidget(diagnostics_group)
+
         data_layout.addStretch()
 
         # === Plot Tab ===
@@ -240,3 +267,59 @@ class DataSettingsDialog(QDialog):
         except Exception as e:
             logging.error(f"Error updating save status label: {e}")
             self.save_status_label.setText("")
+
+    def _export_diagnostics(self):
+        """Handle diagnostics export button click."""
+        from diagnostics import DiagnosticsExporter
+        from datetime import datetime
+
+        # Generate default filename with timestamp
+        default_filename = f"diagnostics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+        # Get save path from user
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Diagnostics",
+            default_filename,
+            "JSON Files (*.json);;All Files (*)"
+        )
+
+        if not filepath:
+            return  # User cancelled
+
+        try:
+            # Create exporter and collect diagnostics
+            exporter = DiagnosticsExporter(
+                self.config,
+                self.data_holder,
+                self.main_window
+            )
+            diagnostics = exporter.collect_all()
+
+            # Export to file
+            exporter.export_to_file(diagnostics, filepath)
+
+            # Show success message
+            QMessageBox.information(
+                self,
+                "Export Complete",
+                f"Diagnostics exported successfully to:\n{filepath}"
+            )
+        except Exception as e:
+            logging.error(f"Failed to export diagnostics: {e}")
+            QMessageBox.critical(
+                self,
+                "Export Failed",
+                f"Failed to export diagnostics:\n{str(e)}"
+            )
+
+    def _view_diagnostics(self):
+        """Open the diagnostics viewer dialog."""
+        from dialogs.diagnostics_dialog import DiagnosticsDialog
+
+        dialog = DiagnosticsDialog(
+            self.config,
+            self.data_holder,
+            self.main_window
+        )
+        dialog.exec_()

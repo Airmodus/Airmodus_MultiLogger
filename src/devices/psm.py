@@ -327,19 +327,23 @@ class PSMWidget(ComplexDevice):
         total_notes = note_bin.count("1") # count number of 1s in note_bin
         inverted_note_bin = note_bin[::-1] # invert note_bin for liquid setting parsing
 
-        # update liquid mode settings in GUI (advanced mode)
+        # update liquid mode settings in GUI
         # 0 = autofill on, 1 = autofill off
-        if inverted_note_bin[5] == "0":
-            self.set_tab.autofill.update_state(1)
-            self.control_tab.simple_autofill.update_state(1)
-        elif inverted_note_bin[5] == "1":
-            self.set_tab.autofill.update_state(0)
-            self.control_tab.simple_autofill.update_state(0)
-        # 0 = drying off, 1 = drying on
-        self.set_tab.drying.update_state(int(inverted_note_bin[4]))
-        self.control_tab.simple_drying.update_state(int(inverted_note_bin[4]))
+        autofill_on = inverted_note_bin[5] == "0"
+        # 0 = drain on, 1 = drain off
+        drain_on = inverted_note_bin[3] == "0"
 
-        # Drain state is no longer shown separately - it follows autofill
+        # Update advanced mode toggles
+        self.set_tab.autofill.update_state(1 if autofill_on else 0)
+        self.set_tab.drain.update_state(1 if drain_on else 0)
+
+        # Update simple mode bottles toggle based on actual device state
+        # Bottles "ON" = both autofill AND drain are on
+        # Show custom indicator if states don't match
+        self.control_tab.update_bottles_state(autofill_on, drain_on)
+
+        # 0 = drying off, 1 = drying on (advanced mode only)
+        self.set_tab.drying.update_state(int(inverted_note_bin[4]))
         # 0 = saturator liquid level OK, 1 = saturator liquid level LOW
         self.control_tab.liquid_saturator.change_color(inverted_note_bin[6])
         self.control_tab.simple_liquid_saturator.change_color(inverted_note_bin[6])
@@ -451,6 +455,13 @@ class PSMWidget(ComplexDevice):
         return None
 
     def get_status_bar_text(self):
+        # Check if bottles are disconnected (idle safety mode)
+        # Check if both autofill and drain are off (idle/no bottles mode)
+        if hasattr(self, 'set_tab'):
+            autofill_off = not self.set_tab.autofill.isChecked()
+            drain_off = not self.set_tab.drain.isChecked()
+            if autofill_off and drain_off:
+                return "⚠ Idle (no bottles)"
         if hasattr(self, 'measure_tab') and hasattr(self.measure_tab, '_current_device_mode'):
             mode = self.measure_tab._current_device_mode
             satflow = self.current_data.saturator_flow if hasattr(self, 'current_data') else 0
@@ -965,6 +976,7 @@ class PSMWidget(ComplexDevice):
         - :SYST:PRNT if settings need to be fetched
         - :SYST:VCMP if dilution parameters are missing
         - :SYST:VER if firmware version is unknown
+        - Initial autofill/drain/flow commands based on bottles_connected setting
         """
         if self.needs_settings_fetch:
             dev_conn.send_message(":SYST:PRNT")
@@ -978,6 +990,14 @@ class PSMWidget(ComplexDevice):
         fw = device_config.extra_params.get('firmware_version', '')
         if not fw:
             dev_conn.send_delayed_message(":SYST:VER", 300)
+
+        # Apply initial bottles_connected state (set by user during device addition)
+        bottles_connected = device_config.extra_params.get('bottles_connected', True)
+        if not bottles_connected:
+            # Bottles not connected - set idle mode
+            dev_conn.send_delayed_message(":SET:AFLL 0", 400)
+            dev_conn.send_delayed_message(":SET:DRN 0", 450)
+            dev_conn.send_delayed_message(":SET:FLOW:FXD 0.1", 500)
 
     def validate_10hz_mode(self, app_config, device_config):
         """
@@ -1212,6 +1232,31 @@ class PSMControlTab(QWidget):
         if advanced != self._advanced_mode:
             self._toggle_mode()
 
+    def update_bottles_state(self, autofill_on: bool, drain_on: bool):
+        """Update simple mode bottles toggle based on actual autofill/drain state.
+
+        Shows:
+        - "Bottles: ON" if both autofill and drain are on
+        - "Bottles: OFF" if both are off
+        - Custom indicator if states don't match (advanced mode config)
+        """
+        if autofill_on and drain_on:
+            # Normal operation - both on
+            self.simple_bottles_connected.update_state(1)
+            self.simple_bottles_connected.name = "Bottles"
+        elif not autofill_on and not drain_on:
+            # Both off - idle mode
+            self.simple_bottles_connected.update_state(0)
+            self.simple_bottles_connected.name = "Bottles"
+        else:
+            # Mismatch - show as custom/advanced configuration
+            self.simple_bottles_connected.update_state(0)
+            if autofill_on and not drain_on:
+                self.simple_bottles_connected.name = "Bottles (drain off)"
+            else:  # drain on but autofill off
+                self.simple_bottles_connected.name = "Bottles (autofill off)"
+        self.simple_bottles_connected.update()  # Force repaint
+
     def _create_simple_mode_view(self):
         """Create the simple mode view with read-only status widgets."""
         scroll_area = QScrollArea()
@@ -1301,11 +1346,9 @@ class PSMControlTab(QWidget):
         controls_layout.setContentsMargins(4, 4, 4, 4)
         controls_layout.setAlignment(Qt.AlignTop)
 
-        # Share toggle switches between modes
-        self.simple_autofill = ToggleSwitch("Autofill", "Automatically refill saturator liquid when low")
-        controls_layout.addWidget(self.simple_autofill)
-        self.simple_drying = ToggleSwitch("Drying", "Run drying cycle to remove moisture")
-        controls_layout.addWidget(self.simple_drying)
+        # Single toggle for bottles connected state (controls autofill+drain+flow mode)
+        self.simple_bottles_connected = ToggleSwitch("Bottles", "Liquid bottles connected - enables autofill and normal operation")
+        controls_layout.addWidget(self.simple_bottles_connected)
 
         controls_group.setLayout(controls_layout)
         status_row.addWidget(controls_group, 1)
@@ -1457,8 +1500,11 @@ class PSMControlTab(QWidget):
         controls_layout.setContentsMargins(4, 4, 4, 4)
         controls_layout.setAlignment(Qt.AlignTop)
 
-        self.autofill = ToggleSwitch("Autofill", "Automatically refill saturator liquid when low (also enables drain)")
+        self.autofill = ToggleSwitch("Autofill", "Automatically refill saturator liquid when low")
         controls_layout.addWidget(self.autofill)
+
+        self.drain = ToggleSwitch("Drain", "Enable liquid drainage from the system")
+        controls_layout.addWidget(self.drain)
 
         self.drying = ToggleSwitch("Drying", "Run drying cycle to remove moisture")
         controls_layout.addWidget(self.drying)
