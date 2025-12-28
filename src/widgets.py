@@ -295,8 +295,12 @@ class SimpleStatusWidget(QFrame):
         try:
             if isinstance(value, str):
                 # Remove common unit suffixes
-                clean_value = value.replace('°C', '').replace('lpm', '').replace('mbar', '').strip()
-                self._current_value = float(clean_value)
+                clean_value = value.replace('°C', '').replace('lpm', '').replace('mbar', '').replace('kPa', '').replace('%', '').replace('mA', '').strip()
+                # Handle text status values (OK, LOW, HIGH, etc.) - treat as valid non-numeric values
+                if clean_value.upper() in ('OK', 'LOW', 'HIGH', 'OVERFILL', 'ON', 'OFF', '---', '--'):
+                    self._current_value = 0.0  # Mark as having a value (for green status)
+                else:
+                    self._current_value = float(clean_value)
             else:
                 self._current_value = float(value)
         except (ValueError, TypeError):
@@ -356,11 +360,19 @@ class SimpleStatusWidget(QFrame):
                 self.info_label.setText(delta_str)
                 self.info_label.setStyleSheet("QLabel { color: #f39c12; font-weight: bold; }")
         else:
-            # No setpoint or value yet - show gray
-            self.setStyleSheet(self._frame_normal)
-            self._status_indicator.setStyleSheet(STATUS_GRAY)
-            self.info_label.setText("")
-            self.info_label.setStyleSheet("QLabel { color: #888; }")
+            # No setpoint defined - show GREEN if we have a value (no error), GRAY if no value yet
+            if self._current_value is not None:
+                # Value received, no firmware error, no setpoint to compare - show GREEN (OK status)
+                self.setStyleSheet(self._frame_normal)
+                self._status_indicator.setStyleSheet(STATUS_GREEN)
+                self.info_label.setText("")
+                self.info_label.setStyleSheet("QLabel { color: #888; }")
+            else:
+                # No value yet - show gray
+                self.setStyleSheet(self._frame_normal)
+                self._status_indicator.setStyleSheet(STATUS_GRAY)
+                self.info_label.setText("")
+                self.info_label.setStyleSheet("QLabel { color: #888; }")
 
     def setToolTip(self, tooltip):
         """Set tooltip on the name label."""

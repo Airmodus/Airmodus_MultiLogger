@@ -6,7 +6,7 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from PyQt5.QtWidgets import (QTabWidget, QGridLayout, QLabel, QWidget,
     QPushButton, QComboBox, QGraphicsRectItem, QTableWidget, QTableWidgetItem,
     QTextEdit, QCheckBox, QHeaderView, QLineEdit, QVBoxLayout, QHBoxLayout,
-    QGroupBox, QScrollArea, QFrame)
+    QGroupBox, QScrollArea, QFrame, QStackedWidget)
 from config import CPC, CPC_ERRORS
 from ui_helpers import GuidedComboBox
 
@@ -14,6 +14,7 @@ from widgets import (
     CommandWidget,
     SetWidget,
     SetStatusWidget,
+    SimpleStatusWidget,
     ToggleButton,
     ToggleSwitch,
     IndicatorWidget,
@@ -36,6 +37,7 @@ class CPCWidget(ComplexDevice):
         # CPC-specific data (device owns its data)
         self.ten_hz_data = full(10, nan)  # 10 Hz logging data buffer
         self.pulse_analysis_index = None  # None = not in analysis mode, 0-6 = threshold index
+        self.needs_calibration_fetch = True  # Fetch factory calibration on initial connection
 
         # create plot widget (first tab)
         self.plot_tab = SinglePlot(device_type=CPC)
@@ -53,13 +55,21 @@ class CPCWidget(ComplexDevice):
         self.pulse_quality = PulseQuality()
         self.addTab(self.pulse_quality, "Pulse")
 
-        # create list of widget references for updating gui with cpc system status
+        # create list of widget references for updating gui with cpc system status (Advanced mode)
         self.cpc_status_widgets = [
             self.control_tab.temp_optics, self.control_tab.temp_saturator,
             self.control_tab.temp_condenser, self.control_tab.pres_inlet,
             self.control_tab.pres_nozzle, self.control_tab.laser_power,
             self.control_tab.liquid_level, self.control_tab.temp_cabin,
             self.control_tab.pres_critical_orifice, self.control_tab.pulse_quality
+        ]
+        # Simple mode status widgets for error coloring (same order as cpc_status_widgets)
+        self.cpc_simple_status_widgets = [
+            self.control_tab.simple_optics_temp, self.control_tab.simple_saturator_temp,
+            self.control_tab.simple_condenser_temp, self.control_tab.simple_pres_inlet,
+            self.control_tab.simple_pres_nozzle, self.control_tab.simple_laser_power,
+            self.control_tab.simple_liquid_level, self.control_tab.simple_cabin_temp,
+            self.control_tab.simple_pres_critical_orifice, self.control_tab.simple_pulse_quality
         ]
 
         # Plot configuration (composition over inheritance)
@@ -152,15 +162,20 @@ class CPCWidget(ComplexDevice):
         1. :MEAS:ALL - Request all measurement data
         2. :SYST:PRNT (150ms delay) - Request print settings
         3. :SYST:PALL (300ms delay) - Request all system parameters
-        4. :MEAS:OPC_CONC_LOG (450ms delay) - Request 10Hz data (if enabled)
+        4. :SYST:POUT (450ms delay) - Request factory calibration (once on connection)
+        5. :MEAS:OPC_CONC_LOG (600ms delay) - Request 10Hz data (if enabled)
         """
         sequence = [
             (':MEAS:ALL', 0),
             (':SYST:PRNT', 150),
             (':SYST:PALL', 300),
         ]
+        # Request factory calibration on initial connection
+        if self.needs_calibration_fetch:
+            sequence.append((':SYST:POUT', 450))
         if ten_hz:
-            sequence.append((':MEAS:OPC_CONC_LOG', 450))
+            delay = 600 if self.needs_calibration_fetch else 450
+            sequence.append((':MEAS:OPC_CONC_LOG', delay))
         return sequence
 
     # convert CPC status hex to binary and update error label colors
@@ -171,14 +186,18 @@ class CPCWidget(ComplexDevice):
         total_errors = status_bin.count("1") # count number of 1s in status_bin
         inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
         for i in range(widget_amount): # iterate through all status widgets
-            # change color of error label according to error bit
+            # change color of error label according to error bit (Advanced mode)
             self.cpc_status_widgets[i].change_color(inverted_status_bin[i])
-        # update cabin pressure label color according to error status
+            # change color of simple mode widgets as well
+            self.cpc_simple_status_widgets[i].change_color(inverted_status_bin[i])
+        # update cabin pressure label color according to error status (both modes)
         if cabin_p_error:
             self.status_tab.pres_cabin.change_color(1)
+            self.control_tab.simple_pres_cabin.change_color(1)
             total_errors += 1
         else:
             self.status_tab.pres_cabin.change_color(0)
+            self.control_tab.simple_pres_cabin.change_color(0)
         
         return total_errors # return total number of errors
     
@@ -223,30 +242,72 @@ class CPCWidget(ComplexDevice):
             elif self.set_tab.set_averaging_time.value_spinbox.text()[:-2] == "":
                 self.set_tab.set_averaging_time.value_spinbox.lineEdit().setText(str(settings[5]))
         
-        # update mode settings
+        # update mode settings (Advanced mode)
         self.set_tab.autofill.update_state(settings[1]) # autofill
         self.set_tab.water_removal.update_state(settings[4]) # water removal
         self.set_tab.drain.update_state(settings[2]) # drain
+
+        # update mode settings (Simple mode)
+        self.control_tab.simple_autofill.update_state(settings[1])
+        self.control_tab.simple_water_removal.update_state(settings[4])
+        self.control_tab.simple_drain.update_state(settings[2])
+
+        # update simple mode temperature setpoints for status bar coloring
+        # settings[8] = saturator_temp, settings[6] = condenser_temp
+        self.control_tab.simple_saturator_temp.set_setpoint(settings[8])
+        self.control_tab.simple_condenser_temp.set_setpoint(settings[6])
+
+        # update simple mode averaging time (read-only display)
+        # settings[5] = averaging_time
+        if str(settings[5]) != 'nan':
+            self.control_tab.simple_averaging_time.change_value(f"{settings[5]} s")
     
     # update all data values in status tab
     def update_values(self, current_list):
-        # update temperature values
+        # update temperature values (Advanced mode)
         self.status_tab.temp_optics.change_value(str(current_list[5]) + " °C")
         self.status_tab.temp_saturator.change_value(str(current_list[3]) + " °C")
         self.status_tab.temp_condenser.change_value(str(current_list[4]) + " °C")
-        # update pressure values
+        self.status_tab.temp_cabin.change_value(str(current_list[6]) + " °C")
+
+        # update temperature values (Simple mode)
+        self.control_tab.simple_optics_temp.change_value(f"{current_list[5]} °C")
+        self.control_tab.simple_saturator_temp.change_value(f"{current_list[3]} °C")
+        self.control_tab.simple_condenser_temp.change_value(f"{current_list[4]} °C")
+        self.control_tab.simple_cabin_temp.change_value(f"{current_list[6]} °C")
+
+        # update pressure values (Advanced mode)
         self.status_tab.pres_inlet.change_value(str(current_list[7]) + " kPa")
         self.status_tab.pres_nozzle.change_value(str(current_list[9]) + " kPa")
         self.status_tab.pres_critical_orifice.change_value(str(current_list[8]) + " kPa")
         self.status_tab.pres_cabin.change_value(str(current_list[10]) + " kPa")
-        # update misc values
+
+        # update pressure values (Simple mode)
+        self.control_tab.simple_pres_inlet.change_value(f"{current_list[7]} kPa")
+        self.control_tab.simple_pres_nozzle.change_value(f"{current_list[9]} kPa")
+        self.control_tab.simple_pres_critical_orifice.change_value(f"{current_list[8]} kPa")
+        self.control_tab.simple_pres_cabin.change_value(f"{current_list[10]} kPa")
+
+        # update liquid level (both modes)
         if current_list[11] == 0:
-            self.status_tab.liquid_level.change_value("LOW")
+            level_text = "LOW"
         elif current_list[11] == 1:
-            self.status_tab.liquid_level.change_value("OK")
+            level_text = "OK"
         elif current_list[11] == 2:
-            self.status_tab.liquid_level.change_value("OVERFILL")
-        self.status_tab.temp_cabin.change_value(str(current_list[6]) + " °C")
+            level_text = "OVERFILL"
+        else:
+            level_text = "---"
+        self.status_tab.liquid_level.change_value(level_text)
+        self.control_tab.simple_liquid_level.change_value(level_text)
+
+        # update laser power (both modes) - uses laser current value
+        laser_current = current_list[12] if len(current_list) > 12 else None
+        if laser_current is not None:
+            laser_text = f"{laser_current:.2f} mA"
+        else:
+            laser_text = "---"
+        self.status_tab.laser_power.change_value(laser_text)
+        self.control_tab.simple_laser_power.change_value(laser_text)
 
     def get_read_command(self):
         """Get CPC read command(s)."""
@@ -489,6 +550,26 @@ class CPCWidget(ComplexDevice):
                     'update_gui': True
                 }
 
+            # Handle :SYST:POUT - factory calibration values
+            elif command == ":SYST:POUT":
+                # Parse factory calibration values (indices 6-7 are temp setpoints)
+                if len(data) >= 8:
+                    self.factory_calibration = {
+                        'saturator_temp': float(data[6]),
+                        'condenser_temp': float(data[7]),
+                    }
+                    # Update UI to show factory values
+                    self.update_factory_calibration_display()
+                    self.needs_calibration_fetch = False
+
+                return {
+                    'type': 'calibration',
+                    'command': command,
+                    'data': data,
+                    'raw': message,
+                    'update_gui': False
+                }
+
             # Handle :SYST:PALL - all parameters
             elif command == ":SYST:PALL":
                 data[22] = "NaN"  # device id
@@ -605,6 +686,15 @@ class CPCWidget(ComplexDevice):
         """CPC supports 10 Hz mode."""
         return True
 
+    def update_factory_calibration_display(self):
+        """Update SetStatusWidgets with factory calibration values."""
+        if not hasattr(self, 'factory_calibration'):
+            return
+
+        cal = self.factory_calibration
+        self.control_tab.set_saturator_temp.set_factory_value(cal['saturator_temp'])
+        self.control_tab.set_condenser_temp.set_factory_value(cal['condenser_temp'])
+
     def send_read_commands(self, dev_conn, device_config):
         """
         Send CPC read commands based on mode.
@@ -708,12 +798,221 @@ class CPCWidget(ComplexDevice):
 class CPCControlTab(QWidget):
     """Combined control tab merging Set and Status functionality.
 
-    Compact layout designed to fit on one screen without scrolling.
+    Supports two modes:
+    - Simple Mode (default): Clean read-only view with status indicators
+    - Advanced Mode: Full control with setpoints and serial commands
     """
+
+    # Signal emitted when mode changes (for persistence)
+    mode_changed = pyqtSignal(bool)  # True = advanced mode
+
     def __init__(self, *args, **kwargs):
         super().__init__()
+        self._advanced_mode = False
 
-        # Scroll area for when content exceeds screen
+        # Main layout with mode toggle at top
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        # Mode toggle header
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(8, 4, 8, 4)
+
+        header_layout.addStretch()
+
+        self.mode_toggle_btn = QPushButton("⚙ Advanced Mode")
+        self.mode_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #555;
+                color: white;
+                padding: 4px 12px;
+                border: none;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #666;
+            }
+        """)
+        self.mode_toggle_btn.clicked.connect(self._toggle_mode)
+        header_layout.addWidget(self.mode_toggle_btn)
+
+        outer_layout.addWidget(header_widget)
+
+        # Stacked widget for simple/advanced views
+        self.mode_stack = QStackedWidget()
+        outer_layout.addWidget(self.mode_stack)
+
+        # Create both views
+        self._create_simple_mode_view()
+        self._create_advanced_mode_view()
+
+        # Start in simple mode
+        self.mode_stack.setCurrentIndex(0)
+
+    def _toggle_mode(self):
+        """Toggle between simple and advanced modes."""
+        self._advanced_mode = not self._advanced_mode
+        if self._advanced_mode:
+            self.mode_stack.setCurrentIndex(1)
+            self.mode_toggle_btn.setText("◀ Simple Mode")
+        else:
+            self.mode_stack.setCurrentIndex(0)
+            self.mode_toggle_btn.setText("⚙ Advanced Mode")
+        self.mode_changed.emit(self._advanced_mode)
+
+    def set_advanced_mode(self, advanced: bool):
+        """Set mode programmatically (for restoring from settings)."""
+        if advanced != self._advanced_mode:
+            self._toggle_mode()
+
+    def _get_group_style(self, color):
+        """Return group box stylesheet with the given accent color."""
+        return f"""
+            QGroupBox {{
+                border: 1px solid {color};
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px;
+                color: {color};
+                font-weight: bold;
+                font-size: 14px;
+            }}
+        """
+
+    def _create_simple_mode_view(self):
+        """Create the simple mode view with read-only status widgets."""
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        content_widget = QWidget()
+        main_layout = QVBoxLayout(content_widget)
+        main_layout.setSpacing(6)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+
+        # === TEMPERATURES GROUP (Simple) ===
+        temp_group = QGroupBox("🌡️ Temperatures")
+        temp_group.setStyleSheet(self._get_group_style("#e67e22"))
+        temp_layout = QGridLayout()
+        temp_layout.setSpacing(4)
+
+        # Row 0: Saturator T, Condenser T
+        self.simple_saturator_temp = SimpleStatusWidget("Saturator T", " °C", is_temperature=True, error_name="Saturator Error")
+        temp_layout.addWidget(self.simple_saturator_temp, 0, 0)
+        self.simple_condenser_temp = SimpleStatusWidget("Condenser T", " °C", is_temperature=True, error_name="Condenser Error")
+        temp_layout.addWidget(self.simple_condenser_temp, 0, 1)
+
+        # Row 1: Cabin T, Optics T
+        self.simple_cabin_temp = SimpleStatusWidget("Cabin T", " °C", is_temperature=True, error_name="Cabin Error")
+        temp_layout.addWidget(self.simple_cabin_temp, 1, 0)
+        self.simple_optics_temp = SimpleStatusWidget("Optics T", " °C", is_temperature=True, error_name="Optics Error")
+        temp_layout.addWidget(self.simple_optics_temp, 1, 1)
+
+        # Equal column stretch for consistent layout
+        temp_layout.setColumnStretch(0, 1)
+        temp_layout.setColumnStretch(1, 1)
+
+        temp_group.setLayout(temp_layout)
+        main_layout.addWidget(temp_group)
+
+        # === PRESSURES GROUP (Simple) ===
+        pressure_group = QGroupBox("📊 Pressures")
+        pressure_group.setStyleSheet(self._get_group_style("#9b59b6"))
+        pressure_layout = QGridLayout()
+        pressure_layout.setSpacing(4)
+
+        # Row 0: Inlet, Nozzle
+        self.simple_pres_inlet = SimpleStatusWidget("Inlet", " kPa", is_temperature=False, error_name="Inlet Pressure Error")
+        pressure_layout.addWidget(self.simple_pres_inlet, 0, 0)
+        self.simple_pres_nozzle = SimpleStatusWidget("Nozzle", " kPa", is_temperature=False, error_name="Nozzle Pressure Error")
+        pressure_layout.addWidget(self.simple_pres_nozzle, 0, 1)
+
+        # Row 1: Critical orifice, Cabin
+        self.simple_pres_critical_orifice = SimpleStatusWidget("Critical orifice", " kPa", is_temperature=False, error_name="Critical Orifice Error")
+        pressure_layout.addWidget(self.simple_pres_critical_orifice, 1, 0)
+        self.simple_pres_cabin = SimpleStatusWidget("Cabin", " kPa", is_temperature=False, error_name="Cabin Pressure Error")
+        pressure_layout.addWidget(self.simple_pres_cabin, 1, 1)
+
+        # Equal column stretch for consistent layout
+        pressure_layout.setColumnStretch(0, 1)
+        pressure_layout.setColumnStretch(1, 1)
+
+        pressure_group.setLayout(pressure_layout)
+        main_layout.addWidget(pressure_group)
+
+        # === CONTROLS & STATUS (combined row - Simple) ===
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+
+        # Controls (still interactive in simple mode)
+        controls_group = QGroupBox("🎛️ Controls")
+        controls_group.setStyleSheet(self._get_group_style("#27ae60"))
+        controls_layout = QVBoxLayout()
+        controls_layout.setSpacing(2)
+        controls_layout.setContentsMargins(4, 4, 4, 4)
+        controls_layout.setAlignment(Qt.AlignTop)
+
+        # Toggle switches for simple mode
+        self.simple_autofill = ToggleSwitch("Autofill", "Automatically refill liquid when low")
+        controls_layout.addWidget(self.simple_autofill)
+        self.simple_water_removal = ToggleSwitch("Water removal", "Enable water removal cycle")
+        controls_layout.addWidget(self.simple_water_removal)
+        self.simple_drain = ToggleSwitch("Drain", "Enable liquid drainage")
+        controls_layout.addWidget(self.simple_drain)
+
+        controls_group.setLayout(controls_layout)
+        status_row.addWidget(controls_group, 1)
+
+        # Status Group (Simple)
+        status_group = QGroupBox("Status")
+        status_group.setStyleSheet(self._get_group_style("#17a2b8"))
+        status_layout = QVBoxLayout()
+        status_layout.setSpacing(4)
+        status_layout.setContentsMargins(4, 4, 4, 4)
+        status_layout.setAlignment(Qt.AlignTop)
+
+        self.simple_laser_power = SimpleStatusWidget("Laser power", "", is_temperature=False, error_name="Laser Error")
+        status_layout.addWidget(self.simple_laser_power)
+        self.simple_liquid_level = SimpleStatusWidget("Liquid level", "", is_temperature=False, error_name="Level LOW")
+        status_layout.addWidget(self.simple_liquid_level)
+        self.simple_pulse_quality = SimpleStatusWidget("Pulse quality", " %", is_temperature=False, error_name="Pulse Quality Error")
+        status_layout.addWidget(self.simple_pulse_quality)
+
+        status_group.setLayout(status_layout)
+        status_row.addWidget(status_group, 1)
+
+        # Settings Group (Simple - read-only averaging time)
+        settings_group = QGroupBox("Settings")
+        settings_group.setStyleSheet(self._get_group_style("#6c757d"))
+        settings_layout = QVBoxLayout()
+        settings_layout.setSpacing(4)
+        settings_layout.setContentsMargins(4, 4, 4, 4)
+        settings_layout.setAlignment(Qt.AlignTop)
+
+        self.simple_averaging_time = SimpleStatusWidget("Averaging time", " s", is_temperature=False, error_name="")
+        settings_layout.addWidget(self.simple_averaging_time)
+
+        settings_group.setLayout(settings_layout)
+        status_row.addWidget(settings_group, 1)
+
+        main_layout.addLayout(status_row)
+        main_layout.addStretch()
+
+        scroll_area.setWidget(content_widget)
+        self.mode_stack.addWidget(scroll_area)
+
+    def _create_advanced_mode_view(self):
+        """Create the advanced mode view with full controls."""
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setFrameShape(QFrame.NoFrame)
@@ -726,27 +1025,11 @@ class CPCControlTab(QWidget):
 
         # === TEMPERATURES GROUP ===
         temp_group = QGroupBox("🌡️ Temperatures")
-        temp_group.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #e67e22;
-                border-radius: 6px;
-                margin-top: 14px;
-                padding: 12px 8px 8px 8px;
-                background-color: #3a3a3a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: #e67e22;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
+        temp_group.setStyleSheet(self._get_group_style("#e67e22"))
         temp_layout = QGridLayout()
         temp_layout.setSpacing(4)
 
-        # Row 0: Saturator T, Condenser T (setpoint + actual), Optics T (read-only)
+        # Row 0: Saturator T, Condenser T (setpoint + actual)
         self.set_saturator_temp = SetStatusWidget("Saturator T", " °C")
         self.set_saturator_temp.setToolTip("Saturator temperature setpoint and actual value")
         temp_layout.addWidget(self.set_saturator_temp, 0, 0)
@@ -769,23 +1052,7 @@ class CPCControlTab(QWidget):
 
         # === PRESSURES GROUP ===
         pressure_group = QGroupBox("📊 Pressures")
-        pressure_group.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #9b59b6;
-                border-radius: 6px;
-                margin-top: 14px;
-                padding: 12px 8px 8px 8px;
-                background-color: #3a3a3a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: #9b59b6;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
+        pressure_group.setStyleSheet(self._get_group_style("#9b59b6"))
         pressure_layout = QGridLayout()
         pressure_layout.setSpacing(4)
 
@@ -816,26 +1083,11 @@ class CPCControlTab(QWidget):
 
         # Controls Group (toggles)
         controls_group = QGroupBox("🎛️ Controls")
-        controls_group.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #27ae60;
-                border-radius: 6px;
-                margin-top: 14px;
-                padding: 12px 8px 8px 8px;
-                background-color: #3a3a3a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: #27ae60;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
+        controls_group.setStyleSheet(self._get_group_style("#27ae60"))
         controls_layout = QVBoxLayout()
         controls_layout.setSpacing(2)
         controls_layout.setContentsMargins(4, 4, 4, 4)
+        controls_layout.setAlignment(Qt.AlignTop)
 
         self.autofill = ToggleSwitch("Autofill", "Automatically refill liquid when low")
         controls_layout.addWidget(self.autofill)
@@ -847,30 +1099,15 @@ class CPCControlTab(QWidget):
         controls_layout.addWidget(self.drain)
 
         controls_group.setLayout(controls_layout)
-        status_row.addWidget(controls_group, 1)  # stretch factor 1
+        status_row.addWidget(controls_group, 1)
 
         # Status Group (indicators)
-        status_group = QGroupBox("ℹ️ Status")
-        status_group.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #17a2b8;
-                border-radius: 6px;
-                margin-top: 14px;
-                padding: 12px 8px 8px 8px;
-                background-color: #3a3a3a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: #17a2b8;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
+        status_group = QGroupBox("Status")
+        status_group.setStyleSheet(self._get_group_style("#17a2b8"))
         status_layout = QVBoxLayout()
         status_layout.setSpacing(2)
         status_layout.setContentsMargins(4, 4, 4, 4)
+        status_layout.setAlignment(Qt.AlignTop)
 
         self.laser_power = IndicatorWidget("Laser power")
         self.laser_power.setToolTip("Laser power status")
@@ -885,65 +1122,30 @@ class CPCControlTab(QWidget):
         status_layout.addWidget(self.pulse_quality)
 
         status_group.setLayout(status_layout)
-        status_row.addWidget(status_group, 1)  # stretch factor 1
+        status_row.addWidget(status_group, 1)
 
-        # Settings Group
-        settings_group = QGroupBox("⚙️ Settings")
-        settings_group.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #6c757d;
-                border-radius: 6px;
-                margin-top: 14px;
-                padding: 12px 8px 8px 8px;
-                background-color: #3a3a3a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: #6c757d;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
+        # Settings Group (Advanced only)
+        settings_group = QGroupBox("Settings")
+        settings_group.setStyleSheet(self._get_group_style("#6c757d"))
         settings_layout = QVBoxLayout()
         settings_layout.setSpacing(4)
         settings_layout.setContentsMargins(4, 4, 4, 4)
+        settings_layout.setAlignment(Qt.AlignTop)
 
         self.set_averaging_time = SetWidget("Averaging time", " s")
         self.set_averaging_time.setToolTip("Data averaging time in seconds")
         settings_layout.addWidget(self.set_averaging_time)
 
         settings_group.setLayout(settings_layout)
-        status_row.addWidget(settings_group, 1)  # stretch factor 1
+        status_row.addWidget(settings_group, 1)
 
         main_layout.addLayout(status_row)
 
-        # === SERIAL COMMANDS GROUP (collapsible) ===
+        # === SERIAL COMMANDS GROUP (collapsible, Advanced only) ===
         self.commands_group = QGroupBox("📡 Serial Commands")
         self.commands_group.setCheckable(True)
         self.commands_group.setChecked(False)
-        self.commands_group.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #7f8c8d;
-                border-radius: 6px;
-                margin-top: 14px;
-                padding: 12px 8px 8px 8px;
-                background-color: #3a3a3a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: #7f8c8d;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QGroupBox::indicator {
-                width: 13px;
-                height: 13px;
-            }
-        """)
+        self.commands_group.setStyleSheet(self._get_group_style("#7f8c8d"))
         commands_layout = QVBoxLayout()
         commands_layout.setContentsMargins(4, 4, 4, 4)
 
@@ -959,11 +1161,7 @@ class CPCControlTab(QWidget):
         main_layout.addStretch()
 
         scroll_area.setWidget(content_widget)
-
-        # Set scroll area as main layout
-        outer_layout = QVBoxLayout(self)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
-        outer_layout.addWidget(scroll_area)
+        self.mode_stack.addWidget(scroll_area)
 
     def _toggle_commands(self, checked):
         """Toggle visibility of serial commands section."""

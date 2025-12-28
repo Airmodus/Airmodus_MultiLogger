@@ -113,6 +113,14 @@ def setup_cpc_connections(widget, device_config, connection, app):
     widget.pulse_quality.start_analysis.clicked.connect(
         lambda: app.data_logger.pulse_analysis_start(device_id, device_config))
 
+    # Simple mode toggle connections (same functionality as Advanced mode)
+    widget.control_tab.simple_drain.clicked.connect(
+        lambda: connection.send_message(":SET:DRN " + str(int(widget.control_tab.simple_drain.isChecked()))))
+    widget.control_tab.simple_autofill.clicked.connect(
+        lambda: connection.send_message(":SET:AFLL " + str(int(widget.control_tab.simple_autofill.isChecked()))))
+    widget.control_tab.simple_water_removal.clicked.connect(
+        lambda: connection.send_message(":SET:WREM " + str(int(widget.control_tab.simple_water_removal.isChecked()))))
+
 
 def setup_psm_connections(widget, device_config, connection, app):
     """Set up PSM-specific connections."""
@@ -182,7 +190,7 @@ def setup_psm_connections(widget, device_config, connection, app):
 
     # CO flow (PSM Retrofit only) - Save to extra_params and sync simple mode
     from config import PSM
-    if device_type == PSM:
+    if device_type == PSM and hasattr(widget.set_tab, 'set_co_flow'):
         def update_co_flow_value(value):
             device_config.extra_params.update({'co_flow': str(round(value, 3))})
             # Sync to simple mode display

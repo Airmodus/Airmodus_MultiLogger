@@ -1240,40 +1240,37 @@ class PSMControlTab(QWidget):
         main_layout.addWidget(temp_group)
 
         # === FLOW RATES GROUP (Simple) ===
-        # Match advanced mode layout: 3 columns (for PSM Retrofit CO flow)
+        # 2-column layout matching advanced mode
         flow_group = QGroupBox("💨 Flow Rates")
         flow_group.setStyleSheet(self._get_group_style("#3498db"))
         flow_layout = QGridLayout()
         flow_layout.setSpacing(4)
 
-        # Row 0: CPC inlet, CPC sample, CO flow (PSM Retrofit only)
+        # Row 0: CPC flows
         self.simple_cpc_inlet_flow = SimpleStatusWidget("CPC inlet", " lpm", is_temperature=False, error_name="Flow Error")
         flow_layout.addWidget(self.simple_cpc_inlet_flow, 0, 0)
         self.simple_cpc_sample_flow = SimpleStatusWidget("CPC sample", " lpm", is_temperature=False, error_name="Flow Error")
         flow_layout.addWidget(self.simple_cpc_sample_flow, 0, 1)
-        # CO flow for PSM Retrofit (hidden for PSM 2.0)
-        self.simple_co_flow = SimpleStatusWidget("CO flow", " lpm", is_temperature=False, error_name="Flow Error")
-        flow_layout.addWidget(self.simple_co_flow, 0, 2)
-        if self.is_psm2:
-            self.simple_co_flow.hide()
 
-        # Row 1: Saturator, Excess
+        # Row 1: Saturator and Excess
         self.simple_flow_saturator = SimpleStatusWidget("Saturator", " lpm", is_temperature=False, error_name="Flow Error")
         flow_layout.addWidget(self.simple_flow_saturator, 1, 0)
         self.simple_flow_excess = SimpleStatusWidget("Excess", " lpm", is_temperature=False, error_name="Flow Error")
         flow_layout.addWidget(self.simple_flow_excess, 1, 1)
 
-        # Row 2: Inlet, Vacuum (PSM 2.0 only)
+        # Row 2: Inlet + (CO flow for Retrofit / Vacuum for PSM 2.0)
         self.simple_flow_inlet = SimpleStatusWidget("Inlet", " lpm", is_temperature=False, error_name="Flow Error")
         flow_layout.addWidget(self.simple_flow_inlet, 2, 0)
         if self.is_psm2:
             self.simple_flow_vacuum = SimpleStatusWidget("Vacuum", " lpm", is_temperature=False, error_name="Vacuum Error")
             flow_layout.addWidget(self.simple_flow_vacuum, 2, 1)
+        else:
+            self.simple_co_flow = SimpleStatusWidget("CO flow", " lpm", is_temperature=False, error_name="Flow Error")
+            flow_layout.addWidget(self.simple_co_flow, 2, 1)
 
-        # Equal column stretch for consistent layout
+        # 2 columns with equal stretch
         flow_layout.setColumnStretch(0, 1)
         flow_layout.setColumnStretch(1, 1)
-        flow_layout.setColumnStretch(2, 1)
 
         flow_group.setLayout(flow_layout)
         main_layout.addWidget(flow_group)
@@ -1288,6 +1285,7 @@ class PSMControlTab(QWidget):
         controls_layout = QVBoxLayout()
         controls_layout.setSpacing(2)
         controls_layout.setContentsMargins(4, 4, 4, 4)
+        controls_layout.setAlignment(Qt.AlignTop)
 
         # Share toggle switches between modes
         self.simple_autofill = ToggleSwitch("Autofill", "Automatically refill saturator liquid when low")
@@ -1304,6 +1302,7 @@ class PSMControlTab(QWidget):
         pressure_layout = QVBoxLayout()
         pressure_layout.setSpacing(4)
         pressure_layout.setContentsMargins(4, 4, 4, 4)
+        pressure_layout.setAlignment(Qt.AlignTop)
 
         self.simple_pressure_inlet = SimpleStatusWidget("Inlet", " mbar", is_temperature=False, error_name="Pressure Error")
         pressure_layout.addWidget(self.simple_pressure_inlet)
@@ -1322,6 +1321,7 @@ class PSMControlTab(QWidget):
         liquid_layout = QVBoxLayout()
         liquid_layout.setSpacing(4)
         liquid_layout.setContentsMargins(4, 4, 4, 4)
+        liquid_layout.setAlignment(Qt.AlignTop)
 
         self.simple_liquid_saturator = SimpleStatusWidget("Saturator", "", is_temperature=False, error_name="Level LOW")
         liquid_layout.addWidget(self.simple_liquid_saturator)
@@ -1352,23 +1352,7 @@ class PSMControlTab(QWidget):
 
         # === TEMPERATURES GROUP ===
         temp_group = QGroupBox("🌡️ Temperatures")
-        temp_group.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #e67e22;
-                border-radius: 6px;
-                margin-top: 14px;
-                padding: 12px 8px 8px 8px;
-                background-color: #3a3a3a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: #e67e22;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
+        temp_group.setStyleSheet(self._get_group_style("#e67e22"))
         temp_layout = QGridLayout()
         temp_layout.setSpacing(4)
 
@@ -1404,27 +1388,11 @@ class PSMControlTab(QWidget):
 
         # === FLOW RATES GROUP ===
         flow_group = QGroupBox("💨 Flow Rates")
-        flow_group.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #3498db;
-                border-radius: 6px;
-                margin-top: 14px;
-                padding: 12px 8px 8px 8px;
-                background-color: #3a3a3a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: #3498db;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
+        flow_group.setStyleSheet(self._get_group_style("#3498db"))
         flow_layout = QGridLayout()
         flow_layout.setSpacing(4)
 
-        # Row 0: Setpoint flows
+        # Row 0: CPC flows
         self.set_cpc_inlet_flow = SetWidget("CPC inlet", " lpm", decimals=3)
         self.set_cpc_inlet_flow.setToolTip("CPC inlet flow - used in dilution correction")
         flow_layout.addWidget(self.set_cpc_inlet_flow, 0, 0)
@@ -1433,14 +1401,7 @@ class PSMControlTab(QWidget):
         self.set_cpc_sample_flow.setToolTip("CPC sample flow - used in concentration calculation")
         flow_layout.addWidget(self.set_cpc_sample_flow, 0, 1)
 
-        # CO flow rate widget - always created, visibility updated when firmware received
-        self.set_co_flow = SetWidget("CO flow", " lpm", decimals=3)
-        self.set_co_flow.setToolTip("Cut-off flow rate for PSM Retrofit")
-        flow_layout.addWidget(self.set_co_flow, 0, 2)
-        if self.is_psm2:
-            self.set_co_flow.hide()
-
-        # Row 1: Read-only flow indicators (first two)
+        # Row 1: Saturator and Excess
         self.flow_saturator = IndicatorWidget("Saturator")
         self.flow_saturator.setToolTip("Saturator flow - saturated air flow rate")
         flow_layout.addWidget(self.flow_saturator, 1, 0)
@@ -1448,7 +1409,7 @@ class PSMControlTab(QWidget):
         self.flow_excess.setToolTip("Excess flow - excess sample flow rate")
         flow_layout.addWidget(self.flow_excess, 1, 1)
 
-        # Row 2: Read-only flow indicators (inlet + vacuum for PSM 2.0)
+        # Row 2: Inlet + (CO flow for Retrofit / Vacuum for PSM 2.0)
         self.flow_inlet = IndicatorWidget("Inlet")
         self.flow_inlet.setToolTip("Inlet flow - total sample inlet flow rate")
         flow_layout.addWidget(self.flow_inlet, 2, 0)
@@ -1457,11 +1418,15 @@ class PSMControlTab(QWidget):
             self.flow_vacuum = IndicatorWidget("Vacuum")
             self.flow_vacuum.setToolTip("Vacuum flow - vacuum pump flow rate")
             flow_layout.addWidget(self.flow_vacuum, 2, 1)
+        else:
+            # CO flow rate widget for PSM Retrofit only
+            self.set_co_flow = SetWidget("CO flow", " lpm", decimals=3)
+            self.set_co_flow.setToolTip("Cut-off flow rate for PSM Retrofit")
+            flow_layout.addWidget(self.set_co_flow, 2, 1)
 
-        # Equal column stretch for consistent layout
+        # 2 columns with equal stretch
         flow_layout.setColumnStretch(0, 1)
         flow_layout.setColumnStretch(1, 1)
-        flow_layout.setColumnStretch(2, 1)
 
         flow_group.setLayout(flow_layout)
         main_layout.addWidget(flow_group)
@@ -1472,26 +1437,11 @@ class PSMControlTab(QWidget):
 
         # Liquid Controls (vertical stacked toggles)
         controls_group = QGroupBox("🎛️ Controls")
-        controls_group.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #27ae60;
-                border-radius: 6px;
-                margin-top: 14px;
-                padding: 12px 8px 8px 8px;
-                background-color: #3a3a3a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: #27ae60;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
+        controls_group.setStyleSheet(self._get_group_style("#27ae60"))
         controls_layout = QVBoxLayout()
         controls_layout.setSpacing(2)
         controls_layout.setContentsMargins(4, 4, 4, 4)
+        controls_layout.setAlignment(Qt.AlignTop)
 
         self.autofill = ToggleSwitch("Autofill", "Automatically refill saturator liquid when low (also enables drain)")
         controls_layout.addWidget(self.autofill)
@@ -1504,26 +1454,11 @@ class PSMControlTab(QWidget):
 
         # Pressures
         pressure_group = QGroupBox("📊 Pressures")
-        pressure_group.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #9b59b6;
-                border-radius: 6px;
-                margin-top: 14px;
-                padding: 12px 8px 8px 8px;
-                background-color: #3a3a3a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: #9b59b6;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
+        pressure_group.setStyleSheet(self._get_group_style("#9b59b6"))
         pressure_layout = QVBoxLayout()
         pressure_layout.setSpacing(4)
         pressure_layout.setContentsMargins(4, 4, 4, 4)
+        pressure_layout.setAlignment(Qt.AlignTop)
         self.pressure_inlet = IndicatorWidget("Inlet")
         self.pressure_inlet.setToolTip("Inlet pressure - sample inlet pressure")
         pressure_layout.addWidget(self.pressure_inlet)
@@ -1539,26 +1474,11 @@ class PSMControlTab(QWidget):
 
         # Liquid Levels
         liquid_level_group = QGroupBox("💧 Levels")
-        liquid_level_group.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #1abc9c;
-                border-radius: 6px;
-                margin-top: 14px;
-                padding: 12px 8px 8px 8px;
-                background-color: #3a3a3a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: #1abc9c;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
+        liquid_level_group.setStyleSheet(self._get_group_style("#1abc9c"))
         liquid_level_layout = QVBoxLayout()
         liquid_level_layout.setSpacing(4)
         liquid_level_layout.setContentsMargins(4, 4, 4, 4)
+        liquid_level_layout.setAlignment(Qt.AlignTop)
         self.liquid_saturator = IndicatorWidget("Saturator")
         self.liquid_saturator.setToolTip("Saturator liquid level - working fluid reservoir level")
         liquid_level_layout.addWidget(self.liquid_saturator)
@@ -1572,23 +1492,7 @@ class PSMControlTab(QWidget):
 
         # === SERIAL COMMANDS GROUP (Collapsible) ===
         self.commands_group = QGroupBox("📡 Serial Commands")
-        self.commands_group.setStyleSheet("""
-            QGroupBox {
-                border: 1px solid #7f8c8d;
-                border-radius: 6px;
-                margin-top: 14px;
-                padding: 12px 8px 8px 8px;
-                background-color: #3a3a3a;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: #7f8c8d;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
+        self.commands_group.setStyleSheet(self._get_group_style("#7f8c8d"))
         self.commands_group.setCheckable(True)
         self.commands_group.setChecked(False)
         commands_layout = QVBoxLayout()

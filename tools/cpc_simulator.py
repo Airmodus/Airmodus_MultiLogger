@@ -110,9 +110,38 @@ class CPCDataGenerator:
         return ",".join(values)
 
     def generate_syst_prnt(self):
-        """Generate :SYST:PRNT response (settings)."""
-        # mode, temp_sat_set, temp_opt_set, temp_con_set, autofill, drain_set, flow_set
-        values = ["1", "35.0", "40.0", "10.0", "1", "0", "1.0"]
+        """Generate :SYST:PRNT response (settings).
+
+        Format (13 values):
+        0: mode
+        1: autofill
+        2: drain
+        3: flow_adjustment
+        4: water_removal
+        5: averaging_time
+        6: condenser_temp setpoint
+        7: optics_temp setpoint
+        8: saturator_temp setpoint
+        9: unused
+        10: measured_cpc_flow
+        11: unused
+        12: dead_time_correction
+        """
+        values = [
+            "1",      # 0: mode
+            "1",      # 1: autofill (on)
+            "0",      # 2: drain (off)
+            "1.0",    # 3: flow_adjustment
+            "0",      # 4: water_removal (off)
+            "1.0",    # 5: averaging_time
+            "30.50",  # 6: condenser_temp setpoint (matches POUT factory value)
+            "40.0",   # 7: optics_temp setpoint
+            "39.00",  # 8: saturator_temp setpoint (matches POUT factory value)
+            "0",      # 9: unused
+            "1.0",    # 10: measured_cpc_flow
+            "0",      # 11: unused
+            "0.02",   # 12: dead_time_correction
+        ]
         return ",".join(values)
 
     def generate_syst_pall(self):
@@ -120,6 +149,25 @@ class CPCDataGenerator:
         # Extended parameters - simplified simulation
         values = [str(i) for i in range(28)]
         values[0] = "1"  # mode
+        return ",".join(values)
+
+    def generate_syst_pout(self):
+        """Generate :SYST:POUT response (factory calibration values)."""
+        # Factory calibration format:
+        # indices 0-5: limits/config, 6: saturator_temp, 7: condenser_temp, 8-9: coefficients, 10: unknown
+        values = [
+            "20",      # 0: unknown
+            "130",     # 1: max temp limit
+            "-1",      # 2: min temp limit
+            "45",      # 3: max temp limit
+            "-2",      # 4: min temp limit
+            "5",       # 5: unknown
+            "39.00",   # 6: factory saturator temp
+            "30.50",   # 7: factory condenser temp
+            "0.15049", # 8: calibration coefficient
+            "5.21817", # 9: calibration coefficient
+            "0"        # 10: unknown
+        ]
         return ",".join(values)
 
     def drift(self):
@@ -295,6 +343,9 @@ class CPCSimulator:
         elif ':SYST:PALL' in cmd_upper:
             data = self.data_generator.generate_syst_pall()
             response = f":SYST:PALL {data}"
+        elif ':SYST:POUT' in cmd_upper:
+            data = self.data_generator.generate_syst_pout()
+            response = f":SYST:POUT {data}"
         elif ':MEAS:OPC_CONC_LOG' in cmd_upper:
             # 10Hz logging data - just return a simple response
             response = ":MEAS:OPC_CONC_LOG 1000,1100,1050,1020,1080,1030,1060,1090,1040,1070"
