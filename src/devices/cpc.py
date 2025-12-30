@@ -301,22 +301,19 @@ class CPCWidget(ComplexDevice):
         self.status_tab.liquid_level.change_value(level_text)
         self.control_tab.simple_liquid_level.change_value(level_text)
 
-        # update laser power (both modes) - uses laser current value
+        # update laser power (both modes) - uses laser current value from index 12
         laser_current = current_list[12] if len(current_list) > 12 else None
-        if laser_current is not None:
+        if laser_current is not None and not isnan(laser_current):
             laser_text = f"{laser_current:.2f} mA"
         else:
             laser_text = "---"
         self.status_tab.laser_power.change_value(laser_text)
         self.control_tab.simple_laser_power.change_value(laser_text)
 
-        # update pulse quality (both modes) - uses pulse_ratio from current_data
-        if hasattr(self, 'current_data') and self.current_data:
-            pulse_ratio = getattr(self.current_data, 'pulse_ratio', None)
-            if pulse_ratio is not None and str(pulse_ratio) != 'nan':
-                pulse_text = f"{pulse_ratio:.2f} %"
-            else:
-                pulse_text = "---"
+        # update pulse quality (both modes) - uses pulse_ratio from index 13
+        pulse_ratio = current_list[13] if len(current_list) > 13 else None
+        if pulse_ratio is not None and not isnan(pulse_ratio):
+            pulse_text = f"{pulse_ratio:.2f} %"
         else:
             pulse_text = "---"
         self.status_tab.pulse_quality.change_value(pulse_text)

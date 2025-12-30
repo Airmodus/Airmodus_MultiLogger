@@ -57,7 +57,8 @@ class CPCData:
             self.pres_nozzle,
             self.pres_cabin,
             self.liquid_level,
-            self.pulse_ratio,
+            self.laser_current,       # [12] - laser current for laser power display
+            self.pulse_ratio,         # [13] - pulse ratio for pulse quality display
             self.total_errors,
             self.status_hex
         ]

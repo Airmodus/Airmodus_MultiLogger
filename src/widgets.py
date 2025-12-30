@@ -1718,7 +1718,97 @@ class BrowserStyleTabBar(QWidget):
         event.accept()
 
 
+class UpdateBanner(QWidget):
+    """
+    A slim, dismissible banner that appears at the top of the window
+    when an update is ready to install.
+
+    Signals:
+        clicked: Emitted when user clicks the banner (wants to restart)
+        dismissed: Emitted when user clicks the X button
+    """
+
+    clicked = pyqtSignal()
+    dismissed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.version_info = None
+        self._setup_ui()
+
+    def _setup_ui(self):
+        """Build the banner UI."""
+        self.setFixedHeight(32)
+        self.setCursor(QCursor(Qt.PointingHandCursor))
+
+        # Main layout
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 0, 8, 0)
+        layout.setSpacing(8)
+
+        # Update icon/text
+        self.label = QLabel("Update ready - Click to restart")
+        self.label.setStyleSheet("color: white; font-weight: 500;")
+        layout.addWidget(self.label, stretch=1)
+
+        # Dismiss button
+        self.dismiss_btn = QToolButton()
+        self.dismiss_btn.setText("\u2715")  # X symbol
+        self.dismiss_btn.setFixedSize(20, 20)
+        self.dismiss_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.dismiss_btn.setStyleSheet("""
+            QToolButton {
+                color: white;
+                background: transparent;
+                border: none;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QToolButton:hover {
+                background: rgba(255, 255, 255, 0.2);
+                border-radius: 10px;
+            }
+        """)
+        self.dismiss_btn.clicked.connect(self._on_dismiss)
+        layout.addWidget(self.dismiss_btn)
+
+        # Banner style - blue for "update available" notification
+        self.setStyleSheet("""
+            UpdateBanner {
+                background-color: #2196F3;
+                border-bottom: 1px solid #1976D2;
+            }
+        """)
+
+    def show_update_available(self, version_info: dict):
+        """Show banner when update is available (for manual download)."""
+        self.version_info = version_info
+        new_version = version_info.get('latest_version', 'Unknown')
+        self.label.setText(f"Update available: v{new_version} - Click to download")
+        self.show()
+
+    def show_update_ready(self, version_info: dict):
+        """Show the banner when update is downloaded and ready to install (future use)."""
+        self.version_info = version_info
+        new_version = version_info.get('latest_version', 'Unknown')
+        self.label.setText(f"Update ready: v{new_version} - Click to restart")
+        self.show()
+
+    def mousePressEvent(self, event):
+        """Handle click on banner (but not on dismiss button)."""
+        # Check if click was on dismiss button
+        if self.dismiss_btn.geometry().contains(event.pos()):
+            return  # Let the button handle it
+
+        self.clicked.emit()
+
+    def _on_dismiss(self):
+        """Handle dismiss button click."""
+        self.hide()
+        self.dismissed.emit()
+
+
 __all__ = [
     'SetWidget', 'SetStatusWidget', 'SpinBox', 'DoubleSpinBox', 'ToggleButton', 'ToggleSwitch', 'StartButton', 'IndicatorWidget',
-    'CommandWidget', 'FloatTextEdit', 'StepsWidget', 'TabConfirmationPopup', 'BrowserStyleTabBar'
+    'CommandWidget', 'FloatTextEdit', 'StepsWidget', 'TabConfirmationPopup', 'BrowserStyleTabBar', 'UpdateBanner'
 ]

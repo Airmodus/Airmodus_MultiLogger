@@ -10,7 +10,7 @@ from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QSize
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QLabel,
     QFileDialog, QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QTabBar, QStackedWidget, QStyle, QLayout, QSizePolicy)
 from PyQt5.QtGui import QCursor
-from widgets import TabConfirmationPopup, BrowserStyleTabBar
+from widgets import TabConfirmationPopup, BrowserStyleTabBar, UpdateBanner
 
 from config import *
 from utils import (
@@ -130,6 +130,12 @@ class MainWindow(QMainWindow):
         # Set minimum width to prevent window from becoming too narrow
         self.setMinimumWidth(1000)
 
+        # Initialize update manager for automatic updates
+        from managers.update_manager import UpdateManager
+        self.update_manager = UpdateManager(self)
+        self._setup_update_signals()
+        self.update_manager.start()
+
     def _setup_gui(self):
         """Build main layout, splitters, tabs, etc."""
         # Load CSS style and apply it to the main window
@@ -144,6 +150,11 @@ class MainWindow(QMainWindow):
         container_layout.setSizeConstraint(QLayout.SetNoConstraint)
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(0)
+
+        # Update banner (hidden by default, shown when update available)
+        self.update_banner = UpdateBanner()
+        self.update_banner.hide()
+        container_layout.addWidget(self.update_banner)
 
         # create horizontal top bar: [Logo] [Plus] [Tab Bar] [Gear]
         top_bar_widget = QWidget()
@@ -1316,9 +1327,61 @@ class MainWindow(QMainWindow):
         if tab_index >= 0:
             self.device_tab_bar.setTabText(tab_index, device_name)
 
+    # ==================== Update Manager ====================
+
+    def _setup_update_signals(self):
+        """Connect update manager signals to UI handlers."""
+        # UpdateManager signals
+        self.update_manager.update_available.connect(self._on_update_available)
+        # Note: update_ready not connected - auto-download disabled until code signing is added
+        self.update_manager.error.connect(self._on_update_error)
+
+        # Banner signals
+        self.update_banner.clicked.connect(self._on_banner_clicked)
+        self.update_banner.dismissed.connect(self._on_banner_dismissed)
+
+    def _on_update_available(self, version_info: dict):
+        """New version found - show banner (no auto-download)."""
+        self._pending_version_info = version_info
+        # Show banner immediately - user will download from GitHub
+        self.update_banner.show_update_available(version_info)
+
+    def _on_banner_clicked(self):
+        """User clicked banner - open GitHub releases in browser."""
+        import webbrowser
+        if hasattr(self, '_pending_version_info') and self._pending_version_info:
+            # Use changelog_url from version.json, fallback to download_url
+            url = self._pending_version_info.get('changelog_url') or \
+                  self._pending_version_info.get('download_url', '')
+            if url:
+                webbrowser.open(url)
+                self.update_banner.hide()
+
+    def _on_banner_dismissed(self):
+        """User dismissed the banner - defer update for this session."""
+        self.update_manager.defer_update()
+
+    def _on_update_error(self, error_msg: str):
+        """Handle update error."""
+        logging.error(f"Update error: {error_msg}")
+        # Only show error to user if it's an install-related error (user-initiated action)
+        if "Cannot self-update" in error_msg or "Auto-update is only supported" in error_msg or "No update file" in error_msg:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Update Error", error_msg)
+
+    # ==================== Close Event ====================
+
     def closeEvent(self, event):
         """Handle application close event - cleanup all resources."""
         logging.info("Application closing, cleaning up resources...")
+
+        # Stop update manager
+        if hasattr(self, 'update_manager'):
+            try:
+                self.update_manager.stop()
+                logging.info("Update manager stopped")
+            except Exception as e:
+                logging.error(f"Error stopping update manager: {e}")
 
         # Stop timer service first (stops data acquisition loop)
         if hasattr(self, 'timer_service'):
