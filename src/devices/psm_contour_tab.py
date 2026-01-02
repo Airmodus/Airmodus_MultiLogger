@@ -347,7 +347,6 @@ class PSMContourTab(QWidget):
         self.time_window_hours = 24  # Default: 24 hours (options: 1, 6, 12, 24, 48)
         self.current_colormap = 'CET-R4'  # Default colormap
         self.crosshair_enabled = True  # Show crosshair by default
-        self.contour_10hz_enabled = False  # 10Hz contour mode disabled by default (experimental)
 
         # Custom time axis for contour plot
         self.time_axis = None
@@ -1607,16 +1606,11 @@ class PSMContourTab(QWidget):
             if hasattr(self, 'value_label'):
                 self.value_label.hide()
 
-    def _toggle_10hz_contour(self, enabled):
-        """Toggle 10Hz contour mode."""
-        self.contour_10hz_enabled = enabled
-        self._save_contour_settings()
-
     def _get_10hz_enabled(self) -> bool:
         """Get current 10Hz logging state from device config."""
         if hasattr(self, 'device_config') and self.device_config:
-            return bool(self.device_config.extra_params.get('10_hz', False))
-        return False
+            return bool(self.device_config.extra_params.get('10_hz', True))  # Default to True
+        return True  # Default to True when possible
 
     def _toggle_10hz_logging(self, enabled: bool):
         """Toggle 10Hz logging mode and save to config."""
@@ -1643,7 +1637,6 @@ class PSMContourTab(QWidget):
             self.time_window_hours = extra.get('contour_time_window', 24)
             self.current_colormap = extra.get('contour_colormap', 'CET-R4')
             self.crosshair_enabled = extra.get('contour_crosshair', True)
-            self.contour_10hz_enabled = extra.get('contour_10hz_enabled', False)
             self.cpc_transit_delay = extra.get('cpc_transit_delay', DEFAULT_CPC_TRANSIT_DELAY)
             self.bin_preset = extra.get('contour_bin_preset', '6')
             self.custom_bin_limits = extra.get('contour_custom_bins', None)
@@ -1662,7 +1655,6 @@ class PSMContourTab(QWidget):
             self.device_config.extra_params['contour_time_window'] = self.time_window_hours
             self.device_config.extra_params['contour_colormap'] = self.current_colormap
             self.device_config.extra_params['contour_crosshair'] = self.crosshair_enabled
-            self.device_config.extra_params['contour_10hz_enabled'] = self.contour_10hz_enabled
             self.device_config.extra_params['cpc_transit_delay'] = self.cpc_transit_delay
             self.device_config.extra_params['contour_bin_preset'] = self.bin_preset
             self.device_config.extra_params['contour_custom_bins'] = self.custom_bin_limits
@@ -2367,8 +2359,8 @@ class PSMContourTab(QWidget):
         if data_holder is None:
             return False
 
-        # Check if 10Hz logging is enabled in PSM config
-        if not self.device_config.extra_params.get('10_hz', False):
+        # Check if 10Hz logging is enabled in PSM config (default to True)
+        if not self.device_config.extra_params.get('10_hz', True):
             return False
 
         # Get connected CPC ID
@@ -3282,19 +3274,33 @@ class PSMContourTab(QWidget):
             data_matrix = np.full((num_bins, n_time_bins), np.nan)
 
             # Place each scan at its time position within the time window
-            for ts, scan in scans_in_range:
+            # Fill forward to the next scan to avoid gaps between scans
+            sorted_scans = sorted(scans_in_range, key=lambda x: x[0])
+            for i, (ts, scan) in enumerate(sorted_scans):
                 # Calculate seconds since window start
                 seconds_since_start = (ts - time_window_ago).total_seconds()
-                time_idx = int(seconds_since_start / time_bin_size_seconds)
-                time_idx = max(0, min(time_idx, n_time_bins - 1))  # Clamp to valid range
+                time_idx_start = int(seconds_since_start / time_bin_size_seconds)
+                time_idx_start = max(0, min(time_idx_start, n_time_bins - 1))
+
+                # Determine end index: fill until next scan or current time
+                if i + 1 < len(sorted_scans):
+                    next_ts = sorted_scans[i + 1][0]
+                    seconds_to_next = (next_ts - time_window_ago).total_seconds()
+                    time_idx_end = int(seconds_to_next / time_bin_size_seconds)
+                else:
+                    # Last scan: fill to current time
+                    seconds_to_now = (now - time_window_ago).total_seconds()
+                    time_idx_end = int(seconds_to_now / time_bin_size_seconds) + 1
+                time_idx_end = max(0, min(time_idx_end, n_time_bins))
 
                 dN_dlogDp = scan['dN_dlogDp']
                 if len(dN_dlogDp) == num_bins:
-                    # If multiple scans fall in same bin, average them
-                    if np.isnan(data_matrix[0, time_idx]):
-                        data_matrix[:, time_idx] = dN_dlogDp
-                    else:
-                        data_matrix[:, time_idx] = (data_matrix[:, time_idx] + dN_dlogDp) / 2
+                    # Fill all bins from this scan to the next
+                    for time_idx in range(time_idx_start, time_idx_end):
+                        if np.isnan(data_matrix[0, time_idx]):
+                            data_matrix[:, time_idx] = dN_dlogDp
+                        else:
+                            data_matrix[:, time_idx] = (data_matrix[:, time_idx] + dN_dlogDp) / 2
 
             # Apply averaging if enabled
             if self.averaging_enabled and self.avg_n > 1:
