@@ -3487,15 +3487,21 @@ class PSMContourTab(QWidget):
             # Try to load from CSV
             csv_scans, bins_match = self._load_from_inversion_csv(csv_files)
             if bins_match and csv_scans:
-                # Successfully loaded from CSV - check for time gaps
-                csv_times = set(s['time'] for s in csv_scans)
-                self.scan_buffer = csv_scans
-                # Continue to load .dat files for any gaps (csv_times passed to filter)
-                logging.info(f"Loaded {len(csv_scans)} scans from inversion CSV files")
-                # For now, if CSV loaded successfully, finish here
-                # (gap-filling can be added later if needed)
-                self._finish_csv_loading()
-                return
+                # Check if any scans are within the time window
+                now = pd.Timestamp.now()
+                time_window_ago = now - pd.Timedelta(hours=self.time_window_hours)
+                scans_in_window = [s for s in csv_scans if pd.Timestamp(s['time']) >= time_window_ago]
+
+                if scans_in_window:
+                    # Successfully loaded from CSV with scans in time window
+                    self.scan_buffer = csv_scans
+                    logging.info(f"Loaded {len(csv_scans)} scans from inversion CSV files ({len(scans_in_window)} in time window)")
+                    self._finish_csv_loading()
+                    return
+                else:
+                    # CSV scans exist but all outside time window - fall back to .dat loading
+                    logging.info(f"CSV has {len(csv_scans)} scans but none within {self.time_window_hours}h window, loading from .dat files")
+                    self.scan_buffer = []
             else:
                 # Bin mismatch or parse error - fall back to .dat loading
                 logging.info("CSV bin structure doesn't match current calibration, loading from .dat files")
