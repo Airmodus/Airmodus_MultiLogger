@@ -21,7 +21,7 @@ from PyQt5.QtCore import Qt, QPoint, QTimer, QPropertyAnimation, QEasingCurve, Q
 from PyQt5.QtGui import QIcon, QIntValidator, QRegExpValidator
 import pyqtgraph as pg
 from scipy.interpolate import interp1d
-from dat_file_reader import load_historical_scans, get_scan_time_range
+from dat_file_reader import load_historical_scans, get_scan_time_range, find_inversion_csv_files, load_scans_from_inversion_csv
 
 
 # PSM 2.0 bin presets (inner limits only - min/max added from calibration)
@@ -300,6 +300,10 @@ class PSMContourTab(QWidget):
         self.bin_centers_dp = None  # Diameter bin centers (6 values)
         self.bin_limits_flow = None  # Saturator flow bin edges (7 values)
         self.detection_efficiency = None  # Detection efficiency interpolator
+        self.calibration_filename = None  # Basename of loaded calibration file (for saving)
+
+        # Callback for auto-saving inversion scans (set by PSMWidget)
+        self.on_inversion_scan_complete = None
 
         # Bin configuration (from settings)
         self.bin_preset = '6'  # Default: 6 bins (matches original hardcoded default)
@@ -1745,7 +1749,7 @@ class PSMContourTab(QWidget):
             self,
             'Select Calibration File',
             '',
-            'All Files (*.*);;Text Files (*.txt);;TSV Files (*.tsv)'
+            'Text Files (*.txt);;TSV Files (*.tsv);;All Files (*.*)'
         )
         if file_path:
             self._load_calibration(file_path)
@@ -1865,6 +1869,9 @@ class PSMContourTab(QWidget):
 
             # Mark calibration as loaded
             self.calibration_loaded = True
+
+            # Store calibration filename for inversion save metadata
+            self.calibration_filename = os.path.basename(file_path)
 
             # Switch to plot view
             self.prompt_widget.hide()
@@ -2432,26 +2439,39 @@ class PSMContourTab(QWidget):
             self._update_contour_1hz(current_data)
 
     def _update_contour_1hz(self, current_data):
-        """Handle 1Hz data collection for contour plot (original behavior)."""
-        # Normalize scan status
+        """Handle 1Hz data collection for contour plot."""
         scan_status_raw = str(current_data.scan_status).strip()
         try:
             scan_status = str(int(float(scan_status_raw)))
         except (ValueError, TypeError):
             scan_status = scan_status_raw
 
-        # Skip status 4 (don't log)
+        current_conc = current_data.concentration_psm
+
+        # Collect trailing data for pending scan (runs even during status 4)
+        if self._pending_scan is not None and self._trailing_start_time is not None:
+            if not np.isnan(current_conc):
+                self._trailing_buffer.append(current_conc)
+
+            trailing_duration = (pd.Timestamp.now() - self._trailing_start_time).total_seconds()
+            required_trailing_points = int(self.cpc_transit_delay + 0.5)
+
+            if len(self._trailing_buffer) >= required_trailing_points or trailing_duration >= self.cpc_transit_delay + 1:
+                self._finalize_pending_scan_with_trailing()
+
         if scan_status == "4":
             self._prev_scan_status = scan_status
             return
 
-        # Detect scan start transitions
-        # UP scan starts when transitioning TO status "1"
+        # UP scan starts when transitioning to status "1"
         if scan_status == "1" and self._prev_scan_status != "1":
-            # Finalize previous scan if exists
-            if self._current_scan is not None:
-                self._finalize_scan()
-            # Start new UP scan
+            if self._current_scan is not None and len(self._current_scan['times']) >= 3:
+                self._pending_scan = self._current_scan
+                self._trailing_buffer = [current_conc] if not np.isnan(current_conc) else []
+                self._trailing_start_time = pd.Timestamp.now()
+            elif self._current_scan is not None:
+                self._current_scan = None
+
             self._current_scan = {
                 'times': [],
                 'satflows': [],
@@ -2460,12 +2480,15 @@ class PSMContourTab(QWidget):
                 'is_10hz': False
             }
 
-        # DOWN scan starts when transitioning TO status "3"
+        # DOWN scan starts when transitioning to status "3"
         elif scan_status == "3" and self._prev_scan_status != "3":
-            # Finalize previous scan if exists
-            if self._current_scan is not None:
-                self._finalize_scan()
-            # Start new DOWN scan
+            if self._current_scan is not None and len(self._current_scan['times']) >= 3:
+                self._pending_scan = self._current_scan
+                self._trailing_buffer = [current_conc] if not np.isnan(current_conc) else []
+                self._trailing_start_time = pd.Timestamp.now()
+            elif self._current_scan is not None:
+                self._current_scan = None
+
             self._current_scan = {
                 'times': [],
                 'satflows': [],
@@ -2477,24 +2500,18 @@ class PSMContourTab(QWidget):
         # Accumulate data during scan
         if self._current_scan is not None:
             include_point = False
-            # UP scan: include status 1 and 2 (top wait)
             if self._current_scan['type'] == 'up' and scan_status in ["1", "2"]:
                 include_point = True
-            # DOWN scan: include status 3 and 0 (bottom wait)
             elif self._current_scan['type'] == 'down' and scan_status in ["3", "0"]:
                 include_point = True
 
             if include_point:
-                # Only add data if dilution-corrected concentration is available
-                if not np.isnan(current_data.saturator_flow) and not np.isnan(current_data.concentration_psm):
+                if not np.isnan(current_data.saturator_flow) and not np.isnan(current_conc):
                     self._current_scan['times'].append(pd.Timestamp.now())
                     self._current_scan['satflows'].append(current_data.saturator_flow)
-                    self._current_scan['concentrations'].append(current_data.concentration_psm)
+                    self._current_scan['concentrations'].append(current_conc)
 
-        # Update scan progress UI
         self._update_scan_progress(scan_status, current_data.saturator_flow)
-
-        # Update previous status
         self._prev_scan_status = scan_status
 
     def _update_contour_10hz(self, current_data, data_holder):
@@ -2672,8 +2689,12 @@ class PSMContourTab(QWidget):
             concentrations = np.array(self._pending_scan['concentrations'])
             is_10hz = self._pending_scan.get('is_10hz', False)
 
-            # Get required trailing points (10Hz = 10 points per second)
-            required_trailing = int(self.cpc_transit_delay * 10)
+            # Get required trailing points (10Hz = 10 points/sec, 1Hz = 1 point/sec)
+            # Use int(x + 0.5) for proper rounding (Python's round() uses banker's rounding)
+            if is_10hz:
+                required_trailing = int(self.cpc_transit_delay * 10)
+            else:
+                required_trailing = int(self.cpc_transit_delay + 0.5)
             trailing_concs = self._trailing_buffer[:required_trailing] if len(self._trailing_buffer) >= required_trailing else self._trailing_buffer
 
             # Bin and invert with trailing data
@@ -2688,6 +2709,16 @@ class PSMContourTab(QWidget):
             }
 
             self.scan_buffer.append(scan_result)
+
+            # Notify parent for auto-save (if callback is set and calibration loaded)
+            if self.on_inversion_scan_complete and self.calibration_loaded:
+                save_data = {
+                    'timestamp': scan_result['time'],
+                    'dN_dlogDp': scan_result['dN_dlogDp'],
+                    'bin_limits': self.bin_limits_dp.copy(),
+                    'calibration_filename': self.calibration_filename or 'unknown',
+                }
+                self.on_inversion_scan_complete(save_data)
 
             # Update scan counter with flash effect
             self._update_scan_counter_with_flash()
@@ -2790,6 +2821,16 @@ class PSMContourTab(QWidget):
             }
 
             self.scan_buffer.append(scan_result)
+
+            # Notify parent for auto-save (if callback is set and calibration loaded)
+            if self.on_inversion_scan_complete and self.calibration_loaded:
+                save_data = {
+                    'timestamp': scan_result['time'],
+                    'dN_dlogDp': scan_result['dN_dlogDp'],
+                    'bin_limits': self.bin_limits_dp.copy(),
+                    'calibration_filename': self.calibration_filename or 'unknown',
+                }
+                self.on_inversion_scan_complete(save_data)
 
             # Update scan counter with flash effect
             self._update_scan_counter_with_flash()
@@ -3429,6 +3470,31 @@ class PSMContourTab(QWidget):
         self.scan_buffer = []
         self._pending_scans = []  # Collect scans for batch processing
 
+        # Check for existing inversion CSV files first (fast path - no re-inversion needed)
+        csv_files = find_inversion_csv_files(
+            file_path,
+            serial_number=serial_number,
+            hours=self.time_window_hours
+        )
+
+        if csv_files and self.bin_limits_dp is not None:
+            # Try to load from CSV
+            csv_scans, bins_match = self._load_from_inversion_csv(csv_files)
+            if bins_match and csv_scans:
+                # Successfully loaded from CSV - check for time gaps
+                csv_times = set(s['time'] for s in csv_scans)
+                self.scan_buffer = csv_scans
+                # Continue to load .dat files for any gaps (csv_times passed to filter)
+                logging.info(f"Loaded {len(csv_scans)} scans from inversion CSV files")
+                # For now, if CSV loaded successfully, finish here
+                # (gap-filling can be added later if needed)
+                self._finish_csv_loading()
+                return
+            else:
+                # Bin mismatch or parse error - fall back to .dat loading
+                logging.info("CSV bin structure doesn't match current calibration, loading from .dat files")
+                self.scan_buffer = []
+
         # Get connected CPC serial number for 10Hz data lookup
         connected_cpc_serial = None
         cpc_id = self.device_config.extra_params.get('connected_cpc', 'None')
@@ -3567,6 +3633,67 @@ class PSMContourTab(QWidget):
         if hasattr(self, 'scan_progress_bar'):
             self.scan_progress_bar.setValue(0)
 
+    def _load_from_inversion_csv(self, csv_files: list):
+        """
+        Load scans from pre-inverted CSV files.
+
+        Args:
+            csv_files: List of paths to _dNdlogDp.csv files
+
+        Returns:
+            Tuple of (scans_list, bins_match):
+            - scans_list: List of scan dicts, or empty list if error
+            - bins_match: True if all CSV bins matched current calibration
+        """
+        all_scans = []
+        bins_match = True
+
+        for csv_path in csv_files:
+            scans, match = load_scans_from_inversion_csv(
+                csv_path,
+                expected_bin_limits=self.bin_limits_dp
+            )
+            if not match:
+                # Bin mismatch - abort and fall back to .dat loading
+                return [], False
+            if scans:
+                all_scans.extend(scans)
+
+        # Sort by time
+        all_scans.sort(key=lambda s: s['time'])
+
+        return all_scans, bins_match
+
+    def _finish_csv_loading(self):
+        """
+        Finish up after loading from inversion CSV files.
+        Updates UI and renders the contour plot.
+        """
+        # Update scan counter
+        if hasattr(self, 'scan_counter_label'):
+            self.scan_counter_label.setText(f"Scans: {len(self.scan_buffer)}")
+
+        # Render contour with loaded data
+        self._render_contour()
+
+        self._historical_data_loaded = True
+        self._history_ever_loaded = True
+
+        # Store info for settings menu
+        self._loaded_files_info = f"{len(self.scan_buffer)} scans from CSV"
+
+        # Hide top bar button after first successful load
+        if hasattr(self, 'load_history_btn'):
+            self.load_history_btn.hide()
+
+        # Clean up loading state
+        self._loading_in_progress = False
+        self._hide_loading_overlay()
+        self.load_history_btn.setEnabled(True)
+        self.load_history_btn.setText("Load History")
+        if hasattr(self, 'scan_progress_bar'):
+            self.scan_progress_bar.setValue(0)
+
     def _cancel_loading(self):
         """Cancel the historical data loading."""
         if self._loader_thread is not None and self._loader_thread.isRunning():
@@ -3634,3 +3761,14 @@ class PSMContourTab(QWidget):
         }
 
         self.scan_buffer.append(scan_result)
+
+        # Trigger save callback for historical scans (same as live scans)
+        # This saves historical inversions to CSV for faster future loading
+        if self.on_inversion_scan_complete and self.calibration_loaded:
+            save_data = {
+                'timestamp': scan_result['time'],
+                'dN_dlogDp': scan_result['dN_dlogDp'],
+                'bin_limits': self.bin_limits_dp.copy(),
+                'calibration_filename': self.calibration_filename or 'unknown',
+            }
+            self.on_inversion_scan_complete(save_data)

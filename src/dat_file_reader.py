@@ -802,3 +802,186 @@ def get_scan_time_range(scans: List[Dict[str, np.ndarray]]) -> Tuple[Optional[pd
         return None, None
 
     return min(all_times), max(all_times)
+
+
+# ============================================================================
+# Inversion CSV File Functions
+# ============================================================================
+
+def find_inversion_csv_files(file_path: str, serial_number: str = None,
+                              hours: int = 24) -> List[str]:
+    """
+    Find existing _dNdlogDp.csv files (pre-inverted scan data) in directory.
+
+    Args:
+        file_path: Directory where CSV files are saved
+        serial_number: Optional serial number to filter by
+        hours: Number of hours to look back (default 24)
+
+    Returns:
+        List of paths to matching CSV files, sorted chronologically by filename
+    """
+    from datetime import timedelta
+
+    if not file_path or not os.path.isdir(file_path):
+        return []
+
+    # Get dates to search based on hours parameter
+    now = datetime.now()
+    cutoff_time = now - timedelta(hours=hours)
+    dates_to_search = set()
+
+    # Calculate how many days back we need to search
+    days_back = (hours // 24) + 1
+    for i in range(days_back + 1):
+        date_str = (now - timedelta(days=i)).strftime("%Y%m%d")
+        dates_to_search.add(date_str)
+
+    # Search for *_dNdlogDp.csv files
+    all_matching_files = []
+
+    for date_str in dates_to_search:
+        # Pattern: YYYYMMDD_*_dNdlogDp.csv
+        if serial_number:
+            pattern = os.path.join(file_path, f"{date_str}_*{serial_number}*_dNdlogDp.csv")
+        else:
+            pattern = os.path.join(file_path, f"{date_str}_*_dNdlogDp.csv")
+        all_matching_files.extend(glob.glob(pattern))
+
+    # Filter by time: parse timestamp from filename and check against cutoff
+    valid_files = []
+    for filepath in all_matching_files:
+        filename = os.path.basename(filepath)
+        # Extract timestamp from filename: YYYYMMDD_HHMMSS_...
+        try:
+            timestamp_str = filename[:15]  # "YYYYMMDD_HHMMSS"
+            file_time = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+            if file_time >= cutoff_time:
+                valid_files.append(filepath)
+        except (ValueError, IndexError):
+            # If can't parse timestamp, include the file anyway
+            valid_files.append(filepath)
+
+    # Sort by filename (chronological)
+    return sorted(valid_files)
+
+
+def load_scans_from_inversion_csv(csv_path: str, expected_bin_limits: np.ndarray = None) -> Tuple[Optional[List[Dict]], bool]:
+    """
+    Load pre-inverted scans from _dNdlogDp.csv file.
+
+    Args:
+        csv_path: Path to the CSV file
+        expected_bin_limits: Current calibration bin limits for validation.
+                            If provided, validates CSV bins match.
+
+    Returns:
+        Tuple of (scans_list, bin_limits_match):
+        - scans_list: List of scan dicts with 'time', 'bin_centers', 'dN_dlogDp', 'source_file'
+                     Returns None if bin mismatch or parse error
+        - bin_limits_match: True if CSV bins match expected (or no expected provided),
+                           False if mismatch
+    """
+    import re
+
+    try:
+        with open(csv_path, 'r', encoding='UTF-8') as f:
+            lines = f.readlines()
+
+        if len(lines) < 3:
+            logging.warning(f"Inversion CSV too short: {csv_path}")
+            return None, False
+
+        # Row 1: Metadata - "Software version: X.X.X ; Calibration file: name.txt"
+        # (optional parsing, not used currently)
+
+        # Row 2: Column headers
+        header_line = lines[1].strip()
+        columns = header_line.split(',')
+
+        # Parse bin limits from column headers: "Bin X-Y nm"
+        bin_pattern = re.compile(r'Bin\s+([\d.]+)-([\d.]+)\s*nm')
+        bin_limits = []
+        bin_columns_start = 1  # Skip "Scan start time"
+        bin_columns_end = len(columns)
+
+        # Find where bin columns end (before "Dp >X nm..." column)
+        for i, col in enumerate(columns):
+            if col.startswith('Dp >'):
+                bin_columns_end = i
+                break
+
+        # Extract bin limits from headers
+        for i in range(bin_columns_start, bin_columns_end):
+            match = bin_pattern.match(columns[i].strip())
+            if match:
+                lower = float(match.group(1))
+                upper = float(match.group(2))
+                if not bin_limits:
+                    bin_limits.append(lower)
+                bin_limits.append(upper)
+
+        if not bin_limits:
+            logging.warning(f"Could not parse bin limits from CSV header: {csv_path}")
+            return None, False
+
+        bin_limits = np.array(bin_limits)
+        num_bins = len(bin_limits) - 1
+
+        # Validate against expected bin limits if provided
+        if expected_bin_limits is not None:
+            if len(bin_limits) != len(expected_bin_limits):
+                logging.info(f"CSV bin count mismatch: {len(bin_limits)} vs {len(expected_bin_limits)}")
+                return None, False
+            # Check if bin limits are close enough (within 0.01 nm tolerance)
+            if not np.allclose(bin_limits, expected_bin_limits, atol=0.01):
+                logging.info(f"CSV bin limits don't match current calibration")
+                return None, False
+
+        # Calculate bin centers (geometric mean of adjacent limits)
+        bin_centers = np.sqrt(bin_limits[:-1] * bin_limits[1:])
+
+        # Parse data rows
+        scans = []
+        for line_num, line in enumerate(lines[2:], start=3):
+            line = line.strip()
+            if not line:
+                continue
+
+            values = line.split(',')
+            if len(values) < num_bins + 1:
+                logging.warning(f"Skipping short row {line_num} in {csv_path}")
+                continue
+
+            # Parse timestamp
+            try:
+                timestamp = pd.Timestamp(values[0])
+            except Exception as e:
+                logging.warning(f"Could not parse timestamp in row {line_num}: {e}")
+                continue
+
+            # Parse dN/dlogDp values
+            dN_dlogDp = np.zeros(num_bins)
+            for i in range(num_bins):
+                val_str = values[i + 1].strip()
+                if val_str == '' or val_str.lower() == 'nan':
+                    dN_dlogDp[i] = np.nan
+                else:
+                    try:
+                        dN_dlogDp[i] = float(val_str)
+                    except ValueError:
+                        dN_dlogDp[i] = np.nan
+
+            scans.append({
+                'time': timestamp,
+                'bin_centers': bin_centers.copy(),
+                'dN_dlogDp': dN_dlogDp,
+                'source_file': os.path.basename(csv_path)
+            })
+
+        logging.info(f"Loaded {len(scans)} scans from inversion CSV: {csv_path}")
+        return scans, True
+
+    except Exception as e:
+        logging.error(f"Error loading inversion CSV {csv_path}: {e}")
+        return None, False

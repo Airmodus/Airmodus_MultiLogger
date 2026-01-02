@@ -190,6 +190,8 @@ class PSMWidget(ComplexDevice):
             self.contour_tab.on_config_changed = lambda: (
                 self.on_config_changed() if hasattr(self, 'on_config_changed') and self.on_config_changed else None
             )
+            # Connect inversion scan completion callback for auto-save
+            self.contour_tab.on_inversion_scan_complete = self._on_inversion_scan_complete
             # Trigger auto-load of calibration and historical data now that app_config is set
             self.contour_tab.initialize_after_config_set()
         # Store app_config reference for CPC dropdown
@@ -198,6 +200,32 @@ class PSMWidget(ComplexDevice):
         # This prevents blocking during device creation
         if hasattr(self, 'connected_cpc_dropdown'):
             self._needs_cpc_dropdown_update = True
+
+    def _on_inversion_scan_complete(self, scan_data):
+        """
+        Handle completed inversion scan - trigger auto-save to CSV.
+
+        Called by PSMContourTab when a scan is finalized.
+        Checks if data saving is enabled before writing.
+
+        Args:
+            scan_data: Dict with 'timestamp', 'dN_dlogDp', 'bin_limits', 'calibration_filename'
+        """
+        # Check if app_config is available
+        if not hasattr(self, 'app_config') or self.app_config is None:
+            return
+
+        # Check if data saving is enabled
+        data_settings = self.app_config.data_settings
+        if not data_settings.save_data or not data_settings.file_path:
+            return
+
+        # Write inversion scan using data writer
+        self.data_writer.write_inversion_scan(
+            file_path=data_settings.file_path,
+            scan_data=scan_data,
+            config=self.app_config
+        )
 
     def _add_connected_cpc_dropdown(self):
         """Add Connected CPC dropdown to Device settings tab."""

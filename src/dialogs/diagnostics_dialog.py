@@ -3,16 +3,25 @@ Diagnostics Dialog
 
 Modal dialog that displays device diagnostic information in a human-readable format.
 Shows device status, errors, and key measurements with color-coded indicators.
+Includes 3D visualization tab for PSM devices when available.
 """
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-                              QTextBrowser, QLabel)
-from PyQt5.QtCore import Qt
+                              QTextBrowser, QLabel, QTabWidget, QWidget)
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 import logging
 
 from diagnostics import DiagnosticsExporter
 from config import CPC, PSM, TSI_CPC
+
+# Try to import PSM 3D tab
+try:
+    from devices.psm_3d_tab import PSM3DTab
+    HAS_3D_TAB = True
+except ImportError:
+    HAS_3D_TAB = False
+    PSM3DTab = None
 
 
 class DiagnosticsDialog(QDialog):
@@ -23,6 +32,7 @@ class DiagnosticsDialog(QDialog):
     - Application info and session status
     - Error summary across all devices
     - Per-device status, errors, and key measurements
+    - 3D visualization for PSM devices (if available)
     """
 
     def __init__(self, config, data_holder, parent=None):
@@ -32,11 +42,19 @@ class DiagnosticsDialog(QDialog):
         self.main_window = parent
 
         self.setWindowTitle("Device Diagnostics")
-        self.resize(700, 550)
-        self.setModal(False)  # Allow user to keep it open
+        self.resize(800, 600)
+        self.setModal(False)
+
+        # 3D view state
+        self._psm_3d_tab = None
+        self._update_timer = None
 
         self._setup_ui()
         self._refresh_content()
+
+        # Start update timer for 3D view if PSM is connected
+        if self._psm_3d_tab is not None:
+            self._start_3d_updates()
 
     def _setup_ui(self):
         """Create the dialog UI layout."""
@@ -49,19 +67,62 @@ class DiagnosticsDialog(QDialog):
         header.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
         layout.addWidget(header)
 
-        # Content browser (rich HTML display)
-        self.content_browser = QTextBrowser()
-        self.content_browser.setOpenExternalLinks(False)
-        self.content_browser.setFont(QFont("Segoe UI", 10))
-        self.content_browser.setStyleSheet("""
-            QTextBrowser {
-                background-color: #fafafa;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                padding: 10px;
-            }
-        """)
-        layout.addWidget(self.content_browser, stretch=1)
+        # Check if we have a PSM device for 3D view
+        psm_config = self._get_psm_config()
+
+        if psm_config is not None and HAS_3D_TAB:
+            # Create tabbed interface
+            self.tab_widget = QTabWidget()
+            self.tab_widget.setStyleSheet("""
+                QTabWidget::pane {
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                }
+                QTabBar::tab {
+                    padding: 8px 16px;
+                }
+            """)
+
+            # Diagnostics tab
+            diagnostics_widget = QWidget()
+            diag_layout = QVBoxLayout(diagnostics_widget)
+            diag_layout.setContentsMargins(0, 0, 0, 0)
+
+            self.content_browser = QTextBrowser()
+            self.content_browser.setOpenExternalLinks(False)
+            self.content_browser.setFont(QFont("Segoe UI", 10))
+            self.content_browser.setStyleSheet("""
+                QTextBrowser {
+                    background-color: #fafafa;
+                    border: none;
+                    padding: 10px;
+                }
+            """)
+            diag_layout.addWidget(self.content_browser)
+
+            self.tab_widget.addTab(diagnostics_widget, "Diagnostics")
+
+            # 3D View tab for PSM
+            is_psm2 = psm_config.device_type == PSM and getattr(psm_config, 'is_psm2', False)
+            self._psm_3d_tab = PSM3DTab(psm_config, is_psm2)
+            self.tab_widget.addTab(self._psm_3d_tab, "PSM 3D View")
+
+            layout.addWidget(self.tab_widget, stretch=1)
+        else:
+            # Simple layout without tabs
+            self.tab_widget = None
+            self.content_browser = QTextBrowser()
+            self.content_browser.setOpenExternalLinks(False)
+            self.content_browser.setFont(QFont("Segoe UI", 10))
+            self.content_browser.setStyleSheet("""
+                QTextBrowser {
+                    background-color: #fafafa;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    padding: 10px;
+                }
+            """)
+            layout.addWidget(self.content_browser, stretch=1)
 
         # Button row
         button_layout = QHBoxLayout()
@@ -83,6 +144,48 @@ class DiagnosticsDialog(QDialog):
         layout.addLayout(button_layout)
         self.setLayout(layout)
 
+    def _get_psm_config(self):
+        """Find the first PSM device configuration."""
+        if not hasattr(self.config, 'devices'):
+            return None
+        for device_config in self.config.devices:
+            if device_config.device_type == PSM:
+                return device_config
+        return None
+
+    def _get_psm_widget(self):
+        """Find the PSM widget from main window."""
+        if self.main_window is None:
+            return None
+        if not hasattr(self.main_window, 'device_widgets'):
+            return None
+        for widget in self.main_window.device_widgets:
+            if hasattr(widget, 'device_config') and widget.device_config.device_type == PSM:
+                return widget
+        return None
+
+    def _start_3d_updates(self):
+        """Start timer for updating 3D visualization."""
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self._update_3d_view)
+        self._update_timer.start(1000)  # Update every second
+
+    def _update_3d_view(self):
+        """Update the 3D view with current PSM data."""
+        if self._psm_3d_tab is None:
+            return
+
+        psm_widget = self._get_psm_widget()
+        if psm_widget is None:
+            return
+
+        # Get current data from PSM widget
+        if hasattr(psm_widget, 'current_data') and psm_widget.current_data is not None:
+            current_data = psm_widget.current_data
+            status_hex = getattr(current_data, 'system_status', '0000')
+            note_hex = getattr(current_data, 'note', '0000')
+            self._psm_3d_tab.update_visualization(current_data, status_hex, note_hex)
+
     def _refresh_content(self):
         """Refresh the diagnostic content."""
         try:
@@ -99,6 +202,12 @@ class DiagnosticsDialog(QDialog):
             self.content_browser.setHtml(
                 f"<p style='color: red;'>Error loading diagnostics: {str(e)}</p>"
             )
+
+    def closeEvent(self, event):
+        """Clean up timer when dialog closes."""
+        if self._update_timer is not None:
+            self._update_timer.stop()
+        super().closeEvent(event)
 
     def _build_html(self, diagnostics: dict) -> str:
         """
