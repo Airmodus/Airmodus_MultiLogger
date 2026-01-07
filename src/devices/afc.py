@@ -82,6 +82,11 @@ class AFCWidget(ComplexDevice):
                     self.update_settings()
                     self.update_values()
 
+                    # set error flags
+                    if self.current_data.error_status != 0:
+                        data_holder.error_status = True
+                        data_holder.device_errors[self.dev_id] = True
+
                     return {
                         'type': 'data',
                         'command': command,
@@ -133,6 +138,14 @@ class AFCWidget(ComplexDevice):
     def update_values(self):
         """Update AFC measured values in the GUI."""
         self.control_tab.measured_flow.change_value(str(self.current_data.flow) + " slm")
+
+    def get_status_bar_text(self):
+        """Get formatted text for status bar display."""
+        if self.current_data and hasattr(self.current_data, 'flow'):
+            flow = self.current_data.flow
+            if flow is not None:
+                return f"{flow:.2f} slm"
+        return super().get_status_bar_text()
 
 class AFCControlTab(QWidget):
     def __init__(self, *args, **kwargs):

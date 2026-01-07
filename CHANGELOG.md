@@ -1,6 +1,8 @@
 # Airmodus MultiLogger - Software change log
 
 ### 0.11.4 - 2026.01.07
+- AFC flow value in status bar
+- AFC error flag setting
 - renamed AFC "Set" tab to "Control"
 - removed AFCSettings, moved flow_setpoint to AFCData
 
