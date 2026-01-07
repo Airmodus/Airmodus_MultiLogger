@@ -1879,8 +1879,9 @@ class PSMContourTab(QWidget):
                 self.plot_initialized = True
             self.plot_widget.show()
 
-            # Update calibration file label
+            # Update calibration file label with tooltip showing full path
             self.cal_file_label.setText(f"Cal: {self.calibration_filename}")
+            self.cal_file_label.setToolTip(file_path)
 
             # Create bin checkboxes for time-series plot
             self._create_bin_checkboxes()
@@ -2313,9 +2314,10 @@ class PSMContourTab(QWidget):
         # Clear parameter
         self.device_config.extra_params['calibration_file_path'] = ''
 
-        # Clear calibration file label
+        # Clear calibration file label and tooltip
         if hasattr(self, 'cal_file_label'):
             self.cal_file_label.setText("")
+            self.cal_file_label.setToolTip("")
 
         # Switch back to prompt view
         self.plot_widget.hide()
