@@ -505,7 +505,7 @@ class MultiLoggerStatusBar(QStatusBar):
 
         if not save_data:
             self.saving_label.setText("✗ Not Saving")
-            self.saving_label.setStyleSheet("padding: 4px 8px; color: #424242; font-size: 13px; background-color: transparent;")
+            self.saving_label.setStyleSheet("padding: 4px 8px; color: #000000; font-size: 13px; background-color: #f0c040; border-radius: 3px;")
             self.saving_label.setToolTip("Data saving is disabled")
         elif saving_status == 1:
             # Build tooltip with timestamp and file info

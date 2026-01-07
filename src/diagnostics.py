@@ -79,6 +79,7 @@ class DiagnosticsExporter:
             "plot_settings": self._collect_plot_settings(),
             "devices": self._collect_all_devices(),
             "error_summary": self._collect_error_summary(),
+            "error_history": self._collect_error_history(),
             "communication_summary": self._collect_communication_summary()
         }
 
@@ -156,6 +157,7 @@ class DiagnosticsExporter:
             "current_time": getattr(dh, 'current_time', 0),
             "max_time_reached": getattr(dh, 'max_reached', False),
             "saving_status": getattr(dh, 'saving_status', 0),
+            "last_save_error": getattr(dh, 'last_save_error', None),
             "global_error_status": getattr(dh, 'error_status', 0),
             "last_write_timestamp": self._format_timestamp(getattr(dh, 'last_write_timestamp', None)),
             "most_recent_filename": getattr(dh, 'most_recent_filename', ""),
@@ -418,6 +420,46 @@ class DiagnosticsExporter:
             "global_error_status": getattr(dh, 'error_status', 0),
             "devices_with_errors": devices_with_errors,
             "total_devices_with_errors": len(devices_with_errors)
+        }
+
+    def _collect_error_history(self) -> Dict[str, Any]:
+        """Collect error history from the session."""
+        dh = self.data_holder
+
+        if not hasattr(dh, 'error_history'):
+            return {
+                "total_errors": 0,
+                "errors": [],
+                "errors_by_device": {},
+                "errors_by_type": {}
+            }
+
+        error_history = dh.error_history
+        all_errors = error_history.to_dict_list()
+
+        # Group errors by device
+        errors_by_device = {}
+        for error in all_errors:
+            dev_id = error.get('device_id')
+            dev_name = error.get('device_name', 'Unknown')
+            key = f"{dev_name} (ID: {dev_id})" if dev_id is not None else "System"
+            if key not in errors_by_device:
+                errors_by_device[key] = 0
+            errors_by_device[key] += 1
+
+        # Group errors by type
+        errors_by_type = {}
+        for error in all_errors:
+            error_type = error.get('error_type', 'unknown')
+            if error_type not in errors_by_type:
+                errors_by_type[error_type] = 0
+            errors_by_type[error_type] += 1
+
+        return {
+            "total_errors": len(all_errors),
+            "errors": all_errors,
+            "errors_by_device": errors_by_device,
+            "errors_by_type": errors_by_type
         }
 
     def _collect_communication_summary(self) -> Dict[str, Any]:

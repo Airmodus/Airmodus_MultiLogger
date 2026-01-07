@@ -272,6 +272,16 @@ class DataLogger:
                         except Exception as e:
                             logging.exception(e)
                             self.data_holder.saving_status = 0 # set saving status to 0
+                            self.data_holder.last_save_error = str(e)  # Store error for diagnostics
+                            # Record save error to error history
+                            self.data_holder.error_history.add_error(
+                                device_id=dev_id,
+                                device_name=device_config.device_type_name,
+                                error_type='save_error',
+                                description=f'Failed to save data: {str(e)}',
+                                error_code='',
+                                severity='error'
+                            )
         else: # if saving is toggled off
             self.data_holder.saving_status = 0 # set saving status to 0
        

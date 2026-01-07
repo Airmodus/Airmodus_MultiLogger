@@ -6,7 +6,8 @@ from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, Plo
 from PyQt5.QtWidgets import (QTabWidget, QGridLayout, QLabel, QWidget,
     QPushButton, QComboBox, QGraphicsRectItem, QTableWidget, QTableWidgetItem,
     QTextEdit, QCheckBox, QHeaderView, QLineEdit, QVBoxLayout, QHBoxLayout,
-    QGroupBox, QScrollArea, QFrame, QStackedWidget)
+    QGroupBox, QScrollArea, QFrame, QStackedWidget, QMessageBox, QToolButton,
+    QSizePolicy)
 from config import CPC, CPC_ERRORS
 from ui_helpers import GuidedComboBox
 
@@ -204,7 +205,22 @@ class CPCWidget(ComplexDevice):
             self.control_tab.simple_pres_cabin.change_color(0)
         
         return total_errors # return total number of errors
-    
+
+    def _decode_error_hex(self, status_hex):
+        """Decode CPC status hex to list of error descriptions."""
+        from config import CPC_ERRORS
+        errors = []
+        if not status_hex:
+            return errors
+        try:
+            status_int = int(status_hex, 16)
+            for i, error_desc in enumerate(CPC_ERRORS):
+                if status_int & (1 << i):
+                    errors.append(error_desc)
+        except (ValueError, TypeError):
+            pass
+        return errors
+
     def update_settings(self, settings):
         # Update GUI set values only when DEVICE value changes (not spinbox differs)
         # This prevents the jumping bug where stale device values overwrite user input
@@ -368,10 +384,22 @@ class CPCWidget(ComplexDevice):
 
                 result['data_updated'] = True
 
-                # Set error flags
+                # Set error flags and record to error history
                 if parsed.get('total_errors', 0) != 0:
                     data_holder.error_status = 1
                     data_holder.device_errors[self.dev_id] = True
+                    # Record error to history with decoded description
+                    status_hex = parsed.get('status_hex', '')
+                    error_descriptions = self._decode_error_hex(status_hex)
+                    device_name = getattr(self, 'device_nickname', None) or 'CPC'
+                    data_holder.error_history.add_error(
+                        device_id=self.dev_id,
+                        device_name=device_name,
+                        error_type='device_error',
+                        description='; '.join(error_descriptions) if error_descriptions else 'Device error detected',
+                        error_code=status_hex,
+                        severity='error'
+                    )
 
             elif parsed['type'] == 'settings':
                 # Handle PRNT or PALL settings
@@ -1486,6 +1514,49 @@ class PulseQuality(QWidget):
         self.current_threshold.setText("")
 
 
+class CollapsibleSection(QWidget):
+    """A collapsible section widget with toggle button and content area."""
+
+    def __init__(self, title, parent=None, initially_collapsed=False):
+        super().__init__(parent)
+
+        self.toggle_button = QToolButton()
+        self.toggle_button.setStyleSheet("QToolButton { border: none; font-size: 9pt; color: #888; }")
+        self.toggle_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.toggle_button.setArrowType(Qt.DownArrow if not initially_collapsed else Qt.RightArrow)
+        self.toggle_button.setText(title)
+        self.toggle_button.setCheckable(True)
+        self.toggle_button.setChecked(not initially_collapsed)
+        self.toggle_button.clicked.connect(self._on_toggle)
+
+        self.content_area = QWidget()
+        self.content_layout = QVBoxLayout(self.content_area)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setSpacing(4)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.toggle_button)
+        layout.addWidget(self.content_area)
+
+        self.content_area.setVisible(not initially_collapsed)
+
+    def _on_toggle(self, checked):
+        self.toggle_button.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        self.content_area.setVisible(checked)
+
+    def add_widget(self, widget):
+        self.content_layout.addWidget(widget)
+
+    def add_layout(self, layout):
+        self.content_layout.addLayout(layout)
+
+    def set_collapsed(self, collapsed):
+        self.toggle_button.setChecked(not collapsed)
+        self._on_toggle(not collapsed)
+
+
 class CPCDatabaseTab(QWidget):
     """Database/ACTRIS tab for CPC devices showing database status and settings."""
 
@@ -1494,155 +1565,185 @@ class CPCDatabaseTab(QWidget):
 
         self.device_config = device_config
         self.app_config = None  # Will be set by CPC widget after creation
+        self.main_window = None
+        self.row_data = {}
+        self.editing_in_progress = False
+        self._highlight_timer = None
 
-        layout = QGridLayout()
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(15, 15, 15, 15)
 
-        row = 0
+        # ===== STATUS ROW (top left corner, inline) =====
+        status_row = QHBoxLayout()
+        status_row.setSpacing(20)
 
-        # Connection section (global, shared across all CPCs)
-        connection_label = QLabel("<b>Database Connection (shared)</b>")
-        layout.addWidget(connection_label, row, 0, 1, 2)
-        row += 1
+        # Next write countdown
+        self.next_write_value = QLabel("--:--")
+        self.next_write_value.setStyleSheet("font-size: 20px; font-weight: bold; color: #ffa726;")
+        status_row.addWidget(self.next_write_value)
 
-        # Connection string input
-        conn_string_label = QLabel("Connection string:")
-        layout.addWidget(conn_string_label, row, 0)
+        # Progress
+        self.progress_value = QLabel("No data")
+        self.progress_value.setStyleSheet("font-size: 11px; color: #66bb6a;")
+        status_row.addWidget(self.progress_value)
+
+        # Status badge
+        self.db_status_value = QLabel("Disabled")
+        self.db_status_value.setStyleSheet("font-size: 11px; color: #666;")
+        status_row.addWidget(self.db_status_value)
+
+        status_row.addStretch()
+        main_layout.addLayout(status_row)
+
+        # ===== SETTINGS SECTION (minimalistic, matching data_settings_dialog style) =====
+        # Database row
+        db_row = QHBoxLayout()
+        db_row.setSpacing(0)
+
+        db_label = QLabel("Database:")
+        db_label.setStyleSheet("color: #ccc; font-size: 13px;")
+        db_label.setFixedWidth(70)
+        db_row.addWidget(db_label)
+
         self.connection_string_input = QLineEdit()
         self.connection_string_input.setPlaceholderText("postgresql://user:password@host:port/database")
+        self.connection_string_input.setStyleSheet("""
+            QLineEdit {
+                color: #4a9eff;
+                background: transparent;
+                border: 1px solid #3d3d3d;
+                border-radius: 3px;
+                padding: 2px 6px;
+                font-family: monospace;
+                font-size: 12px;
+            }
+            QLineEdit:focus {
+                border-color: #4a9eff;
+            }
+        """)
         self.connection_string_input.textChanged.connect(self.connection_string_changed)
-        layout.addWidget(self.connection_string_input, row, 1)
-        row += 1
+        db_row.addWidget(self.connection_string_input)
 
-        # Test connection button
-        self.test_connection_btn = QPushButton("Test Connection + Refresh Preview")
-        self.test_connection_btn.clicked.connect(self.test_connection_clicked)
-        layout.addWidget(self.test_connection_btn, row, 0, 1, 2)
-        row += 1
-
-        # Global connection status
-        global_status_label = QLabel("Global status:")
-        layout.addWidget(global_status_label, row, 0)
         self.global_connection_status = QLabel("Disconnected")
-        self.global_connection_status.setStyleSheet("color: gray;")
-        layout.addWidget(self.global_connection_status, row, 1)
-        row += 1
+        self.global_connection_status.setStyleSheet("color: #666; font-size: 11px; margin-left: 10px;")
+        self.global_connection_status.setFixedWidth(85)
+        db_row.addWidget(self.global_connection_status)
 
-        # Active devices count
-        active_devices_label = QLabel("Active devices:")
-        layout.addWidget(active_devices_label, row, 0)
-        self.active_devices_count = QLabel("0 CPCs using database")
-        layout.addWidget(self.active_devices_count, row, 1)
-        row += 1
+        main_layout.addLayout(db_row)
 
-        # Separator
-        row += 1
+        # RHTP + Interval row
+        rhtp_row = QHBoxLayout()
+        rhtp_row.setSpacing(15)
 
-        # Device Settings section
-        settings_label = QLabel("<b>This Device Settings</b>")
-        layout.addWidget(settings_label, row, 0, 1, 2)
-        row += 1
+        rhtp_label = QLabel("RHTP:")
+        rhtp_label.setStyleSheet("color: #ccc; font-size: 13px;")
+        rhtp_row.addWidget(rhtp_label)
 
-        # Database enabled checkbox (connected to device parameter)
-        self.db_enabled_checkbox = QCheckBox("Enable database for this device")
-        self.db_enabled_checkbox.stateChanged.connect(self.db_enabled_changed)
-        layout.addWidget(self.db_enabled_checkbox, row, 0, 1, 2)
-        row += 1
-
-        # Linked RHTP dropdown (with guidance when disabled)
-        linked_rhtp_label = QLabel("Linked RHTP device:")
-        layout.addWidget(linked_rhtp_label, row, 0)
         self.linked_rhtp_dropdown = GuidedComboBox()
+        self.linked_rhtp_dropdown.setMinimumWidth(120)
         self.linked_rhtp_dropdown.set_tooltips(
-            enabled_tooltip="Select the RHTP sensor to link with this CPC for database recording",
-            disabled_tooltip="Disable database first to change linked RHTP device"
+            enabled_tooltip="Select the RHTP sensor to link with this CPC",
+            disabled_tooltip="Disable database first to change"
         )
-        # Guide target will be set after checkbox is created
         self.linked_rhtp_dropdown.currentIndexChanged.connect(self.linked_rhtp_changed)
-        layout.addWidget(self.linked_rhtp_dropdown, row, 1)
-        row += 1
+        rhtp_row.addWidget(self.linked_rhtp_dropdown)
 
-        # Averaging interval dropdown (with guidance when disabled)
-        interval_label = QLabel("Averaging interval:")
-        layout.addWidget(interval_label, row, 0)
+        interval_label = QLabel("Interval:")
+        interval_label.setStyleSheet("color: #ccc; font-size: 13px;")
+        rhtp_row.addWidget(interval_label)
+
         self.interval_dropdown = GuidedComboBox()
+        self.interval_dropdown.setMinimumWidth(100)
         self.interval_dropdown.addItems(['1 minute', '5 minutes', '10 minutes', '15 minutes', '1 hour', '3 hours'])
         self.interval_dropdown.set_tooltips(
             enabled_tooltip="Select the time period for data averaging",
-            disabled_tooltip="Disable database first to change averaging interval"
+            disabled_tooltip="Disable database first to change"
         )
-        # Guide target will be set after checkbox is created
         self.interval_dropdown.currentTextChanged.connect(self.interval_changed)
-        layout.addWidget(self.interval_dropdown, row, 1)
-        row += 1
+        rhtp_row.addWidget(self.interval_dropdown)
 
-        # Separator
-        row += 1
+        rhtp_row.addStretch()
+        main_layout.addLayout(rhtp_row)
 
-        # Status section
-        status_label = QLabel("<b>This Device Status</b>")
-        layout.addWidget(status_label, row, 0, 1, 2)
-        row += 1
+        # Enable checkbox with hint (like data_settings_dialog)
+        enable_row = QHBoxLayout()
+        self.db_enabled_checkbox = QCheckBox("Enable database writes")
+        self.db_enabled_checkbox.setToolTip("Start writing averaged data to the ACTRIS database")
+        self.db_enabled_checkbox.stateChanged.connect(self.db_enabled_changed)
+        enable_row.addWidget(self.db_enabled_checkbox)
 
-        # Next Write Countdown - PROMINENT (simplified)
-        next_write_label = QLabel("Next write:")
-        next_write_label.setStyleSheet("font-size: 11pt;")
-        layout.addWidget(next_write_label, row, 0)
+        self.active_devices_count = QLabel("0 CPCs using database")
+        self.active_devices_count.setStyleSheet("color: #666; font-size: 11px; margin-left: 10px;")
+        enable_row.addWidget(self.active_devices_count)
+        enable_row.addStretch()
+        main_layout.addLayout(enable_row)
 
-        self.next_write_value = QLabel("--:--")
-        self.next_write_value.setStyleSheet("font-size: 20pt; font-weight: bold; color: #ffa726;")
-        layout.addWidget(self.next_write_value, row, 1)
-        row += 1
+        # Last write info row (like data_settings_dialog)
+        last_row = QHBoxLayout()
+        last_row.setSpacing(10)
 
-        # Current interval progress
-        progress_label = QLabel("Current interval:")
-        progress_label.setStyleSheet("font-size: 11pt;")
-        layout.addWidget(progress_label, row, 0)
-        self.progress_value = QLabel("No data")
-        self.progress_value.setStyleSheet("font-size: 11pt; color: #66bb6a;")
-        layout.addWidget(self.progress_value, row, 1)
-        row += 1
+        last_label = QLabel("Last write:")
+        last_label.setStyleSheet("color: #ccc; font-size: 13px;")
+        last_label.setFixedWidth(70)
+        last_row.addWidget(last_label)
 
-        # Device status indicator
-        db_status_label = QLabel("Status:")
-        layout.addWidget(db_status_label, row, 0)
-        self.db_status_value = QLabel("Disabled")
-        layout.addWidget(self.db_status_value, row, 1)
-        row += 1
-
-        # Last write timestamp
-        last_write_label = QLabel("Last write:")
-        layout.addWidget(last_write_label, row, 0)
         self.last_write_value = QLabel("Never")
-        layout.addWidget(self.last_write_value, row, 1)
-        row += 1
+        self.last_write_value.setStyleSheet("color: #666; font-size: 11px;")
+        last_row.addWidget(self.last_write_value)
 
-        # Records written counter
-        records_label = QLabel("Records written:")
-        layout.addWidget(records_label, row, 0)
+        records_label = QLabel("Records:")
+        records_label.setStyleSheet("color: #888; font-size: 11px; margin-left: 20px;")
+        last_row.addWidget(records_label)
+
         self.records_value = QLabel("0")
-        layout.addWidget(self.records_value, row, 1)
-        row += 1
+        self.records_value.setStyleSheet("color: #666; font-size: 11px;")
+        last_row.addWidget(self.records_value)
 
-        # Current interval progress
-        progress_label = QLabel("Current interval:")
-        layout.addWidget(progress_label, row, 0)
-        self.progress_value = QLabel("No data")
-        self.progress_value.setStyleSheet("color: gray;")
-        layout.addWidget(self.progress_value, row, 1)
-        row += 1
+        last_row.addStretch()
+        main_layout.addLayout(last_row)
 
-        # Next write countdown
-        next_write_label = QLabel("Next write in:")
-        layout.addWidget(next_write_label, row, 0)
-        self.next_write_value = QLabel("-")
-        self.next_write_value.setStyleSheet("color: gray;")
-        layout.addWidget(self.next_write_value, row, 1)
-        row += 1
+        # Set up guidance targets
+        self.linked_rhtp_dropdown.set_guide_target(
+            self.db_enabled_checkbox,
+            "Uncheck 'Enable database' to change"
+        )
+        self.interval_dropdown.set_guide_target(
+            self.db_enabled_checkbox,
+            "Uncheck 'Enable database' to change"
+        )
 
-        # Latest saved data table
-        data_table_label = QLabel("<b>Latest Saved Data</b>")
-        layout.addWidget(data_table_label, row, 0, 1, 2)
-        row += 1
+        # ===== DATA TABLE (stretches to fill space) =====
+        table_header_row = QHBoxLayout()
+        table_label = QLabel("Preview")
+        table_label.setStyleSheet("color: #888; font-size: 11px;")
+        table_header_row.addWidget(table_label)
+
+        table_header_row.addStretch()
+
+        # Delete button (small, inline)
+        self.delete_button = QPushButton("Delete selected")
+        self.delete_button.setToolTip("Delete selected rows from database")
+        self.delete_button.setStyleSheet("font-size: 10px; padding: 2px 6px; color: #888;")
+        self.delete_button.clicked.connect(self.delete_selected_rows)
+        table_header_row.addWidget(self.delete_button)
+
+        self.show_more_btn = QPushButton("Show more")
+        self.show_more_btn.setToolTip("Load 20 more rows from database")
+        self.show_more_btn.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+        self.show_more_btn.clicked.connect(self.show_more_clicked)
+        table_header_row.addWidget(self.show_more_btn)
+
+        self.refresh_preview_btn = QPushButton("Refresh")
+        self.refresh_preview_btn.setToolTip("Refresh preview from database")
+        self.refresh_preview_btn.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+        self.refresh_preview_btn.clicked.connect(self.refresh_preview_clicked)
+        table_header_row.addWidget(self.refresh_preview_btn)
+
+        main_layout.addLayout(table_header_row)
+
+        # Track how many rows we're showing
+        self._preview_row_count = 10
 
         self.data_table = QTableWidget()
         self.data_table.setColumnCount(12)
@@ -1652,65 +1753,26 @@ class CPCDatabaseTab(QWidget):
         ])
         self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.data_table.setRowCount(10)
-        self.data_table.setMaximumHeight(300)
-        # Enable row selection for deletion
         self.data_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.data_table.setSelectionMode(QTableWidget.MultiSelection)
-        # Connect cell changed signal for editing
         self.data_table.cellChanged.connect(self.cell_edited)
-        layout.addWidget(self.data_table, row, 0, 1, 2)
-        row += 1
+        main_layout.addWidget(self.data_table, 1)  # stretch factor 1 to fill space
 
-        # Delete button for selected rows
-        self.delete_button = QPushButton("Delete Selected Rows")
-        self.delete_button.clicked.connect(self.delete_selected_rows)
-        layout.addWidget(self.delete_button, row, 0, 1, 2)
-        row += 1
-
-        # Store original row data for tracking changes
-        self.row_data = {}  # {row_index: {'time': ..., 'instr_id': ..., 'data': {...}}}
-        self.editing_in_progress = False  # Flag to prevent recursive cell updates
-
-        # Error/info section
-        error_label = QLabel("<b>Messages</b>")
-        layout.addWidget(error_label, row, 0, 1, 2)
-        row += 1
-
+        # ===== MESSAGES SECTION (collapsible) =====
+        self.messages_section = CollapsibleSection("Messages", initially_collapsed=True)
         self.error_text = QTextEdit()
         self.error_text.setReadOnly(True)
-        self.error_text.setMaximumHeight(100)
-        layout.addWidget(self.error_text, row, 0, 1, 2)
-        row += 1
+        self.error_text.setMaximumHeight(60)
+        self.error_text.setStyleSheet("font-size: 11px;")
+        self.messages_section.add_widget(self.error_text)
+        main_layout.addWidget(self.messages_section)
 
-        # Set row stretches (data table and error text)
-        data_table_row = row - 2
-        error_text_row = row - 1
-        layout.setRowStretch(data_table_row, 2)  # Data table gets more space
-        layout.setRowStretch(error_text_row, 1)  # Error text gets some space
-
-        self.setLayout(layout)
-
-        # Get reference to main window for accessing database_manager
-        # Will be set when tab is added to device
-        self.main_window = None
-
-        # Set up guidance targets for dropdowns (point to checkbox when clicked while disabled)
-        self.linked_rhtp_dropdown.set_guide_target(
-            self.db_enabled_checkbox,
-            "Uncheck 'Enable database' to change linked RHTP device"
-        )
-        self.interval_dropdown.set_guide_target(
-            self.db_enabled_checkbox,
-            "Uncheck 'Enable database' to change averaging interval"
-        )
+        self.setLayout(main_layout)
 
         # Timer for periodic refresh (every 5 seconds)
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.refresh_status)
-        self.refresh_timer.start(5000)  # 5 seconds
-
-        # Don't initialize dropdowns immediately - the 5-second timer will handle it
-        # This prevents blocking during device creation
+        self.refresh_timer.start(5000)
 
     def populate_rhtp_dropdown(self):
         """Populate linked RHTP dropdown from RHTP devices in app config."""
@@ -1797,10 +1859,10 @@ class CPCDatabaseTab(QWidget):
 
         if enabled:
             self.db_status_value.setText("Enabled")
-            self.db_status_value.setStyleSheet("color: green;")
+            self.db_status_value.setStyleSheet("font-size: 11px; color: #66bb6a;")
         else:
             self.db_status_value.setText("Disabled")
-            self.db_status_value.setStyleSheet("color: gray;")
+            self.db_status_value.setStyleSheet("font-size: 11px; color: #666;")
 
     def update_last_write(self, timestamp_str):
         """Update last write timestamp display."""
@@ -1824,7 +1886,7 @@ class CPCDatabaseTab(QWidget):
 
         # Update sample count
         self.progress_value.setText(f"{samples_collected}/{total_samples} samples")
-        self.progress_value.setStyleSheet("color: green;" if samples_collected > 0 else "color: gray;")
+        self.progress_value.setStyleSheet("font-size: 11px; color: #66bb6a;" if samples_collected > 0 else "font-size: 11px; color: #666;")
 
         # Calculate time remaining
         if interval_start:
@@ -1845,20 +1907,20 @@ class CPCDatabaseTab(QWidget):
                     time_str = f"{minutes:02d}:{seconds:02d}"
 
                 self.next_write_value.setText(time_str)
-                self.next_write_value.setStyleSheet("color: orange;")
+                self.next_write_value.setStyleSheet("font-size: 20px; font-weight: bold; color: #ffa726;")
             else:
                 self.next_write_value.setText("Writing...")
-                self.next_write_value.setStyleSheet("color: green;")
+                self.next_write_value.setStyleSheet("font-size: 20px; font-weight: bold; color: #66bb6a;")
         else:
-            self.next_write_value.setText("-")
-            self.next_write_value.setStyleSheet("color: gray;")
+            self.next_write_value.setText("--:--")
+            self.next_write_value.setStyleSheet("font-size: 20px; font-weight: bold; color: #666;")
 
     def reset_progress(self):
         """Reset progress indicators."""
         self.progress_value.setText("No data")
-        self.progress_value.setStyleSheet("color: gray;")
-        self.next_write_value.setText("-")
-        self.next_write_value.setStyleSheet("color: gray;")
+        self.progress_value.setStyleSheet("font-size: 11px; color: #666;")
+        self.next_write_value.setText("--:--")
+        self.next_write_value.setStyleSheet("font-size: 20px; font-weight: bold; color: #666;")
 
     def update_data_table(self, rows):
         """
@@ -2111,10 +2173,8 @@ class CPCDatabaseTab(QWidget):
 
         if success:
             self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: {message}")
-            # Refresh table to show updated data
-            dev_id = self.device_config.device_id
-            latest_rows = self.main_window.database_manager.get_latest_rows(10, dev_id)
-            self.update_data_table(latest_rows)
+            # Refresh table to show updated data (respects current row count)
+            self.refresh_preview()
             # Clear row selection after deletion
             self.data_table.clearSelection()
         else:
@@ -2176,9 +2236,22 @@ class CPCDatabaseTab(QWidget):
                 current_time = datetime.now()
                 self.add_message(f"{current_time.strftime('%H:%M:%S')}: Averaging interval changed to {text}")
 
+    def _highlight_widget(self, widget, highlight=True):
+        """Temporarily highlight a widget with red border to indicate an error."""
+        if highlight:
+            original_style = widget.styleSheet()
+            widget.setStyleSheet(original_style + " border: 2px solid #ff5555;")
+            widget.setFocus()
+            # Remove highlight after 2 seconds
+            if self._highlight_timer:
+                self._highlight_timer.stop()
+            self._highlight_timer = QTimer()
+            self._highlight_timer.setSingleShot(True)
+            self._highlight_timer.timeout.connect(lambda: widget.setStyleSheet(original_style))
+            self._highlight_timer.start(2000)
+
     def db_enabled_changed(self, state):
         """Handle database enabled checkbox state change with full validation and connection management."""
-        from PyQt5.QtWidgets import QMessageBox
         from datetime import datetime
 
         enabled = state == Qt.Checked
@@ -2194,30 +2267,42 @@ class CPCDatabaseTab(QWidget):
             # Validation 1: Check connection string is not empty
             conn_string = self.connection_string_input.text().strip()
             if not conn_string:
-                QMessageBox.warning(self, "Database Error", "Please enter a connection string first.")
+                self._highlight_widget(self.connection_string_input)
                 self.db_enabled_checkbox.setChecked(False)
-                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - No connection string provided")
+                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - Please enter a database connection string")
+                # Expand messages section to show error
+                self.messages_section.set_collapsed(False)
                 return
 
-            # Validation 2: Check RHTP is linked (use dropdown value)
+            # Validation 2: Check RHTP is linked - show confirmation if not
             rhtp_id = self.linked_rhtp_dropdown.currentData()
             if rhtp_id is None or rhtp_id == 'None':
-                QMessageBox.warning(
+                # Show confirmation dialog
+                reply = QMessageBox.question(
                     self,
-                    "Database Error",
-                    "Please link an RHTP device first.\n\nSelect an RHTP device in the 'Linked RHTP' dropdown above."
+                    "No RHTP Device Linked",
+                    "No RHTP device is linked to this CPC.\n\n"
+                    "RHTP provides temperature, pressure, and humidity data for ACTRIS compliance.\n\n"
+                    "Do you want to continue without RHTP data?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
                 )
-                self.db_enabled_checkbox.setChecked(False)
-                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - No RHTP device linked")
-                return
+                if reply != QMessageBox.Yes:
+                    # User chose not to continue - highlight RHTP dropdown
+                    self._highlight_widget(self.linked_rhtp_dropdown)
+                    self.db_enabled_checkbox.setChecked(False)
+                    return
+                # User chose to continue without RHTP - proceed with enabling
 
-            # Validation 3: Check RHTP device exists and is connected
-            rhtp_widget = self.main_window.data_holder.device_widgets.get(rhtp_id)
-            if not rhtp_widget:
-                QMessageBox.warning(self, "Database Error", "Linked RHTP device not found.")
-                self.db_enabled_checkbox.setChecked(False)
-                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - RHTP device not found")
-                return
+            # Validation 3: If RHTP is selected, check it exists
+            if rhtp_id and rhtp_id != 'None':
+                rhtp_widget = self.main_window.data_holder.device_widgets.get(rhtp_id)
+                if not rhtp_widget:
+                    QMessageBox.warning(self, "Database Error", "Linked RHTP device not found.")
+                    self._highlight_widget(self.linked_rhtp_dropdown)
+                    self.db_enabled_checkbox.setChecked(False)
+                    self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - RHTP device not found")
+                    return
 
             # Register device with database manager (connects if first device)
             success, message = self.main_window.database_manager.register_device(dev_id, conn_string)
@@ -2236,7 +2321,7 @@ class CPCDatabaseTab(QWidget):
 
                 # Update UI
                 self.db_status_value.setText("Enabled")
-                self.db_status_value.setStyleSheet("color: green;")
+                self.db_status_value.setStyleSheet("font-size: 11px; color: #66bb6a;")
                 self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Database enabled - {message}")
 
                 # Disable dropdowns to prevent changes during recording
@@ -2264,7 +2349,7 @@ class CPCDatabaseTab(QWidget):
 
             # Update UI
             self.db_status_value.setText("Disabled")
-            self.db_status_value.setStyleSheet("color: gray;")
+            self.db_status_value.setStyleSheet("font-size: 11px; color: #666;")
             self.reset_progress()  # Reset progress indicators
             self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Database disabled - {message}")
 
@@ -2287,33 +2372,67 @@ class CPCDatabaseTab(QWidget):
 
             # Auto-save will happen when app closes or user manually saves
 
-    def test_connection_clicked(self):
-        """Test database connection with current connection string."""
-        from PyQt5.QtWidgets import QMessageBox
+    def refresh_preview_clicked(self):
+        """Refresh preview table from database (resets to 10 rows)."""
+        from datetime import datetime
 
-        conn_string = self.connection_string_input.text()
-
-        if not conn_string:
-            QMessageBox.warning(self, "Database Test", "Please enter a connection string first.")
-            return
+        # Reset row count on manual refresh
+        self._preview_row_count = 10
 
         if not self.main_window or not hasattr(self.main_window, 'database_manager'):
-            QMessageBox.warning(self, "Database Test", "Database manager not available.")
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Database manager not available")
             return
 
+        conn_string = self.connection_string_input.text()
+        if not conn_string:
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: No connection string configured")
+            return
+
+        # Test connection and refresh
         success, message = self.main_window.database_manager.test_connection(conn_string)
 
         if success:
-            QMessageBox.information(self, "Database Test", f"Success!\n\n{message}")
-
-            # Refresh the preview table to show latest data
             dev_id = self.device_config.device_id
-            latest_rows = self.main_window.database_manager.get_latest_rows(10, dev_id)
+            latest_rows = self.main_window.database_manager.get_latest_rows(self._preview_row_count, dev_id)
             self.update_data_table(latest_rows)
-            from datetime import datetime
-            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Preview table refreshed")
+            self.global_connection_status.setText("Connected")
+            self.global_connection_status.setStyleSheet("color: #66bb6a; font-size: 11px; margin-left: 10px;")
         else:
-            QMessageBox.warning(self, "Database Test", f"Connection failed:\n\n{message}")
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Connection failed - {message}")
+            self.global_connection_status.setText("Failed")
+            self.global_connection_status.setStyleSheet("color: #ff6b6b; font-size: 11px; margin-left: 10px;")
+
+    def show_more_clicked(self):
+        """Load 20 more rows into preview."""
+        from datetime import datetime
+
+        self._preview_row_count += 20
+
+        if not self.main_window or not hasattr(self.main_window, 'database_manager'):
+            return
+
+        if not self.main_window.database_manager.connected:
+            # Try to connect first
+            conn_string = self.connection_string_input.text()
+            if conn_string:
+                self.main_window.database_manager.test_connection(conn_string)
+
+        if self.main_window.database_manager.connected:
+            dev_id = self.device_config.device_id
+            latest_rows = self.main_window.database_manager.get_latest_rows(self._preview_row_count, dev_id)
+            self.update_data_table(latest_rows)
+
+    def refresh_preview(self):
+        """Refresh preview table (called after writes)."""
+        if not self.main_window or not hasattr(self.main_window, 'database_manager'):
+            return
+
+        if not self.main_window.database_manager.connected:
+            return
+
+        dev_id = self.device_config.device_id
+        latest_rows = self.main_window.database_manager.get_latest_rows(self._preview_row_count, dev_id)
+        self.update_data_table(latest_rows)
 
     def sync_connection_string_to_all_cpcs(self, conn_string):
         """Update connection string in all other CPC ACTRIS tabs."""

@@ -345,7 +345,22 @@ class PSMWidget(ComplexDevice):
             self.control_tab.simple_flow_vacuum.change_color(inverted_status_bin[14])
 
         return total_errors # return total number of errors
-    
+
+    def _decode_error_hex(self, status_hex):
+        """Decode PSM status hex to list of error descriptions."""
+        from config import PSM_ERRORS
+        errors = []
+        if not status_hex:
+            return errors
+        try:
+            status_int = int(status_hex, 16)
+            for i, error_desc in enumerate(PSM_ERRORS):
+                if status_int & (1 << i):
+                    errors.append(error_desc)
+        except (ValueError, TypeError):
+            pass
+        return errors
+
     # convert PSM notes hex to binary and update liquid mode settings
     def update_notes(self, note_hex):
         liquid_errors = 0 # increment if liquid errors occur
@@ -554,10 +569,22 @@ class PSMWidget(ComplexDevice):
 
                 # Note: polynomial correction already stored in self.current_data.poly_correction
 
-                # Set error flags
+                # Set error flags and record to error history
                 if parsed.get('has_errors', False):
                     data_holder.error_status = 1
                     data_holder.device_errors[self.dev_id] = True
+                    # Record error to history with decoded description
+                    status_hex = parsed.get('status_hex', '')
+                    error_descriptions = self._decode_error_hex(status_hex)
+                    device_name = getattr(self, 'device_nickname', None) or 'PSM'
+                    data_holder.error_history.add_error(
+                        device_id=self.dev_id,
+                        device_name=device_name,
+                        error_type='device_error',
+                        description='; '.join(error_descriptions) if error_descriptions else 'Device error detected',
+                        error_code=status_hex,
+                        severity='error'
+                    )
 
             elif parsed['type'] == 'settings':
                 # Store PRNT settings (legacy - settings already in self.settings dataclass)
@@ -1160,6 +1187,17 @@ class PSMWidget(ComplexDevice):
         if connected_cpc_id == 'None':
             data_holder.error_status = 1
             data_holder.device_errors[dev_id] = True
+            # Record warning to error history (only once per session would be better, but this runs every second)
+            # We'll let the ring buffer handle deduplication by keeping recent errors
+            device_name = getattr(self, 'device_nickname', None) or 'PSM'
+            data_holder.error_history.add_error(
+                device_id=dev_id,
+                device_name=device_name,
+                error_type='configuration_warning',
+                description='No CPC connected to PSM - CPC connection required for proper operation',
+                error_code='',
+                severity='warning'
+            )
         else:
             # Convert to int for comparison (JSON stores as string)
             try:

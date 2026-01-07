@@ -134,6 +134,17 @@ class DeviceManager(QObject):
                     # Log disconnection
                     logging.info(f"[SERIAL DISCONNECT] DevID={dev_id} Port={port}")
 
+                    # Record disconnection to error history
+                    device_name = getattr(device_widget, 'device_nickname', None) or device_config.device_type_name
+                    self.data_holder.error_history.add_error(
+                        device_id=dev_id,
+                        device_name=device_name,
+                        error_type='disconnection',
+                        description=f'Device disconnected from port {port}',
+                        error_code='',
+                        severity='warning'
+                    )
+
                     # Device-specific cleanup
                     device_widget.on_disconnection()
 

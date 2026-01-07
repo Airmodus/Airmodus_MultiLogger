@@ -3453,6 +3453,15 @@ class PSMContourTab(QWidget):
         file_path = self.app_config.data_settings.file_path
         file_tag = self.app_config.data_settings.file_tag
 
+        # Check if file path is configured
+        if not file_path:
+            print("[CSV LOAD] ERROR: No file path configured in data settings")
+            self._loading_in_progress = False
+            self._hide_loading_overlay()
+            self.load_history_btn.setEnabled(True)
+            self.load_history_btn.setText("Load History")
+            return
+
         # Cancel any existing loader thread
         if self._loader_thread is not None and self._loader_thread.isRunning():
             self._loader_thread.cancel()
@@ -3477,35 +3486,43 @@ class PSMContourTab(QWidget):
         self._pending_scans = []  # Collect scans for batch processing
 
         # Check for existing inversion CSV files first (fast path - no re-inversion needed)
+        print(f"[CSV LOAD] Looking for CSV files in: {file_path}, serial: {serial_number}, hours: {self.time_window_hours}")
         csv_files = find_inversion_csv_files(
             file_path,
             serial_number=serial_number,
             hours=self.time_window_hours
         )
+        print(f"[CSV LOAD] Found {len(csv_files)} CSV files: {csv_files}")
 
         if csv_files and self.bin_limits_dp is not None:
             # Try to load from CSV
             csv_scans, bins_match = self._load_from_inversion_csv(csv_files)
+            print(f"[CSV LOAD] Load result: bins_match={bins_match}, scans={len(csv_scans) if csv_scans else 0}")
             if bins_match and csv_scans:
                 # Check if any scans are within the time window
                 now = pd.Timestamp.now()
                 time_window_ago = now - pd.Timedelta(hours=self.time_window_hours)
                 scans_in_window = [s for s in csv_scans if pd.Timestamp(s['time']) >= time_window_ago]
+                print(f"[CSV LOAD] Time window: {time_window_ago} to {now}, scans in window: {len(scans_in_window)}")
+                if csv_scans:
+                    print(f"[CSV LOAD] First scan time: {csv_scans[0]['time']}, Last scan time: {csv_scans[-1]['time']}")
 
                 if scans_in_window:
                     # Successfully loaded from CSV with scans in time window
                     self.scan_buffer = csv_scans
-                    logging.info(f"Loaded {len(csv_scans)} scans from inversion CSV files ({len(scans_in_window)} in time window)")
+                    print(f"[CSV LOAD] SUCCESS: Loaded {len(csv_scans)} scans ({len(scans_in_window)} in time window)")
                     self._finish_csv_loading()
                     return
                 else:
                     # CSV scans exist but all outside time window - fall back to .dat loading
-                    logging.info(f"CSV has {len(csv_scans)} scans but none within {self.time_window_hours}h window, loading from .dat files")
+                    print(f"[CSV LOAD] CSV has {len(csv_scans)} scans but none within {self.time_window_hours}h window, falling back to .dat")
                     self.scan_buffer = []
             else:
                 # Bin mismatch or parse error - fall back to .dat loading
-                logging.info("CSV bin structure doesn't match current calibration, loading from .dat files")
+                print(f"[CSV LOAD] Bin mismatch or no scans, falling back to .dat loading")
                 self.scan_buffer = []
+        else:
+            print(f"[CSV LOAD] Skipping CSV: csv_files={len(csv_files) if csv_files else 0}, bin_limits_dp={'set' if self.bin_limits_dp is not None else 'None'}")
 
         # Get connected CPC serial number for 10Hz data lookup
         connected_cpc_serial = None

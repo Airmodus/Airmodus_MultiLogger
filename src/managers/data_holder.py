@@ -1,7 +1,118 @@
 from numpy import full, nan
 from time import time
+from collections import deque
+from dataclasses import dataclass
+from typing import Optional, List, Literal
 from utils import _manage_plot_array
 from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, TSI_CPC)
+
+
+@dataclass
+class ErrorEvent:
+    """Represents a single error event for diagnostics."""
+    timestamp: float  # Unix timestamp
+    device_id: Optional[int]  # None for global errors
+    device_name: str  # Device name or "System"
+    error_type: str  # e.g., "device_error", "disconnection", "save_error", "warning"
+    error_code: str  # Raw error code/hex if available
+    description: str  # Human-readable description
+    severity: Literal['info', 'warning', 'error', 'critical']
+
+
+class ErrorHistoryManager:
+    """
+    Manages a history of error events for diagnostics.
+
+    Stores recent errors in a ring buffer to prevent unbounded memory growth.
+    Provides methods to add errors and retrieve error history.
+    """
+
+    MAX_ERRORS = 500  # Keep last 500 error events
+
+    def __init__(self):
+        self._errors: deque[ErrorEvent] = deque(maxlen=self.MAX_ERRORS)
+        self._error_counts: dict[int, int] = {}  # device_id -> error count this session
+
+    def add_error(
+        self,
+        device_id: Optional[int],
+        device_name: str,
+        error_type: str,
+        description: str,
+        error_code: str = "",
+        severity: Literal['info', 'warning', 'error', 'critical'] = 'error'
+    ) -> None:
+        """
+        Record an error event.
+
+        Args:
+            device_id: Device ID or None for system errors
+            device_name: Device name for display
+            error_type: Category of error (device_error, disconnection, save_error, etc.)
+            description: Human-readable error description
+            error_code: Raw error code/hex if available
+            severity: Error severity level
+        """
+        event = ErrorEvent(
+            timestamp=time(),
+            device_id=device_id,
+            device_name=device_name,
+            error_type=error_type,
+            error_code=error_code,
+            description=description,
+            severity=severity
+        )
+        self._errors.append(event)
+
+        # Track error count per device
+        if device_id is not None:
+            self._error_counts[device_id] = self._error_counts.get(device_id, 0) + 1
+
+    def get_all_errors(self) -> List[ErrorEvent]:
+        """Get all stored error events (oldest first)."""
+        return list(self._errors)
+
+    def get_recent_errors(self, count: int = 50) -> List[ErrorEvent]:
+        """Get the most recent N error events (newest first)."""
+        errors = list(self._errors)
+        errors.reverse()
+        return errors[:count]
+
+    def get_errors_for_device(self, device_id: int) -> List[ErrorEvent]:
+        """Get all errors for a specific device."""
+        return [e for e in self._errors if e.device_id == device_id]
+
+    def get_error_count(self, device_id: Optional[int] = None) -> int:
+        """Get total error count, optionally filtered by device."""
+        if device_id is None:
+            return len(self._errors)
+        return self._error_counts.get(device_id, 0)
+
+    def get_errors_since(self, since_timestamp: float) -> List[ErrorEvent]:
+        """Get all errors since a given timestamp."""
+        return [e for e in self._errors if e.timestamp >= since_timestamp]
+
+    def clear(self) -> None:
+        """Clear all stored errors."""
+        self._errors.clear()
+        self._error_counts.clear()
+
+    def to_dict_list(self) -> List[dict]:
+        """Convert error history to list of dicts for JSON export."""
+        from datetime import datetime
+        result = []
+        for e in self._errors:
+            result.append({
+                'timestamp': e.timestamp,
+                'timestamp_iso': datetime.fromtimestamp(e.timestamp).isoformat(),
+                'device_id': e.device_id,
+                'device_name': e.device_name,
+                'error_type': e.error_type,
+                'error_code': e.error_code,
+                'description': e.description,
+                'severity': e.severity
+            })
+        return result
 
 class DataHolder:
     """Holds all app data dicts/lists. No logic—just storage."""
@@ -26,6 +137,8 @@ class DataHolder:
         self.par_updates = {} # contains .par update flags: 1 = update, 0 = no update
         self.device_errors = {} # contains device error flags: 0 = ok, 1 = errors
         self.idn_inquiry_devices = [] # contains IDs of devices that need IDN inquiry
+        # Error history for diagnostics
+        self.error_history = ErrorHistoryManager()
         # Device names (static, move here for centralization)
         self.device_names = {CPC: 'CPC', PSM: 'PSM', ELECTROMETER: 'Electrometer', CO2_SENSOR: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', EDILUTER: 'eDiluter', TSI_CPC: 'TSI CPC', EXAMPLE_DEVICE: 'Example device'}  # PSM2 removed - version determined by firmware
 
@@ -37,6 +150,7 @@ class DataHolder:
         self.max_reached = False # flag for checking if MAX_TIME_SEC has been reached
         self.error_status = 0
         self.saving_status = 1
+        self.last_save_error = None  # Store last save error message for diagnostics
 
         self.start_day = None  # For daily rollover
         self.last_write_timestamp = None  # Last successful write time

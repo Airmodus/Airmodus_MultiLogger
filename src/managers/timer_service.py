@@ -188,9 +188,8 @@ class TimerService:
                                 averager.records_written += 1
                                 cpc_widget.database_tab.update_record_count(averager.records_written)
 
-                                # Update latest data table
-                                latest_rows = self.main_window.database_manager.get_latest_rows(10, dev_id)
-                                cpc_widget.database_tab.update_data_table(latest_rows)
+                                # Update latest data table (uses tab's row count setting)
+                                cpc_widget.database_tab.refresh_preview()
                         else:
                             # Show error
                             if hasattr(cpc_widget, 'database_tab'):
