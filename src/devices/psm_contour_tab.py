@@ -1816,8 +1816,8 @@ class PSMContourTab(QWidget):
         - cal_maxdeteff (detection efficiency)
         """
         try:
-            # Read calibration file
-            self.calibration_df = pd.read_csv(file_path, delimiter='\t')
+            # Read calibration file (header=None because file has no header row)
+            self.calibration_df = pd.read_csv(file_path, delimiter='\t', header=None)
 
             # Ensure required columns exist
             if len(self.calibration_df.columns) < 3:
