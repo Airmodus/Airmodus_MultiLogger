@@ -174,5 +174,3 @@ cython_debug/
 /tmp
 *.csv
 *.txt
-
-!20260106_000001_9182501_PSM2_PSM 9182_dNdlogDp.csv
