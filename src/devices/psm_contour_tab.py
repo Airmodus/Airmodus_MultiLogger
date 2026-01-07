@@ -479,6 +479,13 @@ class PSMContourTab(QWidget):
         self.date_label.setStyleSheet("color: #888; font-size: 11px;")
         top_bar.addWidget(self.date_label)
 
+        top_bar.addSpacing(15)
+
+        # Calibration file label
+        self.cal_file_label = QLabel("")
+        self.cal_file_label.setStyleSheet("color: #888; font-size: 11px;")
+        top_bar.addWidget(self.cal_file_label)
+
         top_bar.addStretch()
 
         # Scan progress indicator
@@ -1872,6 +1879,9 @@ class PSMContourTab(QWidget):
                 self.plot_initialized = True
             self.plot_widget.show()
 
+            # Update calibration file label
+            self.cal_file_label.setText(f"Cal: {self.calibration_filename}")
+
             # Create bin checkboxes for time-series plot
             self._create_bin_checkboxes()
 
@@ -2292,6 +2302,7 @@ class PSMContourTab(QWidget):
         self.calibration_loaded = False
         self._historical_data_loaded = False  # Reset flag
         self.calibration_df = None
+        self.calibration_filename = None
         self.bin_limits_dp = None
         self.bin_centers_dp = None
         self.bin_limits_flow = None
@@ -2301,6 +2312,10 @@ class PSMContourTab(QWidget):
 
         # Clear parameter
         self.device_config.extra_params['calibration_file_path'] = ''
+
+        # Clear calibration file label
+        if hasattr(self, 'cal_file_label'):
+            self.cal_file_label.setText("")
 
         # Switch back to prompt view
         self.plot_widget.hide()

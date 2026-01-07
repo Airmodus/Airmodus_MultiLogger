@@ -230,19 +230,24 @@ def setup_psm_connections(widget, device_config, connection, app):
         connection.send_message(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())])
     widget.set_tab.drying.clicked.connect(on_drying_toggled)
 
-    # Simple mode "Bottles Connected" toggle - controls autofill+drain and flow mode
-    def on_bottles_connected_toggled():
+    # Simple mode individual toggle connections
+    def on_simple_autofill_toggled():
         import time
-        # Set cooldown to ignore device feedback for 2 seconds after user click
-        widget.control_tab._bottles_toggle_cooldown = time.time() + 2.0
-        is_connected = widget.control_tab.simple_bottles_connected.isChecked()
-        state = str(int(is_connected))
-        connection.send_message(":SET:AFLL " + state)
-        connection.send_message(":SET:DRN " + state)
-        # If bottles disconnected (OFF), set idle mode with low flow
-        if not is_connected:
-            connection.send_message(":SET:FLOW:FXD 0.1")
-    widget.control_tab.simple_bottles_connected.clicked.connect(on_bottles_connected_toggled)
+        widget.control_tab._autofill_cooldown = time.time() + 2.0
+        connection.send_message(":SET:AFLL " + str(int(widget.control_tab.simple_autofill.isChecked())))
+    widget.control_tab.simple_autofill.clicked.connect(on_simple_autofill_toggled)
+
+    def on_simple_drain_toggled():
+        import time
+        widget.control_tab._drain_cooldown = time.time() + 2.0
+        connection.send_message(":SET:DRN " + str(int(widget.control_tab.simple_drain.isChecked())))
+    widget.control_tab.simple_drain.clicked.connect(on_simple_drain_toggled)
+
+    def on_simple_drying_toggled():
+        import time
+        widget.control_tab._drying_cooldown = time.time() + 2.0
+        connection.send_message(widget.control_tab.simple_drying.messages[int(widget.control_tab.simple_drying.isChecked())])
+    widget.control_tab.simple_drying.clicked.connect(on_simple_drying_toggled)
 
 
 def setup_ediluter_connections(widget, device_config, connection, app):

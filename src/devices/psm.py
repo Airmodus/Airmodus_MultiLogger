@@ -384,15 +384,13 @@ class PSMWidget(ComplexDevice):
         # Update advanced mode toggles (respecting cooldowns)
         if now >= self.control_tab._autofill_cooldown:
             self.set_tab.autofill.update_state(1 if autofill_on else 0)
+            self.control_tab.simple_autofill.update_state(1 if autofill_on else 0)
         if now >= self.control_tab._drain_cooldown:
             self.set_tab.drain.update_state(1 if drain_on else 0)
+            self.control_tab.simple_drain.update_state(1 if drain_on else 0)
         if now >= self.control_tab._drying_cooldown:
             self.set_tab.drying.update_state(1 if drying_on else 0)
-
-        # Update simple mode bottles toggle based on actual device state
-        # Bottles "ON" = both autofill AND drain are on
-        # Show custom indicator if states don't match
-        self.control_tab.update_bottles_state(autofill_on, drain_on)
+            self.control_tab.simple_drying.update_state(1 if drying_on else 0)
         # 0 = saturator liquid level OK, 1 = saturator liquid level LOW
         self.control_tab.liquid_saturator.change_color(inverted_note_bin[6])
         self.control_tab.simple_liquid_saturator.change_color(inverted_note_bin[6])
@@ -1247,7 +1245,6 @@ class PSMControlTab(QWidget):
         self._advanced_mode = False
 
         # Cooldown timestamps to ignore device feedback after user clicks toggles
-        self._bottles_toggle_cooldown = 0
         self._autofill_cooldown = 0
         self._drain_cooldown = 0
         self._drying_cooldown = 0
@@ -1309,36 +1306,6 @@ class PSMControlTab(QWidget):
         """Set mode programmatically (for restoring from settings)."""
         if advanced != self._advanced_mode:
             self._toggle_mode()
-
-    def update_bottles_state(self, autofill_on: bool, drain_on: bool):
-        """Update simple mode bottles toggle based on actual autofill/drain state.
-
-        Shows:
-        - "Bottles: ON" if both autofill and drain are on
-        - "Bottles: OFF" if both are off
-        - Custom indicator if states don't match (advanced mode config)
-        """
-        import time
-        # Ignore device feedback briefly after user clicks toggle (debounce)
-        if time.time() < self._bottles_toggle_cooldown:
-            return
-
-        if autofill_on and drain_on:
-            # Normal operation - both on
-            self.simple_bottles_connected.update_state(1)
-            self.simple_bottles_connected.name = "Bottles"
-        elif not autofill_on and not drain_on:
-            # Both off - idle mode
-            self.simple_bottles_connected.update_state(0)
-            self.simple_bottles_connected.name = "Bottles"
-        else:
-            # Mismatch - show as custom/advanced configuration
-            self.simple_bottles_connected.update_state(0)
-            if autofill_on and not drain_on:
-                self.simple_bottles_connected.name = "Bottles (drain off)"
-            else:  # drain on but autofill off
-                self.simple_bottles_connected.name = "Bottles (autofill off)"
-        self.simple_bottles_connected.update()  # Force repaint
 
     def _create_simple_mode_view(self):
         """Create the simple mode view with read-only status widgets."""
@@ -1429,9 +1396,15 @@ class PSMControlTab(QWidget):
         controls_layout.setContentsMargins(4, 4, 4, 4)
         controls_layout.setAlignment(Qt.AlignTop)
 
-        # Single toggle for bottles connected state (controls autofill+drain+flow mode)
-        self.simple_bottles_connected = ToggleSwitch("Bottles", "Liquid bottles connected - enables autofill and normal operation")
-        controls_layout.addWidget(self.simple_bottles_connected)
+        # Individual toggles for autofill, drain, and drying
+        self.simple_autofill = ToggleSwitch("Autofill", "Automatically refill saturator liquid when low")
+        controls_layout.addWidget(self.simple_autofill)
+
+        self.simple_drain = ToggleSwitch("Drain", "Enable liquid drainage from the system")
+        controls_layout.addWidget(self.simple_drain)
+
+        self.simple_drying = ToggleSwitch("Drying", "Run drying cycle to remove moisture")
+        controls_layout.addWidget(self.simple_drying)
 
         controls_group.setLayout(controls_layout)
         status_row.addWidget(controls_group, 1)
