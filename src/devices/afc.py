@@ -3,7 +3,7 @@ from widgets import SetWidget, IndicatorWidget
 from plots.device_plots import SinglePlot
 from config import AFC
 from devices.base_device import ComplexDevice
-from devices.device_data import AFCData, AFCSettings
+from devices.device_data import AFCData
 from plotting.device_plot_configs import AFCPlotConfig
 from devices.data_writers import AFCDataWriter
 
@@ -14,7 +14,6 @@ class AFCWidget(ComplexDevice):
 
         # Initialize current data and settings
         self.current_data = AFCData()
-        self.current_settings = AFCSettings()
 
         # Plot configuration (composition over inheritance)
         self.plot_config = AFCPlotConfig(self)
@@ -25,9 +24,9 @@ class AFCWidget(ComplexDevice):
         self.plot_tab = SinglePlot(device_type=AFC)
         self.addTab(self.plot_tab, "Plot")
 
-        # create set tab for flow setpoint
-        self.set_tab = AFCSetTab()
-        self.addTab(self.set_tab, "Set")
+        # create control tab for flow setpoint and monitor value
+        self.control_tab = AFCControlTab()
+        self.addTab(self.control_tab, "Control")
 
         # Add Device tab at the end
         self._add_device_tab_at_end()
@@ -75,9 +74,8 @@ class AFCWidget(ComplexDevice):
                     self.current_data.flow = float(data[0])
                     self.current_data.average_flow = float(data[1])
                     self.current_data.temperature = float(data[2])
+                    self.current_data.flow_setpoint = float(data[3])
                     self.current_data.error_status = int(data[4])
-                    # update flow setpoint in settings
-                    self.current_settings.flow_setpoint = float(data[3])
 
                     # update GUI elements
                     self.update_errors()
@@ -125,18 +123,18 @@ class AFCWidget(ComplexDevice):
     
     def update_errors(self):
         """Update AFC error status in the GUI."""
-        self.set_tab.measured_flow.change_color(self.current_data.error_status)
+        self.control_tab.measured_flow.change_color(self.current_data.error_status)
     
     def update_settings(self):
         """Update AFC settings in the GUI."""
-        if self.set_tab.set_flow.value_spinbox.value() != self.current_settings.flow_setpoint:
-            self.set_tab.set_flow.value_spinbox.setValue(self.current_settings.flow_setpoint)
+        if self.control_tab.set_flow.value_spinbox.value() != self.current_data.flow_setpoint:
+            self.control_tab.set_flow.value_spinbox.setValue(self.current_data.flow_setpoint)
     
     def update_values(self):
         """Update AFC measured values in the GUI."""
-        self.set_tab.measured_flow.change_value(str(self.current_data.flow) + " slm")
+        self.control_tab.measured_flow.change_value(str(self.current_data.flow) + " slm")
 
-class AFCSetTab(QWidget):
+class AFCControlTab(QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         layout = QVBoxLayout()

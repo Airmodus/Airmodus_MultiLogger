@@ -1,5 +1,9 @@
 # Airmodus MultiLogger - Software change log
 
+### 0.11.4 - 2026.01.07
+- renamed AFC "Set" tab to "Control"
+- removed AFCSettings, moved flow_setpoint to AFCData
+
 ### 0.11.3 - 2025.12.15
 - AFC device type detection
 - AFM value saturator_flow renamed to standard_flow

@@ -245,10 +245,10 @@ def setup_tsi_cpc_connections(widget, device_config, connection, app):
 def setup_afc_connections(widget, device_config, connection, app):
     """Set up AFC-specific connections."""
     # Flow setpoint
-    widget.set_tab.set_flow.value_spinbox.stepChanged.connect(
+    widget.control_tab.set_flow.value_spinbox.stepChanged.connect(
         lambda value: connection.send_set_val(value, ":SET:FLOW "))
-    widget.set_tab.set_flow.value_input.returnPressed.connect(
-        lambda: connection.send_set_val(float(widget.set_tab.set_flow.value_input.text()), ":SET:FLOW "))    
+    widget.control_tab.set_flow.value_input.returnPressed.connect(
+        lambda: connection.send_set_val(float(widget.control_tab.set_flow.value_input.text()), ":SET:FLOW "))    
 
 
 from devices.cpc import CPCWidget

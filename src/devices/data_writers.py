@@ -223,7 +223,7 @@ class RHTPDataWriter(BaseDataWriter):
 
 
 class AFMDataWriter(BaseDataWriter):
-    """Data writer for AFM (Air Flow Meter) devices."""
+    """Data writer for AFM (Airmodus Flow Meter) devices."""
 
     def get_dat_header(self):
         """Return AFM .dat file header."""

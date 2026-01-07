@@ -231,6 +231,7 @@ class AFCData:
     flow: float = nan               # slm (standard liters per minute)
     average_flow: float = nan       # slm average (10 seconds)
     temperature: float = nan        # °C
+    flow_setpoint: float = nan      # slm setpoint
     error_status: int = 0           # 0 = no error, 1 = error
 
     def to_array(self) -> list:
@@ -239,6 +240,7 @@ class AFCData:
             self.flow,
             self.average_flow,
             self.temperature,
+            self.flow_setpoint,
             self.error_status
         ]
 
@@ -449,18 +451,6 @@ class PSMSettings:
         return result
 
 
-@dataclass
-class AFCSettings:
-    """AFC settings structure."""
-    flow_setpoint: float = nan      # slm setpoint
-    
-    def to_array(self) -> list:
-        """Convert to array for legacy code."""
-        return [
-            self.flow_setpoint
-        ]
-
-
 def create_device_settings(device_type):
     """
     Create appropriate settings object for device type.
@@ -476,8 +466,6 @@ def create_device_settings(device_type):
         return CPCSettings()
     elif device_type in [PSM, PSM2]:
         return PSMSettings()
-    elif device_type == AFC:
-        return AFCSettings()
 
     # Other devices don't have typed settings yet
     return None
