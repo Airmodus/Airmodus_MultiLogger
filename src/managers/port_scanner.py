@@ -69,6 +69,7 @@ class PortScannerThread(QThread):
 
     def __init__(self, continuous_monitoring: bool = False,
                  max_workers: int = 5, poll_interval: float = POLL_INTERVAL_SLOW,
+                 shared_known_ports: set = None, shared_port_info_cache: dict = None,
                  parent=None):
         """
         Initialize the port scanner thread.
@@ -77,6 +78,8 @@ class PortScannerThread(QThread):
             continuous_monitoring: If True, continuously monitor for port changes
             max_workers: Maximum number of concurrent port queries
             poll_interval: Interval between port scans in seconds
+            shared_known_ports: Shared set of known port names (for incremental scanning)
+            shared_port_info_cache: Shared dict of port info cache (for incremental scanning)
             parent: Parent QObject
         """
         super().__init__(parent)
@@ -84,20 +87,22 @@ class PortScannerThread(QThread):
         self.max_workers = max_workers
         self._stop_requested = False
         self._mutex = QMutex()
-        self._known_ports = set()
-        self._port_info_cache = {}  # Cache port information
+        # Use shared cache if provided, otherwise use local (for continuous monitoring)
+        self._known_ports = shared_known_ports if shared_known_ports is not None else set()
+        self._port_info_cache = shared_port_info_cache if shared_port_info_cache is not None else {}
         self.inquiry_timeout = 0.8  # Timeout for IDN queries
         self.connection_timeout = 0.2  # Timeout for opening serial connections
         self._poll_interval = poll_interval  # Dynamic polling interval
 
     def stop(self):
-        """Request the thread to stop and clear caches."""
+        """Request the thread to stop.
+
+        Note: Caches are NOT cleared here because they may be shared with
+        PortScannerManager for incremental scanning.
+        """
         with QMutexLocker(self._mutex):
             self._stop_requested = True
         self.wait()  # Wait for thread to finish
-        # Clear caches to prevent memory leaks
-        self._port_info_cache.clear()
-        self._known_ports.clear()
 
     def is_stop_requested(self) -> bool:
         """Check if stop has been requested."""
@@ -127,55 +132,94 @@ class PortScannerThread(QThread):
             self._run_single_scan()
 
     def _run_single_scan(self):
-        """Perform a single port scan with progressive discovery."""
+        """Perform an incremental port scan - only queries NEW ports.
+
+        Known ports return cached information without sending IDN commands.
+        This prevents unnecessarily bombarding devices with IDN queries.
+        """
         try:
             discovered_ports = []
 
             # Get list of all available ports
             ports_list = list(serial.tools.list_ports.comports())
+            current_port_names = {p.device for p in ports_list}
+            port_info_map = {p.device: p for p in ports_list}
             total_ports = len(ports_list)
 
             if total_ports == 0:
+                self._known_ports.clear()
+                self._port_info_cache.clear()
                 self.scan_complete.emit([])
                 return
 
-            # Use ThreadPoolExecutor for parallel port queries
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                # Submit all port queries
-                future_to_port = {}
-                for i, port_info in enumerate(ports_list):
-                    if self.is_stop_requested():
-                        break
+            # Find new and removed ports
+            new_ports = current_port_names - self._known_ports
+            removed_ports = self._known_ports - current_port_names
 
-                    future = executor.submit(self._query_single_port, port_info)
-                    future_to_port[future] = (i, port_info)
+            # Clean up removed ports from cache
+            for port in removed_ports:
+                self._port_info_cache.pop(port, None)
 
-                # Process results as they complete (progressive discovery)
-                completed = 0
-                for future in as_completed(future_to_port):
-                    if self.is_stop_requested():
-                        executor.shutdown(wait=False)
-                        break
+            # Return cached info for known ports (no IDN query needed)
+            cached_count = 0
+            for port in (current_port_names & self._known_ports):
+                if port in self._port_info_cache:
+                    port_data = self._port_info_cache[port]
+                    discovered_ports.append(port_data)
+                    self.port_discovered.emit(port_data.to_dict())
+                    cached_count += 1
 
-                    completed += 1
-                    idx, original_port_info = future_to_port[future]
+            # Emit progress for cached ports
+            if cached_count > 0:
+                self.scan_progress.emit(cached_count, total_ports)
 
-                    try:
-                        port_data = future.result(timeout=self.inquiry_timeout + 0.5)
-                        if port_data:
+            # Only query NEW ports with IDN command
+            if new_ports:
+                new_port_infos = [port_info_map[p] for p in new_ports if p in port_info_map]
+
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    # Submit queries only for new ports
+                    future_to_port = {}
+                    for i, port_info in enumerate(new_port_infos):
+                        if self.is_stop_requested():
+                            break
+
+                        future = executor.submit(self._query_single_port, port_info)
+                        future_to_port[future] = (i, port_info)
+
+                    # Process results as they complete (progressive discovery)
+                    completed = cached_count
+                    for future in as_completed(future_to_port):
+                        if self.is_stop_requested():
+                            executor.shutdown(wait=False)
+                            break
+
+                        completed += 1
+                        idx, original_port_info = future_to_port[future]
+
+                        try:
+                            port_data = future.result(timeout=self.inquiry_timeout + 0.5)
+                            if port_data:
+                                discovered_ports.append(port_data)
+                                # Cache the new port info
+                                self._port_info_cache[port_data.port] = port_data
+                                self.port_discovered.emit(port_data.to_dict())
+                        except Exception as e:
+                            # Create basic port info even if query failed
+                            port_data = PortInfo(
+                                port=original_port_info.device,
+                                description=original_port_info.description or "",
+                                status='error'
+                            )
                             discovered_ports.append(port_data)
+                            self._port_info_cache[port_data.port] = port_data
                             self.port_discovered.emit(port_data.to_dict())
-                    except Exception as e:
-                        # Create basic port info even if query failed
-                        port_data = PortInfo(
-                            port=original_port_info.device,
-                            description=original_port_info.description or "",
-                            status='error'
-                        )
-                        discovered_ports.append(port_data)
-                        self.port_discovered.emit(port_data.to_dict())
 
-                    self.scan_progress.emit(completed, total_ports)
+                        self.scan_progress.emit(completed, total_ports)
+
+            # Update known ports
+            self._known_ports.clear()
+            self._known_ports.update(current_port_names)
 
             # Emit complete signal with all discovered ports
             if not self.is_stop_requested():
@@ -516,10 +560,16 @@ class PortScannerManager:
     def __init__(self):
         self.scanner_thread = None
         self.monitoring_thread = None
+        # Shared cache that persists across scans to avoid re-querying known ports
+        self._known_ports = set()
+        self._port_info_cache = {}  # port -> PortInfo
 
     def start_single_scan(self, callback_discovered=None, callback_complete=None):
         """
         Start a single port scan.
+
+        This scan is incremental - it only queries NEW ports that haven't been
+        seen before. Known ports return cached information without sending IDN commands.
 
         Args:
             callback_discovered: Function to call when port is discovered
@@ -528,7 +578,12 @@ class PortScannerManager:
         if self.scanner_thread and self.scanner_thread.isRunning():
             return  # Scan already in progress
 
-        self.scanner_thread = PortScannerThread(continuous_monitoring=False)
+        # Pass shared cache so scan is incremental (only queries new ports)
+        self.scanner_thread = PortScannerThread(
+            continuous_monitoring=False,
+            shared_known_ports=self._known_ports,
+            shared_port_info_cache=self._port_info_cache
+        )
 
         if callback_discovered:
             self.scanner_thread.port_discovered.connect(callback_discovered)
@@ -564,6 +619,14 @@ class PortScannerManager:
         if self.monitoring_thread:
             self.monitoring_thread.stop()
 
+    def clear_cache(self):
+        """Clear the port info cache to force a full re-scan on next scan.
+
+        Call this if you need to re-query all devices (e.g., device swapped on same port).
+        """
+        self._known_ports.clear()
+        self._port_info_cache.clear()
+
     def set_fast_mode(self, enabled: bool):
         """
         Set the port scanning speed mode.
@@ -578,16 +641,14 @@ class PortScannerManager:
 
     def get_port_info(self) -> dict:
         """
-        Get current port information from the monitoring thread's cache.
+        Get current port information from the manager's cache.
 
         Returns:
             Dictionary mapping port names to their info dicts.
             Example: {'COM3': {'device_type': 'CPC', 'serial_number': 'A12-1234', ...}}
         """
-        if self.monitoring_thread and hasattr(self.monitoring_thread, '_port_info_cache'):
-            # Convert PortInfo objects to dicts
-            return {
-                port: info.to_dict()
-                for port, info in self.monitoring_thread._port_info_cache.items()
-            }
-        return {}
+        # Return the manager's shared cache (used by both single scans and monitoring)
+        return {
+            port: info.to_dict()
+            for port, info in self._port_info_cache.items()
+        }

@@ -1,6 +1,7 @@
 from PyQt5.QtCore import QTimer, Qt
 from time import time, sleep
 from datetime import datetime as dt
+import logging
 from config import TIMER_DELAY_MS, MAX_TIME_SEC
 
 class TimerService:
@@ -20,14 +21,12 @@ class TimerService:
         sync_time = start_time - int(start_time)
         sleep(1 - sync_time)
         self.timer.start(1000)
-        print("Timer start time:", time())
 
     def stop(self):
         self.timer.stop()
 
     def restart(self):
         self.stop()
-        print("Restarting timer...")
         self.start()
         self.timer_functions()  # Call immediately after restart
 
@@ -45,9 +44,7 @@ class TimerService:
                     from PyQt5.QtCore import QTimer
                     QTimer.singleShot(TIMER_DELAY_MS, self._safe_delayed_functions)
         except Exception as e:
-            print(f"Error in timer_functions: {e}")
-            import traceback
-            traceback.print_exc() 
+            logging.error(f"Error in timer_functions: {e}")
 
     def _safe_delayed_functions(self):
         """Wrapper that prevents overlapping execution and handles errors."""
@@ -55,9 +52,7 @@ class TimerService:
         try:
             self.delayed_functions()
         except Exception as e:
-            print(f"Error in delayed_functions: {e}")
-            import traceback
-            traceback.print_exc()
+            logging.error(f"Error in delayed_functions: {e}")
         finally:
             self._delayed_running = False
 
@@ -193,9 +188,8 @@ class TimerService:
                                 averager.records_written += 1
                                 cpc_widget.database_tab.update_record_count(averager.records_written)
 
-                                # Update latest data table
-                                latest_rows = self.main_window.database_manager.get_latest_rows(10, dev_id)
-                                cpc_widget.database_tab.update_data_table(latest_rows)
+                                # Update latest data table (uses tab's row count setting)
+                                cpc_widget.database_tab.refresh_preview()
                         else:
                             # Show error
                             if hasattr(cpc_widget, 'database_tab'):

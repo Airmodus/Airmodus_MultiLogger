@@ -59,7 +59,8 @@ class CPCData:
             self.pres_nozzle,
             self.pres_cabin,
             self.liquid_level,
-            self.pulse_ratio,
+            self.laser_current,       # [12] - laser current for laser power display
+            self.pulse_ratio,         # [13] - pulse ratio for pulse quality display
             self.total_errors,
             self.status_hex
         ]
@@ -110,8 +111,8 @@ class PSMData:
         """Convert to array in order expected by legacy code."""
         # Build base PSM data up to scan_status (indices 0-14 in legacy)
         base = [
-            nan,  # [legacy 0: placeholder]
-            nan,  # [1: placeholder]
+            self.concentration_psm,  # [0: Concentration from PSM (dilution + poly corrected)]
+            nan,  # [1: Cut-off diameter placeholder - not calculated]
             self.saturator_flow,  # [2: but aligned to legacy sat_flow at ~4; comments below use legacy-ish labels]
             self.excess_flow,  # [~5]
             self.temp_saturator,  # [~6, legacy 3]
@@ -315,7 +316,6 @@ def create_device_data(device_type):
     data_classes = {
         CPC: CPCData,
         PSM: PSMData,
-        PSM2: PSMData,
         ELECTROMETER: ElectrometerData,
         CO2_SENSOR: CO2Data,
         RHTP: RHTPData,
@@ -464,7 +464,7 @@ def create_device_settings(device_type):
 
     if device_type == CPC:
         return CPCSettings()
-    elif device_type in [PSM, PSM2]:
+    elif device_type == PSM:
         return PSMSettings()
 
     # Other devices don't have typed settings yet
@@ -587,6 +587,17 @@ class DeviceConfig:
         raw_port = config_data.get('com_port', '')
         if isinstance(raw_port, int) and raw_port > 0:
             config_data['com_port'] = f"COM{raw_port}"
+
+        # Migrate PSM2 (7) to PSM (2) - version now determined by firmware
+        from config import PSM
+        if config_data.get('device_type') == 7:  # PSM2 legacy constant
+            config_data['device_type'] = PSM
+            config_data['device_type_name'] = 'PSM'
+
+        # Normalize PSM device_type_name (old configs may have "PSM Retrofit" or "PSM 2.0")
+        if config_data.get('device_type') == PSM:
+            if config_data.get('device_type_name') in ('PSM Retrofit', 'PSM 2.0'):
+                config_data['device_type_name'] = 'PSM'
 
         return cls(**config_data)
 

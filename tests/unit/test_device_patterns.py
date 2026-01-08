@@ -23,14 +23,14 @@ class TestDeviceIdentification:
     """Test device type identification from serial numbers."""
 
     def test_psm_20_identification(self):
-        """Test PSM 2.0 pattern matching (serials starting with 9)."""
-        assert DeviceIdentifier.identify_device(serial_number="9142501") == "PSM 2.0"
-        assert DeviceIdentifier.identify_device(serial_number="9123456") == "PSM 2.0"
+        """Test PSM pattern matching for 2.0 serials (starting with 9)."""
+        assert DeviceIdentifier.identify_device(serial_number="9142501") == "PSM"
+        assert DeviceIdentifier.identify_device(serial_number="9123456") == "PSM"
 
     def test_psm_retrofit_identification(self):
-        """Test PSM Retrofit pattern matching (serials starting with 8)."""
-        assert DeviceIdentifier.identify_device(serial_number="8211445616") == "PSM Retrofit"
-        assert DeviceIdentifier.identify_device(serial_number="8123456789") == "PSM Retrofit"
+        """Test PSM pattern matching for Retrofit serials (starting with 8)."""
+        assert DeviceIdentifier.identify_device(serial_number="8211445616") == "PSM"
+        assert DeviceIdentifier.identify_device(serial_number="8123456789") == "PSM"
 
     def test_cpc_identification(self):
         """Test CPC pattern matching."""
@@ -95,14 +95,14 @@ class TestDisplayNameExtraction:
         assert result == "Airmodus RHTP [..001]"
 
     def test_psm_20_with_suffix(self):
-        """Test PSM 2.0 shows last 3 digits (serials starting with 9)."""
-        result = DeviceIdentifier.extract_display_name("9142501", "PSM 2.0")
-        assert result == "Airmodus PSM 2.0 [..501]"
+        """Test PSM shows last 3 digits for 2.0 serials (starting with 9)."""
+        result = DeviceIdentifier.extract_display_name("9142501", "PSM")
+        assert result == "Airmodus PSM [..501]"
 
     def test_psm_retrofit_with_suffix(self):
-        """Test PSM Retrofit shows last 3 digits (serials starting with 8)."""
-        result = DeviceIdentifier.extract_display_name("8211445616", "PSM Retrofit")
-        assert result == "Airmodus PSM Retrofit [..616]"
+        """Test PSM shows last 3 digits for Retrofit serials (starting with 8)."""
+        result = DeviceIdentifier.extract_display_name("8211445616", "PSM")
+        assert result == "Airmodus PSM [..616]"
 
     def test_cpc_z_serial_with_suffix(self):
         """Test CPC with Z-prefix serial shows last 3 digits."""
@@ -136,7 +136,7 @@ class TestDisplayNameExtraction:
         assert result == "Airmodus CPC Jerry"
 
         result = DeviceIdentifier.extract_display_name("9142501")
-        assert result == "Airmodus PSM 2.0 [..501]"
+        assert result == "Airmodus PSM [..501]"
 
     def test_nickname_extraction_with_extra_spaces(self):
         """Test nickname extraction handles extra spaces."""
@@ -183,8 +183,7 @@ class TestEdgeCases:
     def test_all_device_types_listed(self):
         """Test that all device types are accessible."""
         device_types = DeviceIdentifier.get_all_device_types()
-        assert "PSM 2.0" in device_types
-        assert "PSM Retrofit" in device_types
+        assert "PSM" in device_types  # Both Retrofit and 2.0 use PSM type
         assert "CPC" in device_types
         assert "A30 CPC" in device_types
         assert "A20 CPC" in device_types
@@ -202,19 +201,19 @@ class TestIntegerDeviceTypes:
         assert result == "Airmodus CPC [..104]"
 
     def test_psm_retrofit_with_integer_type(self):
-        """Test PSM Retrofit with integer device type constant (2)."""
+        """Test PSM with integer device type constant (2) for Retrofit serial."""
         result = DeviceIdentifier.extract_display_name("8211445616", 2)
-        assert result == "Airmodus PSM Retrofit [..616]"
+        assert result == "Airmodus PSM [..616]"
 
     def test_rhtp_with_integer_type(self):
         """Test RHTP with integer device type constant (5)."""
         result = DeviceIdentifier.extract_display_name("2300001", 5)
         assert result == "Airmodus RHTP [..001]"
 
-    def test_psm2_with_integer_type(self):
-        """Test PSM 2.0 with integer device type constant (7)."""
-        result = DeviceIdentifier.extract_display_name("9142501", 7)
-        assert result == "Airmodus PSM 2.0 [..501]"
+    def test_psm_20_with_integer_type(self):
+        """Test PSM with integer device type constant (2) for 2.0 serial."""
+        result = DeviceIdentifier.extract_display_name("9142501", 2)
+        assert result == "Airmodus PSM [..501]"
 
     def test_electrometer_with_integer_type(self):
         """Test Electrometer with integer device type constant (3)."""

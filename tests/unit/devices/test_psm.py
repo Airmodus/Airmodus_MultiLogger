@@ -23,7 +23,7 @@ sys.path.insert(0, str(src_path))
 
 from devices.psm import PSMWidget
 from devices.device_data import PSMData
-from config import PSM, PSM2
+from config import PSM
 from fixtures.mock_serial_data import MockPSMResponses
 
 
@@ -39,9 +39,6 @@ def psm_retrofit_widget(qapp, mock_psm_config):
     widget.update_values = Mock()
     widget.update_settings = Mock()
     widget.measure_tab.change_mode_color = Mock()
-    widget.measure_tab.scan.change_color = Mock()
-    widget.measure_tab.step.change_color = Mock()
-    widget.measure_tab.fixed.change_color = Mock()
     yield widget
     widget.deleteLater()
 
@@ -54,9 +51,6 @@ def psm2_widget(qapp, mock_psm2_config):
     widget.update_values = Mock()
     widget.update_settings = Mock()
     widget.measure_tab.change_mode_color = Mock()
-    widget.measure_tab.scan.change_color = Mock()
-    widget.measure_tab.step.change_color = Mock()
-    widget.measure_tab.fixed.change_color = Mock()
     yield widget
     widget.deleteLater()
 
@@ -400,11 +394,6 @@ class TestPSMDataArrayConversion:
 class TestPSMCPCIntegration:
     """Test PSM integration with connected CPC."""
 
-    def test_psm_has_connected_cpc_device_reference(self, psm_retrofit_widget):
-        """Test that PSM has a reference for connected CPC device."""
-        assert hasattr(psm_retrofit_widget, 'connected_cpc_device')
-        assert psm_retrofit_widget.connected_cpc_device is None  # Initially None
-
     def test_psm_data_has_cpc_fields(self, psm_retrofit_widget):
         """Test that PSM data structure has fields for CPC data."""
         assert hasattr(psm_retrofit_widget.current_data, 'cpc_concentration')
@@ -496,8 +485,8 @@ class TestPSMCommandSequence:
         # Ensure dilution parameters are None to trigger :SYST:VCMP
         psm_retrofit_widget.settings.dilution_parameters = None
 
-        # Call send_read_commands
-        psm_retrofit_widget.send_read_commands(mock_conn, None)
+        # Call send_read_commands with widget's device_config
+        psm_retrofit_widget.send_read_commands(mock_conn, psm_retrofit_widget.device_config)
 
         # Should send :SYST:PRNT immediately
         mock_conn.send_message.assert_called_once_with(":SYST:PRNT")
@@ -517,8 +506,8 @@ class TestPSMCommandSequence:
         # Set dilution parameters to non-None
         psm_retrofit_widget.settings.dilution_parameters = [1.0, 2.0, 3.0]
 
-        # Call send_read_commands
-        psm_retrofit_widget.send_read_commands(mock_conn, None)
+        # Call send_read_commands with widget's device_config
+        psm_retrofit_widget.send_read_commands(mock_conn, psm_retrofit_widget.device_config)
 
         # Should not send any commands
         mock_conn.send_message.assert_not_called()
@@ -537,8 +526,8 @@ class TestPSMCommandSequence:
         # But dilution parameters still None
         psm_retrofit_widget.settings.dilution_parameters = None
 
-        # Call send_read_commands
-        psm_retrofit_widget.send_read_commands(mock_conn, None)
+        # Call send_read_commands with widget's device_config
+        psm_retrofit_widget.send_read_commands(mock_conn, psm_retrofit_widget.device_config)
 
         # Should only send :SYST:VCMP
         mock_conn.send_message.assert_not_called()

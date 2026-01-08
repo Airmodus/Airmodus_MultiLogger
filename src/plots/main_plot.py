@@ -2,7 +2,8 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QWidget, QVBoxLayout
 from PyQt5.QtCore import Qt
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, LegendItem
-from config import CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, PSM2, AFC, TSI_CPC
+from config import CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, AFC, TSI_CPC
+
 
 # main plot widget
 class MainPlot(QWidget):
@@ -173,9 +174,8 @@ class MainPlot(QWidget):
         axis.label.setFont(QFont("Arial", 12, QFont.Normal)) # change axis label font
 
     def show_hide_axis(self, device_type, show):
-        if device_type == PSM2:
-            axis = self.axes[PSM]
-        elif device_type == TSI_CPC:
+        # TSI CPC uses same axis as Airmodus CPC
+        if device_type == TSI_CPC:
             axis = self.axes[CPC]
         else:
             axis = self.axes[device_type]

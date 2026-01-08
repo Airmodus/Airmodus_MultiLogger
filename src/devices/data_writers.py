@@ -6,7 +6,11 @@ should be written to files, including headers, file types, and
 special cases like 10Hz logging or connected device handling.
 """
 
-from config import CPC, PSM, PSM2
+import os
+import logging
+import numpy as np
+import pandas as pd
+from config import CPC, PSM, version_number, osx_mode
 from devices.base_data_writer import BaseDataWriter
 
 
@@ -92,21 +96,21 @@ class PSMDataWriter(BaseDataWriter):
         return ['dat', 'par']
 
     def get_dat_header(self):
-        """Return PSM .dat file header (different for PSM vs PSM2)."""
-        if self.device.dev_type == PSM2:
+        """Return PSM .dat file header (different for PSM 2.0 vs Retrofit)."""
+        if self.device.is_psm2:
             # PSM 2.0 includes vacuum flow
             return 'YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,Vacuum flow (lpm),PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)'
         else:
-            # PSM 1.0
+            # Retrofit
             return 'YYYY.MM.DD hh:mm:ss,Concentration from PSM (1/cm3),Cut-off diameter (nm),Saturator flow rate (lpm),Excess flow rate (lpm),PSM saturator T (C),Growth tube T (C),Inlet T (C),Drainage T (C),Heater T (C),PSM cabin T (C),Absolute P (kPa),dP saturator line (kPa),dP Excess line (kPa),Critical orifice P (kPa),Scan status,PSM status value,PSM note value,CPC concentration (1/cm3),Dilution correction factor,CPC saturator T (C),CPC condenser T (C),CPC optics T (C),CPC cabin T (C),CPC critical orifice P (kPa),CPC nozzle P (kPa),CPC absolute P (kPa),CPC liquid level,OPC pulses,OPC pulse duration,CPC number of errors,CPC system status errors (hex),PSM system status errors (hex),PSM notes (hex)'
 
     def get_par_header(self):
-        """Return PSM .par file header (different for PSM vs PSM2)."""
-        if self.device.dev_type == PSM2:
+        """Return PSM .par file header (different for PSM 2.0 vs Retrofit)."""
+        if self.device.is_psm2:
             # PSM 2.0 has no CO flow
             return 'YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input'
         else:
-            # PSM 1.0 includes CO flow
+            # Retrofit includes CO flow
             return 'YYYY.MM.DD hh:mm:ss,Growth tube T setpoint (C),PSM saturator T setpoint (C),Inlet T setpoint (C),Heater T setpoint (C),Drainage T setpoint (C),PSM stored CPC flow rate (lpm),Inlet flow rate (lpm),CO flow rate (lpm),amp,cen,sig,slope,intercept,modeInUse,CPC IDN,CPC autofill,CPC drain,CPC water removal,CPC saturator T setpoint (C),CPC condenser T setpoint (C),CPC optics T setpoint (C),CPC inlet flow rate (lpm),CPC averaging time (s),Command input'
 
     def should_write_par(self, data_holder):
@@ -136,7 +140,12 @@ class PSMDataWriter(BaseDataWriter):
         # Check connected CPC par_updates
         cpc_id = self.device.device_config.extra_params.get('connected_cpc', 'None')
         if cpc_id != 'None':
-            if cpc_id in data_holder.par_updates and data_holder.par_updates[cpc_id] == 1:
+            # Convert to int for lookup (JSON stores as string)
+            try:
+                cpc_id_int = int(cpc_id)
+            except (ValueError, TypeError):
+                cpc_id_int = None
+            if cpc_id_int in data_holder.par_updates and data_holder.par_updates[cpc_id_int] == 1:
                 return True
 
         return False
@@ -156,13 +165,18 @@ class PSMDataWriter(BaseDataWriter):
         # Add connected CPC settings if applicable
         cpc_id = self.device.device_config.extra_params.get('connected_cpc', 'None')
         if cpc_id != 'None':
+            # Convert to int for lookup (JSON stores as string)
+            try:
+                cpc_id_int = int(cpc_id)
+            except (ValueError, TypeError):
+                cpc_id_int = None
             # Find CPC device widget in device_widgets
-            cpc_widget = data_holder.device_widgets.get(cpc_id)
+            cpc_widget = data_holder.device_widgets.get(cpc_id_int)
 
             # If CPC widget exists and is Airmodus CPC, write settings
             if cpc_widget and cpc_widget.device_config.device_type == CPC:
                 cpc_idn = cpc_widget.device_config.serial_number
-                cpc_settings = data_holder.get_device_settings(cpc_id)
+                cpc_settings = data_holder.get_device_settings(cpc_id_int)
 
                 if cpc_settings:
                     connected_cpc_settings = [
@@ -196,6 +210,151 @@ class PSMDataWriter(BaseDataWriter):
             self.device.cpc_changed = False
 
         return data_str
+
+    # ========== Inversion Data Save Methods ==========
+
+    def __init__(self, device_widget):
+        """Initialize PSMDataWriter with inversion file tracking."""
+        super().__init__(device_widget)
+        self._current_inversion_file = None
+        self._current_inversion_date = None
+
+    def write_inversion_scan(self, file_path, scan_data, config):
+        """
+        Write a single inversion scan to CSV file.
+
+        Creates new file with header on first scan or date change (if daily files enabled).
+        Appends subsequent scans to existing file.
+
+        Args:
+            file_path: Directory path where files are saved
+            scan_data: Dict with 'timestamp', 'dN_dlogDp', 'bin_limits', 'calibration_filename'
+            config: AppConfig with data_settings for file naming options
+        """
+        try:
+            # Extract data
+            timestamp = scan_data['timestamp']
+            dN_dlogDp = scan_data['dN_dlogDp']
+            bin_limits = scan_data['bin_limits']
+            calibration_filename = scan_data['calibration_filename']
+
+            # Determine if we need a new file
+            need_new_file = False
+            scan_date = pd.Timestamp(timestamp).date()
+
+            if self._current_inversion_file is None:
+                need_new_file = True
+            elif config.data_settings.generate_daily_files:
+                if self._current_inversion_date != scan_date:
+                    need_new_file = True
+
+            if need_new_file:
+                self._current_inversion_file = self._create_inversion_file(
+                    file_path, timestamp, calibration_filename, bin_limits, config
+                )
+                self._current_inversion_date = scan_date
+
+            # Append data row
+            self._append_inversion_row(timestamp, dN_dlogDp, bin_limits)
+
+        except Exception as e:
+            logging.error(f"Failed to write inversion scan: {e}")
+            # Reset file tracking to force new file on next scan
+            self._current_inversion_file = None
+
+    def _create_inversion_file(self, file_path, timestamp, calibration_filename, bin_limits, config):
+        """
+        Create new inversion CSV file with metadata and column headers.
+
+        Returns:
+            Full path to created file
+        """
+        # Generate filename
+        ts = pd.Timestamp(timestamp)
+        timestamp_str = ts.strftime("%Y%m%d_%H%M%S")
+
+        serial_number = self.device.device_config.serial_number
+        serial_suffix = f"_{serial_number}" if serial_number else ""
+
+        device_type = "PSM2" if self.device.is_psm2 else "PSM"
+
+        nickname = self.device.device_config.device_nickname
+        nickname_suffix = f"_{nickname}" if nickname else ""
+
+        file_tag = config.data_settings.file_tag
+        tag_suffix = f"_{file_tag}" if file_tag else ""
+
+        separator = '/' if osx_mode else '\\'
+        filename = f"{timestamp_str}{serial_suffix}_{device_type}{nickname_suffix}{tag_suffix}_dNdlogDp.csv"
+        full_path = file_path + separator + filename
+
+        # Build column headers from bin limits (smallest to largest)
+        # bin_limits is already in ascending order
+        column_headers = ["Scan start time"]
+        num_bins = len(bin_limits) - 1
+        for i in range(num_bins):
+            lower = round(bin_limits[i], 2)
+            upper = round(bin_limits[i + 1], 2)
+            column_headers.append(f"Bin {lower}-{upper} nm")
+
+        # Last column for concentration above largest bin (empty for live scans)
+        highest_dp = round(bin_limits[-1], 2)
+        column_headers.append(f"Dp >{highest_dp} nm total number concentration")
+
+        # Write file with metadata header
+        with open(full_path, 'w', encoding='UTF-8', newline='\n') as f:
+            # Row 1: Metadata
+            f.write(f"Software version: {version_number} ; Calibration file: {calibration_filename}\n")
+            # Row 2: Column headers
+            f.write(','.join(column_headers))
+
+        logging.info(f"Created inversion file: {full_path}")
+        return full_path
+
+    def _append_inversion_row(self, timestamp, dN_dlogDp, bin_limits):
+        """Append a single data row to the inversion file."""
+        if self._current_inversion_file is None:
+            return
+
+        # Format timestamp (ISO 8601)
+        ts = pd.Timestamp(timestamp)
+        timestamp_str = ts.strftime("%Y-%m-%dT%H:%M:%S")
+
+        # Format dN/dlogDp values
+        # dN_dlogDp is already ordered from smallest to largest bin
+        formatted_values = [self._format_inversion_value(v) for v in dN_dlogDp]
+
+        # Concentration above bins not tracked in live mode - use empty
+        formatted_values.append("")
+
+        # Build row
+        row = [timestamp_str] + formatted_values
+
+        with open(self._current_inversion_file, 'a', encoding='UTF-8', newline='\n') as f:
+            f.write('\n')
+            f.write(','.join(str(v) for v in row))
+
+    def _format_inversion_value(self, value):
+        """
+        Format inversion value according to documentation rules:
+        - Values >= 1: 2 decimal places
+        - Values < 1: 2 significant figures
+        - NaN/None: empty string
+        """
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            return ""
+
+        if value >= 1:
+            return f"{value:.2f}"
+        elif value > 0:
+            return f"{value:.2g}"
+        else:
+            return "0"
+
+    def reset_inversion_file(self):
+        """Reset inversion file tracking (called on path change or new session)."""
+        self._current_inversion_file = None
+        self._current_inversion_date = None
 
 
 class ElectrometerDataWriter(BaseDataWriter):

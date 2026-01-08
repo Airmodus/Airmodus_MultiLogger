@@ -7,10 +7,11 @@ User clicks a port to auto-create device (if type detected) or select type manua
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
                               QTableWidgetItem, QPushButton, QLabel, QHeaderView,
-                              QMessageBox, QMenu)
+                              QMessageBox, QMenu, QLineEdit, QGroupBox)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QCursor
 import serial.tools.list_ports
+import logging
 
 
 class PortSelectionDialog(QDialog):
@@ -70,9 +71,7 @@ class PortSelectionDialog(QDialog):
 
             return {}
         except Exception as e:
-            print(f"Error getting port info: {e}")
-            import traceback
-            traceback.print_exc()
+            logging.error(f"Error getting port info: {e}")
             return {}
 
     def _compute_short_ids(self):
@@ -155,9 +154,29 @@ class PortSelectionDialog(QDialog):
 
         layout.addWidget(self.port_table)
 
+        # Manual port entry section
+        manual_group = QGroupBox("Manual Port Entry")
+        manual_layout = QHBoxLayout()
+
+        manual_label = QLabel("Port path:")
+        manual_layout.addWidget(manual_label)
+
+        self.manual_port_input = QLineEdit()
+        self.manual_port_input.setPlaceholderText("/dev/ttys... or /dev/tty.usbserial...")
+        self.manual_port_input.returnPressed.connect(self._on_manual_port_entered)
+        manual_layout.addWidget(self.manual_port_input)
+
+        manual_btn = QPushButton("Add")
+        manual_btn.clicked.connect(self._on_manual_port_entered)
+        manual_layout.addWidget(manual_btn)
+
+        manual_group.setLayout(manual_layout)
+        layout.addWidget(manual_group)
+
         # Info label
-        info_label = QLabel("💡 Tip: Click a port with detected device type to auto-create, "
-                           "or click unknown port to choose type manually.")
+        info_label = QLabel("Tip: Click a port with detected device type to auto-create, "
+                           "or click unknown port to choose type manually. "
+                           "Use manual entry for virtual/simulator ports.")
         info_label.setWordWrap(True)
         info_label.setStyleSheet("color: #666; font-size: 11px;")
         layout.addWidget(info_label)
@@ -469,6 +488,42 @@ class PortSelectionDialog(QDialog):
         self.selected_type = device_type
         self.accept()
 
+    def _on_manual_port_entered(self):
+        """Handle manual port entry."""
+        import os
+
+        port = self.manual_port_input.text().strip()
+        if not port:
+            QMessageBox.warning(
+                self,
+                "No Port Entered",
+                "Please enter a port path (e.g., /dev/ttys007)"
+            )
+            return
+
+        # Check if the port exists
+        if not os.path.exists(port):
+            reply = QMessageBox.question(
+                self,
+                "Port Not Found",
+                f"Port {port} does not exist.\n\n"
+                f"Make sure the simulator is running.\n\n"
+                f"Do you want to try anyway?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
+
+        # In filter mode, use the filter device type
+        if self.filter_device_type:
+            self.selected_port = port
+            self.selected_type = self.filter_device_type
+            self.accept()
+            return
+
+        # Show type selection menu for manual entry
+        self._show_type_menu(port)
+
     def _on_port_update(self, port_info_dict):
         """Handle real-time port discovery updates."""
         # Refresh port info and repopulate table
@@ -493,6 +548,12 @@ class PortSelectionDialog(QDialog):
         """Return serial number of the selected port (if detected)."""
         if self.selected_port and self.selected_port in self.port_info:
             return self.port_info[self.selected_port].get('serial_number', '')
+        return ''
+
+    def get_selected_firmware(self):
+        """Return firmware version of the selected port (if detected)."""
+        if self.selected_port and self.selected_port in self.port_info:
+            return self.port_info[self.selected_port].get('firmware', '')
         return ''
 
     def showEvent(self, event):

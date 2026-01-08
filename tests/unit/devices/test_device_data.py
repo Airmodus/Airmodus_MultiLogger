@@ -23,7 +23,7 @@ from devices.device_data import (
     create_device_data, create_device_settings
 )
 from config import (
-    CPC, PSM, PSM2, ELECTROMETER, CO2_SENSOR, RHTP,
+    CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP,
     AFM, EDILUTER, TSI_CPC, EXAMPLE_DEVICE
 )
 
@@ -297,12 +297,6 @@ class TestCreateDeviceData:
 
         assert isinstance(data, PSMData)
 
-    def test_creates_psm2_data(self):
-        """Test creating PSM 2.0 data instance."""
-        data = create_device_data(PSM2)
-
-        assert isinstance(data, PSMData), "PSM2 uses same data class as PSM"
-
     def test_creates_simple_device_data(self):
         """Test creating simple device data instances."""
         rhtp = create_device_data(RHTP)
@@ -512,12 +506,6 @@ class TestCreateDeviceSettings:
     def test_creates_psm_settings(self):
         """Test creating PSM settings instance."""
         settings = create_device_settings(PSM)
-
-        assert isinstance(settings, PSMSettings)
-
-    def test_creates_psm2_settings(self):
-        """Test creating PSM 2.0 settings instance."""
-        settings = create_device_settings(PSM2)
 
         assert isinstance(settings, PSMSettings)
 

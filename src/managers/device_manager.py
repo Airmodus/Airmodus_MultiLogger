@@ -3,6 +3,7 @@ from PyQt5.QtCore import QTimer, pyqtSignal, QObject
 from PyQt5.QtGui import QIcon
 from time import time
 import traceback
+import os
 from serial.tools import list_ports
 from serial import Serial
 import logging
@@ -64,7 +65,9 @@ class DeviceManager(QObject):
             was_connected = hasattr(connection, 'connection') and connection.connection.is_open
 
             # If was connected but port is no longer available, close connection
-            if was_connected and port not in com_port_list:
+            # Also check if port exists on filesystem (for manual/virtual ports like pty)
+            port_still_exists = os.path.exists(port) if port else False
+            if was_connected and port not in com_port_list and not port_still_exists:
                 try:
                     connection.close()
                 except Exception as e:
@@ -72,13 +75,24 @@ class DeviceManager(QObject):
 
             connected = False
 
-            # Only try to connect if port is in the available port list
-            # This prevents false "connected" status when port doesn't exist
-            if port and port in com_port_list:
-                # Check if already connected
+            # Check if port is available - either in scanned list or exists on filesystem
+            # This allows manual/virtual ports (like pty simulators) to work
+            port_exists = os.path.exists(port) if port else False
+            port_available = port and (port in com_port_list or port_exists)
+
+            if port_available:
+                # Check if already connected using the _connected flag (thread-safe)
                 try:
-                    if hasattr(connection, 'connection') and connection.connection.is_open:
+                    # Use _connected flag which is set by connect_async thread
+                    if hasattr(connection, '_connected') and connection._connected:
                         connected = True
+                    else:
+                        # Fallback to is_open check
+                        has_conn = hasattr(connection, 'connection')
+                        is_open = connection.connection.is_open if has_conn else False
+                        if has_conn and is_open:
+                            connected = True
+                            connection._connected = True  # Sync the flag
                 except Exception:
                     pass
 
@@ -120,6 +134,17 @@ class DeviceManager(QObject):
                 if not connected and was_connected:
                     # Log disconnection
                     logging.info(f"[SERIAL DISCONNECT] DevID={dev_id} Port={port}")
+
+                    # Record disconnection to error history
+                    device_name = getattr(device_widget, 'device_nickname', None) or device_config.device_type_name
+                    self.data_holder.error_history.add_error(
+                        device_id=dev_id,
+                        device_name=device_name,
+                        error_type='disconnection',
+                        description=f'Device disconnected from port {port}',
+                        error_code='',
+                        severity='warning'
+                    )
 
                     # Device-specific cleanup
                     device_widget.on_disconnection()
@@ -242,7 +267,8 @@ class DeviceManager(QObject):
                 'device_type': port_info.get('device_type', 'Unknown'),
                 'serial_number': port_info.get('serial_number', ''),
                 'manufacturer': port_info.get('manufacturer', ''),
-                'vid_pid': port_info.get('vid_pid', '')
+                'vid_pid': port_info.get('vid_pid', ''),
+                'firmware': port_info.get('firmware', '')
             }
         }
 
@@ -297,7 +323,8 @@ class DeviceManager(QObject):
                 'device_type': port_data.get('device_type', 'Unknown'),
                 'serial_number': port_data.get('serial_number', ''),
                 'manufacturer': port_data.get('manufacturer', ''),
-                'vid_pid': port_data.get('vid_pid', '')
+                'vid_pid': port_data.get('vid_pid', ''),
+                'firmware': port_data.get('firmware', '')
             }
 
         # Check which ports are actually connected to devices in the application
@@ -501,7 +528,6 @@ class DeviceManager(QObject):
                     result = widget.process_parsed_messages(parsed_messages, device_config, self.data_holder)
 
                 except Exception as e:
-                    print(traceback.format_exc())
                     logging.exception(e)
 
     # check and update 10 hz settings
@@ -567,6 +593,5 @@ class DeviceManager(QObject):
                     set_tab_index = device_widget.indexOf(device_widget.set_tab)
                     device_widget.setTabIcon(set_tab_index, QIcon())
             except Exception as e:
-                print(traceback.format_exc())
                 logging.exception(e)
 

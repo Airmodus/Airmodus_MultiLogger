@@ -159,7 +159,7 @@ def mock_device_parameter():
 
 
 # Device-specific config fixtures
-from config import CPC, PSM, PSM2, RHTP, CO2_SENSOR, AFM, ELECTROMETER, TSI_CPC, EXAMPLE_DEVICE, EDILUTER
+from config import CPC, PSM, RHTP, CO2_SENSOR, AFM, ELECTROMETER, TSI_CPC, EXAMPLE_DEVICE, EDILUTER
 
 
 @pytest.fixture
@@ -170,14 +170,14 @@ def mock_cpc_config():
 
 @pytest.fixture
 def mock_psm_config():
-    """Mock DeviceConfig for PSM Retrofit device."""
-    return create_mock_device_config(PSM, "PSM Retrofit", 1)
+    """Mock DeviceConfig for PSM Retrofit device (firmware < 0.6.x)."""
+    return create_mock_device_config(PSM, "PSM Retrofit", 1, firmware_version="0.5.0")
 
 
 @pytest.fixture
 def mock_psm2_config():
-    """Mock DeviceConfig for PSM 2.0 device."""
-    return create_mock_device_config(PSM2, "PSM 2.0", 2)
+    """Mock DeviceConfig for PSM 2.0 device (uses PSM type with firmware >= 0.6.x)."""
+    return create_mock_device_config(PSM, "PSM 2.0", 2, firmware_version="0.6.8")
 
 
 @pytest.fixture

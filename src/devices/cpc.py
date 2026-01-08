@@ -1,17 +1,23 @@
 from PyQt5.QtGui import QPalette, QColor, QIntValidator, QDoubleValidator, QFont, QPixmap, QIcon
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QLocale
 from numpy import full, nan, isnan, array_equal
+import logging
 from pyqtgraph import GraphicsLayoutWidget, DateAxisItem, AxisItem, ViewBox, PlotCurveItem, LegendItem, PlotItem, mkPen, mkBrush
 from PyQt5.QtWidgets import (QTabWidget, QGridLayout, QLabel, QWidget,
     QPushButton, QComboBox, QGraphicsRectItem, QTableWidget, QTableWidgetItem,
-    QTextEdit, QCheckBox, QHeaderView, QLineEdit)
+    QTextEdit, QCheckBox, QHeaderView, QLineEdit, QVBoxLayout, QHBoxLayout,
+    QGroupBox, QScrollArea, QFrame, QStackedWidget, QMessageBox, QToolButton,
+    QSizePolicy)
 from config import CPC, CPC_ERRORS
 from ui_helpers import GuidedComboBox
 
 from widgets import (
     CommandWidget,
     SetWidget,
+    SetStatusWidget,
+    SimpleStatusWidget,
     ToggleButton,
+    ToggleSwitch,
     IndicatorWidget,
 )
 from plots.device_plots import SinglePlot
@@ -29,19 +35,24 @@ class CPCWidget(ComplexDevice):
     def __init__(self, device_config, *args, **kwargs):
         super().__init__(device_config, *args, **kwargs)
 
+        # Track last known device settings to prevent spinbox jumping
+        # Only update spinbox when DEVICE value changes, not when spinbox differs
+        self._last_device_settings = {}
+
         # CPC-specific data (device owns its data)
         self.ten_hz_data = full(10, nan)  # 10 Hz logging data buffer
         self.pulse_analysis_index = None  # None = not in analysis mode, 0-6 = threshold index
+        self.needs_calibration_fetch = True  # Fetch factory calibration on initial connection
 
         # create plot widget (first tab)
         self.plot_tab = SinglePlot(device_type=CPC)
         self.addTab(self.plot_tab, "Plot")
-        # create set tab widget for cpc settings
-        self.set_tab = CPCSetTab()
-        self.addTab(self.set_tab, "Set")
-        # create status tab widget showing CPC values
-        self.status_tab = CPCStatusTab()
-        self.addTab(self.status_tab, "Status")
+        # create combined control tab (merges Set and Status tabs)
+        self.control_tab = CPCControlTab()
+        self.addTab(self.control_tab, "Control")
+        # Backward compatibility aliases
+        self.set_tab = self.control_tab
+        self.status_tab = self.control_tab
         # create database/ACTRIS tab for database settings and status
         self.database_tab = CPCDatabaseTab(device_config)
         self.addTab(self.database_tab, "ACTRIS")
@@ -49,13 +60,21 @@ class CPCWidget(ComplexDevice):
         self.pulse_quality = PulseQuality()
         self.addTab(self.pulse_quality, "Pulse")
 
-        # create list of widget references for updating gui with cpc system status
+        # create list of widget references for updating gui with cpc system status (Advanced mode)
         self.cpc_status_widgets = [
-            self.status_tab.temp_optics, self.status_tab.temp_saturator,
-            self.status_tab.temp_condenser, self.status_tab.pres_inlet,
-            self.status_tab.pres_nozzle, self.status_tab.laser_power,
-            self.status_tab.liquid_level, self.status_tab.temp_cabin,
-            self.status_tab.pres_critical_orifice, self.status_tab.pulse_quality
+            self.control_tab.temp_optics, self.control_tab.temp_saturator,
+            self.control_tab.temp_condenser, self.control_tab.pres_inlet,
+            self.control_tab.pres_nozzle, self.control_tab.laser_power,
+            self.control_tab.liquid_level, self.control_tab.temp_cabin,
+            self.control_tab.pres_critical_orifice, self.control_tab.pulse_quality
+        ]
+        # Simple mode status widgets for error coloring (same order as cpc_status_widgets)
+        self.cpc_simple_status_widgets = [
+            self.control_tab.simple_optics_temp, self.control_tab.simple_saturator_temp,
+            self.control_tab.simple_condenser_temp, self.control_tab.simple_pres_inlet,
+            self.control_tab.simple_pres_nozzle, self.control_tab.simple_laser_power,
+            self.control_tab.simple_liquid_level, self.control_tab.simple_cabin_temp,
+            self.control_tab.simple_pres_critical_orifice, self.control_tab.simple_pulse_quality
         ]
 
         # Plot configuration (composition over inheritance)
@@ -66,20 +85,72 @@ class CPCWidget(ComplexDevice):
         # Add Device tab at the end
         self._add_device_tab_at_end()
 
+        # Hide main plot dropdown by default (will be shown when PSM connects)
+        if hasattr(self, 'main_plot_dropdown') and self.main_plot_dropdown:
+            self.main_plot_dropdown.hide()
+            if hasattr(self, '_main_plot_label') and self._main_plot_label:
+                self._main_plot_label.hide()
+
     def get_plot_keys(self):
         """CPC has concentration and raw concentration plots."""
-        return ['', ':raw']
+        return [':conc', ':raw']
 
     def get_plot_value_labels(self):
         """Return labels for CPC plot values."""
         return {
-            '': 'Concentration (#/cc)',
-            ':raw': 'Raw Concentration (#/cc)'
+            ':conc': 'Dilution Corrected Concentration (#/cc)',
+            ':raw': 'Raw CPC Concentration (#/cc)'
         }
 
     def get_rolling_buffer_keys(self):
         """CPC has 24-hour rolling buffers for pulse analysis."""
         return {':pd': 86400, ':pr': 86400}
+
+    def is_connected_to_psm(self, app_config=None):
+        """Check if any PSM has this CPC as its connected CPC."""
+        if not app_config:
+            return False
+        from config import PSM
+        dev_id = self.device_config.device_id
+        for device_config in app_config.devices:
+            if device_config.device_type == PSM:
+                connected_cpc = device_config.extra_params.get('connected_cpc', 'None')
+                try:
+                    if connected_cpc != 'None' and int(connected_cpc) == dev_id:
+                        return True
+                except (ValueError, TypeError):
+                    pass
+        return False
+
+    def update_main_plot_dropdown_visibility(self, app_config):
+        """Show/hide main plot dropdown based on PSM connection."""
+        if not hasattr(self, 'main_plot_dropdown') or not self.main_plot_dropdown:
+            return
+
+        has_psm = self.is_connected_to_psm(app_config)
+
+        if has_psm:
+            # Show dropdown, select :conc by default
+            self.main_plot_dropdown.show()
+            if hasattr(self, '_main_plot_label'):
+                self._main_plot_label.show()
+            # Set to :conc if not already
+            if self.device_config.plot_to_main != ':conc':
+                index = self.main_plot_dropdown.findData(':conc')
+                if index >= 0:
+                    self.main_plot_dropdown.setCurrentIndex(index)
+                    self.device_config.plot_to_main = ':conc'
+                    if hasattr(self, 'on_config_changed') and self.on_config_changed:
+                        self.on_config_changed()
+        else:
+            # Hide dropdown, set to :raw
+            self.main_plot_dropdown.hide()
+            if hasattr(self, '_main_plot_label'):
+                self._main_plot_label.hide()
+            if self.device_config.plot_to_main != ':raw':
+                self.device_config.plot_to_main = ':raw'
+                if hasattr(self, 'on_config_changed') and self.on_config_changed:
+                    self.on_config_changed()
 
     def set_app_config(self, app_config):
         """Set the app config reference for database tab RHTP dropdown."""
@@ -96,15 +167,20 @@ class CPCWidget(ComplexDevice):
         1. :MEAS:ALL - Request all measurement data
         2. :SYST:PRNT (150ms delay) - Request print settings
         3. :SYST:PALL (300ms delay) - Request all system parameters
-        4. :MEAS:OPC_CONC_LOG (450ms delay) - Request 10Hz data (if enabled)
+        4. :SYST:POUT (450ms delay) - Request factory calibration (once on connection)
+        5. :MEAS:OPC_CONC_LOG (600ms delay) - Request 10Hz data (if enabled)
         """
         sequence = [
             (':MEAS:ALL', 0),
             (':SYST:PRNT', 150),
             (':SYST:PALL', 300),
         ]
+        # Request factory calibration on initial connection
+        if self.needs_calibration_fetch:
+            sequence.append((':SYST:POUT', 450))
         if ten_hz:
-            sequence.append((':MEAS:OPC_CONC_LOG', 450))
+            delay = 600 if self.needs_calibration_fetch else 450
+            sequence.append((':MEAS:OPC_CONC_LOG', delay))
         return sequence
 
     # convert CPC status hex to binary and update error label colors
@@ -115,82 +191,149 @@ class CPCWidget(ComplexDevice):
         total_errors = status_bin.count("1") # count number of 1s in status_bin
         inverted_status_bin = status_bin[::-1] # invert status_bin for error parsing
         for i in range(widget_amount): # iterate through all status widgets
-            # change color of error label according to error bit
+            # change color of error label according to error bit (Advanced mode)
             self.cpc_status_widgets[i].change_color(inverted_status_bin[i])
-        # update cabin pressure label color according to error status
+            # change color of simple mode widgets as well
+            self.cpc_simple_status_widgets[i].change_color(inverted_status_bin[i])
+        # update cabin pressure label color according to error status (both modes)
         if cabin_p_error:
             self.status_tab.pres_cabin.change_color(1)
+            self.control_tab.simple_pres_cabin.change_color(1)
             total_errors += 1
         else:
             self.status_tab.pres_cabin.change_color(0)
+            self.control_tab.simple_pres_cabin.change_color(0)
         
         return total_errors # return total number of errors
-    
-    def update_settings(self, settings):
-        # update GUI set values if they differ from CPC set values
-        # TODO remove repetition
 
-        # saturator temperature
-        if self.set_tab.set_saturator_temp.value_spinbox.value() != settings[8]:
-            # update value
-            self.set_tab.set_saturator_temp.value_spinbox.setValue(settings[8])
-            # if saturator temperature is nan, clear visible value
+    def _decode_error_hex(self, status_hex):
+        """Decode CPC status hex to list of error descriptions."""
+        from config import CPC_ERRORS
+        errors = []
+        if not status_hex:
+            return errors
+        try:
+            status_int = int(status_hex, 16)
+            for i, error_desc in enumerate(CPC_ERRORS):
+                if status_int & (1 << i):
+                    errors.append(error_desc)
+        except (ValueError, TypeError):
+            pass
+        return errors
+
+    def update_settings(self, settings):
+        # Update GUI set values only when DEVICE value changes (not spinbox differs)
+        # This prevents the jumping bug where stale device values overwrite user input
+
+        # saturator temperature - only update if device value changed
+        prev_sat = self._last_device_settings.get('saturator_temp')
+        if prev_sat != settings[8]:
+            self._last_device_settings['saturator_temp'] = settings[8]
             if str(settings[8]) == 'nan':
                 self.set_tab.set_saturator_temp.value_spinbox.clear()
-            # if text is empty (without suffix), set text with value
-            # TODO ? change this to text().split(" ")[0] == ""
-            elif self.set_tab.set_saturator_temp.value_spinbox.text()[:-3] == "":
-                self.set_tab.set_saturator_temp.value_spinbox.lineEdit().setText(str(settings[8]))
+            else:
+                self.set_tab.set_saturator_temp.value_spinbox.setValue(settings[8])
+                if self.set_tab.set_saturator_temp.value_spinbox.text()[:-3] == "":
+                    self.set_tab.set_saturator_temp.value_spinbox.lineEdit().setText(str(settings[8]))
 
-        # condenser temperature
-        if self.set_tab.set_condenser_temp.value_spinbox.value() != settings[6]:
-            # update value
-            self.set_tab.set_condenser_temp.value_spinbox.setValue(settings[6])
-            # if condenser temperature is nan, clear visible value
+        # condenser temperature - only update if device value changed
+        prev_con = self._last_device_settings.get('condenser_temp')
+        if prev_con != settings[6]:
+            self._last_device_settings['condenser_temp'] = settings[6]
             if str(settings[6]) == 'nan':
                 self.set_tab.set_condenser_temp.value_spinbox.clear()
-            # if text is empty (without suffix), set text with value
-            elif self.set_tab.set_condenser_temp.value_spinbox.text()[:-3] == "":
-                self.set_tab.set_condenser_temp.value_spinbox.lineEdit().setText(str(settings[6]))
+            else:
+                self.set_tab.set_condenser_temp.value_spinbox.setValue(settings[6])
+                if self.set_tab.set_condenser_temp.value_spinbox.text()[:-3] == "":
+                    self.set_tab.set_condenser_temp.value_spinbox.lineEdit().setText(str(settings[6]))
 
-        # averaging time
-        if self.set_tab.set_averaging_time.value_spinbox.value() != settings[5]:
-            # update value
-            if str(settings[5]) == 'nan': # if nan, set to 0
-                self.set_tab.set_averaging_time.value_spinbox.setValue(0)
-            else: # else update value
-                self.set_tab.set_averaging_time.value_spinbox.setValue(settings[5])
-            # if averaging time is nan, clear visible value
+        # averaging time - only update if device value changed
+        prev_avg = self._last_device_settings.get('averaging_time')
+        if prev_avg != settings[5]:
+            self._last_device_settings['averaging_time'] = settings[5]
             if str(settings[5]) == 'nan':
+                self.set_tab.set_averaging_time.value_spinbox.setValue(0)
                 self.set_tab.set_averaging_time.value_spinbox.clear()
-            # if text is empty (without suffix), update value set text with value
-            elif self.set_tab.set_averaging_time.value_spinbox.text()[:-2] == "":
-                self.set_tab.set_averaging_time.value_spinbox.lineEdit().setText(str(settings[5]))
+            else:
+                self.set_tab.set_averaging_time.value_spinbox.setValue(settings[5])
+                if self.set_tab.set_averaging_time.value_spinbox.text()[:-2] == "":
+                    self.set_tab.set_averaging_time.value_spinbox.lineEdit().setText(str(settings[5]))
         
-        # update mode settings
+        # update mode settings (Advanced mode)
         self.set_tab.autofill.update_state(settings[1]) # autofill
         self.set_tab.water_removal.update_state(settings[4]) # water removal
         self.set_tab.drain.update_state(settings[2]) # drain
+
+        # update mode settings (Simple mode)
+        self.control_tab.simple_autofill.update_state(settings[1])
+        self.control_tab.simple_water_removal.update_state(settings[4])
+        self.control_tab.simple_drain.update_state(settings[2])
+
+        # update simple mode temperature setpoints for status bar coloring
+        # settings[8] = saturator_temp, settings[6] = condenser_temp
+        self.control_tab.simple_saturator_temp.set_setpoint(settings[8])
+        self.control_tab.simple_condenser_temp.set_setpoint(settings[6])
+
+        # update simple mode averaging time (read-only display)
+        # settings[5] = averaging_time
+        if str(settings[5]) != 'nan':
+            self.control_tab.simple_averaging_time.change_value(f"{settings[5]} s")
     
     # update all data values in status tab
     def update_values(self, current_list):
-        # update temperature values
+        # update temperature values (Advanced mode)
         self.status_tab.temp_optics.change_value(str(current_list[5]) + " °C")
         self.status_tab.temp_saturator.change_value(str(current_list[3]) + " °C")
         self.status_tab.temp_condenser.change_value(str(current_list[4]) + " °C")
-        # update pressure values
+        self.status_tab.temp_cabin.change_value(str(current_list[6]) + " °C")
+
+        # update temperature values (Simple mode)
+        self.control_tab.simple_optics_temp.change_value(f"{current_list[5]} °C")
+        self.control_tab.simple_saturator_temp.change_value(f"{current_list[3]} °C")
+        self.control_tab.simple_condenser_temp.change_value(f"{current_list[4]} °C")
+        self.control_tab.simple_cabin_temp.change_value(f"{current_list[6]} °C")
+
+        # update pressure values (Advanced mode)
         self.status_tab.pres_inlet.change_value(str(current_list[7]) + " kPa")
         self.status_tab.pres_nozzle.change_value(str(current_list[9]) + " kPa")
         self.status_tab.pres_critical_orifice.change_value(str(current_list[8]) + " kPa")
         self.status_tab.pres_cabin.change_value(str(current_list[10]) + " kPa")
-        # update misc values
+
+        # update pressure values (Simple mode)
+        self.control_tab.simple_pres_inlet.change_value(f"{current_list[7]} kPa")
+        self.control_tab.simple_pres_nozzle.change_value(f"{current_list[9]} kPa")
+        self.control_tab.simple_pres_critical_orifice.change_value(f"{current_list[8]} kPa")
+        self.control_tab.simple_pres_cabin.change_value(f"{current_list[10]} kPa")
+
+        # update liquid level (both modes)
         if current_list[11] == 0:
-            self.status_tab.liquid_level.change_value("LOW")
+            level_text = "LOW"
         elif current_list[11] == 1:
-            self.status_tab.liquid_level.change_value("OK")
+            level_text = "OK"
         elif current_list[11] == 2:
-            self.status_tab.liquid_level.change_value("OVERFILL")
-        self.status_tab.temp_cabin.change_value(str(current_list[6]) + " °C")
+            level_text = "OVERFILL"
+        else:
+            level_text = "---"
+        self.status_tab.liquid_level.change_value(level_text)
+        self.control_tab.simple_liquid_level.change_value(level_text)
+
+        # update laser power (both modes) - uses laser current value from index 12
+        laser_current = current_list[12] if len(current_list) > 12 else None
+        if laser_current is not None and not isnan(laser_current):
+            laser_text = f"{laser_current:.2f} mA"
+        else:
+            laser_text = "---"
+        self.status_tab.laser_power.change_value(laser_text)
+        self.control_tab.simple_laser_power.change_value(laser_text)
+
+        # update pulse quality (both modes) - uses pulse_ratio from index 13
+        pulse_ratio = current_list[13] if len(current_list) > 13 else None
+        if pulse_ratio is not None and not isnan(pulse_ratio):
+            pulse_text = f"{pulse_ratio:.2f} %"
+        else:
+            pulse_text = "---"
+        self.status_tab.pulse_quality.change_value(pulse_text)
+        self.control_tab.simple_pulse_quality.change_value(pulse_text)
 
     def get_read_command(self):
         """Get CPC read command(s)."""
@@ -241,10 +384,22 @@ class CPCWidget(ComplexDevice):
 
                 result['data_updated'] = True
 
-                # Set error flags
+                # Set error flags and record to error history
                 if parsed.get('total_errors', 0) != 0:
                     data_holder.error_status = 1
                     data_holder.device_errors[self.dev_id] = True
+                    # Record error to history with decoded description
+                    status_hex = parsed.get('status_hex', '')
+                    error_descriptions = self._decode_error_hex(status_hex)
+                    device_name = getattr(self, 'device_nickname', None) or 'CPC'
+                    data_holder.error_history.add_error(
+                        device_id=self.dev_id,
+                        device_name=device_name,
+                        error_type='device_error',
+                        description='; '.join(error_descriptions) if error_descriptions else 'Device error detected',
+                        error_code=status_hex,
+                        severity='error'
+                    )
 
             elif parsed['type'] == 'settings':
                 # Handle PRNT or PALL settings
@@ -281,6 +436,8 @@ class CPCWidget(ComplexDevice):
                 serial_number = parsed['data']
                 if device_config.serial_number != serial_number:
                     device_config.serial_number = serial_number
+                    # Update GUI display
+                    self._update_device_settings_display()
                     # Trigger config save
                     if hasattr(self, 'on_config_changed'):
                         self.on_config_changed()
@@ -291,7 +448,7 @@ class CPCWidget(ComplexDevice):
             if parsed.get('show_in_command_widget', False):
                 self.set_tab.command_widget.update_text_box(parsed['raw'])
                 if parsed['type'] == 'error' and 'error' in parsed:
-                    print("CPC error: " + str(parsed['error']))
+                    logging.error("CPC error: " + str(parsed['error']))
 
         # Update GUI with current data
         self.update_values(self.current_data.to_array())
@@ -339,8 +496,8 @@ class CPCWidget(ComplexDevice):
         """
         try:
             # Split command and data
-            message_string = message
-            parts = message.split(" ", 1)
+            message_string = message.strip()
+            parts = message_string.split(" ", 1)
             if len(parts) < 2:
                 return {
                     'type': 'unknown',
@@ -429,6 +586,26 @@ class CPCWidget(ComplexDevice):
                     'data': prnt_list,
                     'raw': message,
                     'update_gui': True
+                }
+
+            # Handle :SYST:POUT - factory calibration values
+            elif command == ":SYST:POUT":
+                # Parse factory calibration values (indices 6-7 are temp setpoints)
+                if len(data) >= 8:
+                    self.factory_calibration = {
+                        'saturator_temp': float(data[6]),
+                        'condenser_temp': float(data[7]),
+                    }
+                    # Update UI to show factory values
+                    self.update_factory_calibration_display()
+                    self.needs_calibration_fetch = False
+
+                return {
+                    'type': 'calibration',
+                    'command': command,
+                    'data': data,
+                    'raw': message,
+                    'update_gui': False
                 }
 
             # Handle :SYST:PALL - all parameters
@@ -547,6 +724,15 @@ class CPCWidget(ComplexDevice):
         """CPC supports 10 Hz mode."""
         return True
 
+    def update_factory_calibration_display(self):
+        """Update SetStatusWidgets with factory calibration values."""
+        if not hasattr(self, 'factory_calibration'):
+            return
+
+        cal = self.factory_calibration
+        self.control_tab.set_saturator_temp.set_factory_value(cal['saturator_temp'])
+        self.control_tab.set_condenser_temp.set_factory_value(cal['condenser_temp'])
+
     def send_read_commands(self, dev_conn, device_config):
         """
         Send CPC read commands based on mode.
@@ -580,7 +766,7 @@ class CPCWidget(ComplexDevice):
         When 10 Hz is disabled:
         - Set TAVG to 1.0 if currently < 1
         """
-        from config import PSM, PSM2
+        from config import PSM
 
         dev_id = device_config.device_id
         ten_hz_enabled = device_config.extra_params.get('10_hz', False)
@@ -592,11 +778,16 @@ class CPCWidget(ComplexDevice):
                     self.connection.send_message(":SET:TAVG 0.1")
 
             # Validate PSM connection - check if any PSM has this CPC connected with 10Hz
+            def _cpc_matches(psm_config):
+                connected_cpc = psm_config.extra_params.get('connected_cpc', 'None')
+                try:
+                    return int(connected_cpc) == dev_id if connected_cpc != 'None' else False
+                except (ValueError, TypeError):
+                    return False
             ten_hz_connected = any(
-                psm_config.extra_params.get('connected_cpc') == dev_id and
-                psm_config.extra_params.get('10_hz', False)
+                _cpc_matches(psm_config) and psm_config.extra_params.get('10_hz', False)
                 for psm_config in app_config.devices
-                if psm_config.device_type in [PSM, PSM2]
+                if psm_config.device_type == PSM
             )
 
             # If no PSM with 10Hz is connected, disable 10Hz mode
@@ -612,6 +803,10 @@ class CPCWidget(ComplexDevice):
 
     # App Integration Methods
 
+    def supports_idn_inquiry(self):
+        """CPC supports *IDN? identity inquiry."""
+        return True
+
     @classmethod
     def get_default_extra_params(cls, device_type: int) -> dict:
         """Return default extra_params for CPC devices."""
@@ -626,6 +821,8 @@ class CPCWidget(ComplexDevice):
         """Restore CPC UI state from configuration."""
         if hasattr(self, 'set_app_config'):
             self.set_app_config(app_config)
+        # Initialize dropdown visibility based on PSM connection
+        self.update_main_plot_dropdown_visibility(app_config)
 
     def setup_main_window_references(self, main_window):
         """Set up CPC database tab references to main window."""
@@ -636,8 +833,392 @@ class CPCWidget(ComplexDevice):
             self.database_tab.update_global_connection_status()
 
 
+class CPCControlTab(QWidget):
+    """Combined control tab merging Set and Status functionality.
+
+    Supports two modes:
+    - Simple Mode (default): Clean read-only view with status indicators
+    - Advanced Mode: Full control with setpoints and serial commands
+    """
+
+    # Signal emitted when mode changes (for persistence)
+    mode_changed = pyqtSignal(bool)  # True = advanced mode
+
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self._advanced_mode = False
+
+        # Main layout with mode toggle at top
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        # Mode toggle header
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(8, 4, 8, 4)
+
+        header_layout.addStretch()
+
+        self.mode_toggle_btn = QPushButton("⚙ Advanced Mode")
+        self.mode_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #555;
+                color: white;
+                padding: 4px 12px;
+                border: none;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #666;
+            }
+        """)
+        self.mode_toggle_btn.clicked.connect(self._toggle_mode)
+        header_layout.addWidget(self.mode_toggle_btn)
+
+        outer_layout.addWidget(header_widget)
+
+        # Stacked widget for simple/advanced views
+        self.mode_stack = QStackedWidget()
+        outer_layout.addWidget(self.mode_stack)
+
+        # Create both views
+        self._create_simple_mode_view()
+        self._create_advanced_mode_view()
+
+        # Start in simple mode
+        self.mode_stack.setCurrentIndex(0)
+
+    def _toggle_mode(self):
+        """Toggle between simple and advanced modes."""
+        self._advanced_mode = not self._advanced_mode
+        if self._advanced_mode:
+            self.mode_stack.setCurrentIndex(1)
+            self.mode_toggle_btn.setText("◀ Simple Mode")
+        else:
+            self.mode_stack.setCurrentIndex(0)
+            self.mode_toggle_btn.setText("⚙ Advanced Mode")
+        self.mode_changed.emit(self._advanced_mode)
+
+    def set_advanced_mode(self, advanced: bool):
+        """Set mode programmatically (for restoring from settings)."""
+        if advanced != self._advanced_mode:
+            self._toggle_mode()
+
+    def _get_group_style(self, color):
+        """Return group box stylesheet with the given accent color."""
+        return f"""
+            QGroupBox {{
+                border: 1px solid {color};
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 8px 8px 8px;
+                background-color: #3a3a3a;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px;
+                color: {color};
+                font-weight: bold;
+                font-size: 14px;
+            }}
+        """
+
+    def _create_simple_mode_view(self):
+        """Create the simple mode view with read-only status widgets."""
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        content_widget = QWidget()
+        main_layout = QVBoxLayout(content_widget)
+        main_layout.setSpacing(6)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+
+        # === TEMPERATURES GROUP (Simple) ===
+        temp_group = QGroupBox("🌡️ Temperatures")
+        temp_group.setStyleSheet(self._get_group_style("#e67e22"))
+        temp_layout = QGridLayout()
+        temp_layout.setSpacing(4)
+
+        # Row 0: Saturator T, Condenser T
+        self.simple_saturator_temp = SimpleStatusWidget("Saturator T", " °C", is_temperature=True, error_name="Saturator Error")
+        temp_layout.addWidget(self.simple_saturator_temp, 0, 0)
+        self.simple_condenser_temp = SimpleStatusWidget("Condenser T", " °C", is_temperature=True, error_name="Condenser Error")
+        temp_layout.addWidget(self.simple_condenser_temp, 0, 1)
+
+        # Row 1: Cabin T, Optics T
+        self.simple_cabin_temp = SimpleStatusWidget("Cabin T", " °C", is_temperature=True, error_name="Cabin Error")
+        temp_layout.addWidget(self.simple_cabin_temp, 1, 0)
+        self.simple_optics_temp = SimpleStatusWidget("Optics T", " °C", is_temperature=True, error_name="Optics Error")
+        temp_layout.addWidget(self.simple_optics_temp, 1, 1)
+
+        # Equal column stretch for consistent layout
+        temp_layout.setColumnStretch(0, 1)
+        temp_layout.setColumnStretch(1, 1)
+
+        temp_group.setLayout(temp_layout)
+        main_layout.addWidget(temp_group)
+
+        # === PRESSURES GROUP (Simple) ===
+        pressure_group = QGroupBox("📊 Pressures")
+        pressure_group.setStyleSheet(self._get_group_style("#9b59b6"))
+        pressure_layout = QGridLayout()
+        pressure_layout.setSpacing(4)
+
+        # Row 0: Inlet, Nozzle
+        self.simple_pres_inlet = SimpleStatusWidget("Inlet", " kPa", is_temperature=False, error_name="Inlet Pressure Error")
+        pressure_layout.addWidget(self.simple_pres_inlet, 0, 0)
+        self.simple_pres_nozzle = SimpleStatusWidget("Nozzle", " kPa", is_temperature=False, error_name="Nozzle Pressure Error")
+        pressure_layout.addWidget(self.simple_pres_nozzle, 0, 1)
+
+        # Row 1: Critical orifice, Cabin
+        self.simple_pres_critical_orifice = SimpleStatusWidget("Critical orifice", " kPa", is_temperature=False, error_name="Critical Orifice Error")
+        pressure_layout.addWidget(self.simple_pres_critical_orifice, 1, 0)
+        self.simple_pres_cabin = SimpleStatusWidget("Cabin", " kPa", is_temperature=False, error_name="Cabin Pressure Error")
+        pressure_layout.addWidget(self.simple_pres_cabin, 1, 1)
+
+        # Equal column stretch for consistent layout
+        pressure_layout.setColumnStretch(0, 1)
+        pressure_layout.setColumnStretch(1, 1)
+
+        pressure_group.setLayout(pressure_layout)
+        main_layout.addWidget(pressure_group)
+
+        # === CONTROLS & STATUS (combined row - Simple) ===
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+
+        # Controls (still interactive in simple mode)
+        controls_group = QGroupBox("🎛️ Controls")
+        controls_group.setStyleSheet(self._get_group_style("#27ae60"))
+        controls_layout = QVBoxLayout()
+        controls_layout.setSpacing(2)
+        controls_layout.setContentsMargins(4, 4, 4, 4)
+        controls_layout.setAlignment(Qt.AlignTop)
+
+        # Toggle switches for simple mode
+        self.simple_autofill = ToggleSwitch("Autofill", "Automatically refill liquid when low")
+        controls_layout.addWidget(self.simple_autofill)
+        self.simple_water_removal = ToggleSwitch("Water removal", "Enable water removal cycle")
+        controls_layout.addWidget(self.simple_water_removal)
+        self.simple_drain = ToggleSwitch("Drain", "Enable liquid drainage")
+        controls_layout.addWidget(self.simple_drain)
+
+        controls_group.setLayout(controls_layout)
+        status_row.addWidget(controls_group, 1)
+
+        # Status Group (Simple)
+        status_group = QGroupBox("Status")
+        status_group.setStyleSheet(self._get_group_style("#17a2b8"))
+        status_layout = QVBoxLayout()
+        status_layout.setSpacing(4)
+        status_layout.setContentsMargins(4, 4, 4, 4)
+        status_layout.setAlignment(Qt.AlignTop)
+
+        self.simple_laser_power = SimpleStatusWidget("Laser power", "", is_temperature=False, error_name="Laser Error")
+        status_layout.addWidget(self.simple_laser_power)
+        self.simple_liquid_level = SimpleStatusWidget("Liquid level", "", is_temperature=False, error_name="Level LOW")
+        status_layout.addWidget(self.simple_liquid_level)
+        self.simple_pulse_quality = SimpleStatusWidget("Pulse quality", " %", is_temperature=False, error_name="Pulse Quality Error")
+        status_layout.addWidget(self.simple_pulse_quality)
+
+        status_group.setLayout(status_layout)
+        status_row.addWidget(status_group, 1)
+
+        # Settings Group (Simple - read-only averaging time)
+        settings_group = QGroupBox("Settings")
+        settings_group.setStyleSheet(self._get_group_style("#6c757d"))
+        settings_layout = QVBoxLayout()
+        settings_layout.setSpacing(4)
+        settings_layout.setContentsMargins(4, 4, 4, 4)
+        settings_layout.setAlignment(Qt.AlignTop)
+
+        self.simple_averaging_time = SimpleStatusWidget("Averaging time", " s", is_temperature=False, error_name="")
+        settings_layout.addWidget(self.simple_averaging_time)
+
+        settings_group.setLayout(settings_layout)
+        status_row.addWidget(settings_group, 1)
+
+        main_layout.addLayout(status_row)
+        main_layout.addStretch()
+
+        scroll_area.setWidget(content_widget)
+        self.mode_stack.addWidget(scroll_area)
+
+    def _create_advanced_mode_view(self):
+        """Create the advanced mode view with full controls."""
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        content_widget = QWidget()
+        main_layout = QVBoxLayout(content_widget)
+        main_layout.setSpacing(6)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+
+        # === TEMPERATURES GROUP ===
+        temp_group = QGroupBox("🌡️ Temperatures")
+        temp_group.setStyleSheet(self._get_group_style("#e67e22"))
+        temp_layout = QGridLayout()
+        temp_layout.setSpacing(4)
+
+        # Row 0: Saturator T, Condenser T (setpoint + actual)
+        self.set_saturator_temp = SetStatusWidget("Saturator T", " °C")
+        self.set_saturator_temp.setToolTip("Saturator temperature setpoint and actual value")
+        temp_layout.addWidget(self.set_saturator_temp, 0, 0)
+
+        self.set_condenser_temp = SetStatusWidget("Condenser T", " °C")
+        self.set_condenser_temp.setToolTip("Condenser temperature setpoint and actual value")
+        temp_layout.addWidget(self.set_condenser_temp, 0, 1)
+
+        # Row 1: Cabin T, Optics T (read-only)
+        self.temp_cabin = IndicatorWidget("Cabin T")
+        self.temp_cabin.setToolTip("Cabin temperature (read-only)")
+        temp_layout.addWidget(self.temp_cabin, 1, 0)
+
+        self.temp_optics = IndicatorWidget("Optics T")
+        self.temp_optics.setToolTip("Optics temperature (read-only)")
+        temp_layout.addWidget(self.temp_optics, 1, 1)
+
+        temp_group.setLayout(temp_layout)
+        main_layout.addWidget(temp_group)
+
+        # === PRESSURES GROUP ===
+        pressure_group = QGroupBox("📊 Pressures")
+        pressure_group.setStyleSheet(self._get_group_style("#9b59b6"))
+        pressure_layout = QGridLayout()
+        pressure_layout.setSpacing(4)
+
+        # Row 0: Inlet, Nozzle
+        self.pres_inlet = IndicatorWidget("Inlet")
+        self.pres_inlet.setToolTip("Inlet pressure")
+        pressure_layout.addWidget(self.pres_inlet, 0, 0)
+
+        self.pres_nozzle = IndicatorWidget("Nozzle")
+        self.pres_nozzle.setToolTip("Nozzle pressure")
+        pressure_layout.addWidget(self.pres_nozzle, 0, 1)
+
+        # Row 1: Critical orifice, Cabin
+        self.pres_critical_orifice = IndicatorWidget("Critical orifice")
+        self.pres_critical_orifice.setToolTip("Critical orifice pressure")
+        pressure_layout.addWidget(self.pres_critical_orifice, 1, 0)
+
+        self.pres_cabin = IndicatorWidget("Cabin")
+        self.pres_cabin.setToolTip("Cabin pressure")
+        pressure_layout.addWidget(self.pres_cabin, 1, 1)
+
+        pressure_group.setLayout(pressure_layout)
+        main_layout.addWidget(pressure_group)
+
+        # === CONTROLS, STATUS & SETTINGS (combined row) ===
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+
+        # Controls Group (toggles)
+        controls_group = QGroupBox("🎛️ Controls")
+        controls_group.setStyleSheet(self._get_group_style("#27ae60"))
+        controls_layout = QVBoxLayout()
+        controls_layout.setSpacing(2)
+        controls_layout.setContentsMargins(4, 4, 4, 4)
+        controls_layout.setAlignment(Qt.AlignTop)
+
+        self.autofill = ToggleSwitch("Autofill", "Automatically refill liquid when low")
+        controls_layout.addWidget(self.autofill)
+
+        self.water_removal = ToggleSwitch("Water removal", "Enable water removal cycle")
+        controls_layout.addWidget(self.water_removal)
+
+        self.drain = ToggleSwitch("Drain", "Enable liquid drainage")
+        controls_layout.addWidget(self.drain)
+
+        controls_group.setLayout(controls_layout)
+        status_row.addWidget(controls_group, 1)
+
+        # Status Group (indicators)
+        status_group = QGroupBox("Status")
+        status_group.setStyleSheet(self._get_group_style("#17a2b8"))
+        status_layout = QVBoxLayout()
+        status_layout.setSpacing(2)
+        status_layout.setContentsMargins(4, 4, 4, 4)
+        status_layout.setAlignment(Qt.AlignTop)
+
+        self.laser_power = IndicatorWidget("Laser power")
+        self.laser_power.setToolTip("Laser power status")
+        status_layout.addWidget(self.laser_power)
+
+        self.liquid_level = IndicatorWidget("Liquid level")
+        self.liquid_level.setToolTip("Saturator liquid level")
+        status_layout.addWidget(self.liquid_level)
+
+        self.pulse_quality = IndicatorWidget("Pulse quality")
+        self.pulse_quality.setToolTip("Pulse quality status")
+        status_layout.addWidget(self.pulse_quality)
+
+        status_group.setLayout(status_layout)
+        status_row.addWidget(status_group, 1)
+
+        # Settings Group (Advanced only)
+        settings_group = QGroupBox("Settings")
+        settings_group.setStyleSheet(self._get_group_style("#6c757d"))
+        settings_layout = QVBoxLayout()
+        settings_layout.setSpacing(4)
+        settings_layout.setContentsMargins(4, 4, 4, 4)
+        settings_layout.setAlignment(Qt.AlignTop)
+
+        self.set_averaging_time = SetWidget("Averaging time", " s")
+        self.set_averaging_time.setToolTip("Data averaging time in seconds")
+        settings_layout.addWidget(self.set_averaging_time)
+
+        settings_group.setLayout(settings_layout)
+        status_row.addWidget(settings_group, 1)
+
+        main_layout.addLayout(status_row)
+
+        # === SERIAL COMMANDS GROUP (collapsible, Advanced only) ===
+        self.commands_group = QGroupBox("📡 Serial Commands")
+        self.commands_group.setCheckable(True)
+        self.commands_group.setChecked(False)
+        self.commands_group.setStyleSheet(self._get_group_style("#7f8c8d"))
+        commands_layout = QVBoxLayout()
+        commands_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.command_widget = CommandWidget("CPC")
+        commands_layout.addWidget(self.command_widget)
+
+        self.commands_group.setLayout(commands_layout)
+        self.commands_group.toggled.connect(self._toggle_commands)
+        self.command_widget.setVisible(False)
+        main_layout.addWidget(self.commands_group)
+
+        # Add stretch at end
+        main_layout.addStretch()
+
+        scroll_area.setWidget(content_widget)
+        self.mode_stack.addWidget(scroll_area)
+
+    def _toggle_commands(self, checked):
+        """Toggle visibility of serial commands section."""
+        self.command_widget.setVisible(checked)
+
+    # === Backward compatibility properties ===
+    @property
+    def temp_saturator(self):
+        """Alias for backward compatibility with status tab."""
+        return self.set_saturator_temp
+
+    @property
+    def temp_condenser(self):
+        """Alias for backward compatibility with status tab."""
+        return self.set_condenser_temp
+
+
 # set tab widget containing settings and message input
-# used in CPCWidget
+# used in CPCWidget (kept for backward compatibility)
 class CPCSetTab(QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__()
@@ -933,6 +1514,49 @@ class PulseQuality(QWidget):
         self.current_threshold.setText("")
 
 
+class CollapsibleSection(QWidget):
+    """A collapsible section widget with toggle button and content area."""
+
+    def __init__(self, title, parent=None, initially_collapsed=False):
+        super().__init__(parent)
+
+        self.toggle_button = QToolButton()
+        self.toggle_button.setStyleSheet("QToolButton { border: none; font-size: 9pt; color: #888; }")
+        self.toggle_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.toggle_button.setArrowType(Qt.DownArrow if not initially_collapsed else Qt.RightArrow)
+        self.toggle_button.setText(title)
+        self.toggle_button.setCheckable(True)
+        self.toggle_button.setChecked(not initially_collapsed)
+        self.toggle_button.clicked.connect(self._on_toggle)
+
+        self.content_area = QWidget()
+        self.content_layout = QVBoxLayout(self.content_area)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setSpacing(4)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.toggle_button)
+        layout.addWidget(self.content_area)
+
+        self.content_area.setVisible(not initially_collapsed)
+
+    def _on_toggle(self, checked):
+        self.toggle_button.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        self.content_area.setVisible(checked)
+
+    def add_widget(self, widget):
+        self.content_layout.addWidget(widget)
+
+    def add_layout(self, layout):
+        self.content_layout.addLayout(layout)
+
+    def set_collapsed(self, collapsed):
+        self.toggle_button.setChecked(not collapsed)
+        self._on_toggle(not collapsed)
+
+
 class CPCDatabaseTab(QWidget):
     """Database/ACTRIS tab for CPC devices showing database status and settings."""
 
@@ -941,155 +1565,185 @@ class CPCDatabaseTab(QWidget):
 
         self.device_config = device_config
         self.app_config = None  # Will be set by CPC widget after creation
+        self.main_window = None
+        self.row_data = {}
+        self.editing_in_progress = False
+        self._highlight_timer = None
 
-        layout = QGridLayout()
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(15, 15, 15, 15)
 
-        row = 0
+        # ===== STATUS ROW (top left corner, inline) =====
+        status_row = QHBoxLayout()
+        status_row.setSpacing(20)
 
-        # Connection section (global, shared across all CPCs)
-        connection_label = QLabel("<b>Database Connection (shared)</b>")
-        layout.addWidget(connection_label, row, 0, 1, 2)
-        row += 1
+        # Next write countdown
+        self.next_write_value = QLabel("--:--")
+        self.next_write_value.setStyleSheet("font-size: 20px; font-weight: bold; color: #ffa726;")
+        status_row.addWidget(self.next_write_value)
 
-        # Connection string input
-        conn_string_label = QLabel("Connection string:")
-        layout.addWidget(conn_string_label, row, 0)
+        # Progress
+        self.progress_value = QLabel("No data")
+        self.progress_value.setStyleSheet("font-size: 11px; color: #66bb6a;")
+        status_row.addWidget(self.progress_value)
+
+        # Status badge
+        self.db_status_value = QLabel("Disabled")
+        self.db_status_value.setStyleSheet("font-size: 11px; color: #666;")
+        status_row.addWidget(self.db_status_value)
+
+        status_row.addStretch()
+        main_layout.addLayout(status_row)
+
+        # ===== SETTINGS SECTION (minimalistic, matching data_settings_dialog style) =====
+        # Database row
+        db_row = QHBoxLayout()
+        db_row.setSpacing(0)
+
+        db_label = QLabel("Database:")
+        db_label.setStyleSheet("color: #ccc; font-size: 13px;")
+        db_label.setFixedWidth(70)
+        db_row.addWidget(db_label)
+
         self.connection_string_input = QLineEdit()
         self.connection_string_input.setPlaceholderText("postgresql://user:password@host:port/database")
+        self.connection_string_input.setStyleSheet("""
+            QLineEdit {
+                color: #4a9eff;
+                background: transparent;
+                border: 1px solid #3d3d3d;
+                border-radius: 3px;
+                padding: 2px 6px;
+                font-family: monospace;
+                font-size: 12px;
+            }
+            QLineEdit:focus {
+                border-color: #4a9eff;
+            }
+        """)
         self.connection_string_input.textChanged.connect(self.connection_string_changed)
-        layout.addWidget(self.connection_string_input, row, 1)
-        row += 1
+        db_row.addWidget(self.connection_string_input)
 
-        # Test connection button
-        self.test_connection_btn = QPushButton("Test Connection + Refresh Preview")
-        self.test_connection_btn.clicked.connect(self.test_connection_clicked)
-        layout.addWidget(self.test_connection_btn, row, 0, 1, 2)
-        row += 1
-
-        # Global connection status
-        global_status_label = QLabel("Global status:")
-        layout.addWidget(global_status_label, row, 0)
         self.global_connection_status = QLabel("Disconnected")
-        self.global_connection_status.setStyleSheet("color: gray;")
-        layout.addWidget(self.global_connection_status, row, 1)
-        row += 1
+        self.global_connection_status.setStyleSheet("color: #666; font-size: 11px; margin-left: 10px;")
+        self.global_connection_status.setFixedWidth(85)
+        db_row.addWidget(self.global_connection_status)
 
-        # Active devices count
-        active_devices_label = QLabel("Active devices:")
-        layout.addWidget(active_devices_label, row, 0)
-        self.active_devices_count = QLabel("0 CPCs using database")
-        layout.addWidget(self.active_devices_count, row, 1)
-        row += 1
+        main_layout.addLayout(db_row)
 
-        # Separator
-        row += 1
+        # RHTP + Interval row
+        rhtp_row = QHBoxLayout()
+        rhtp_row.setSpacing(15)
 
-        # Device Settings section
-        settings_label = QLabel("<b>This Device Settings</b>")
-        layout.addWidget(settings_label, row, 0, 1, 2)
-        row += 1
+        rhtp_label = QLabel("RHTP:")
+        rhtp_label.setStyleSheet("color: #ccc; font-size: 13px;")
+        rhtp_row.addWidget(rhtp_label)
 
-        # Database enabled checkbox (connected to device parameter)
-        self.db_enabled_checkbox = QCheckBox("Enable database for this device")
-        self.db_enabled_checkbox.stateChanged.connect(self.db_enabled_changed)
-        layout.addWidget(self.db_enabled_checkbox, row, 0, 1, 2)
-        row += 1
-
-        # Linked RHTP dropdown (with guidance when disabled)
-        linked_rhtp_label = QLabel("Linked RHTP device:")
-        layout.addWidget(linked_rhtp_label, row, 0)
         self.linked_rhtp_dropdown = GuidedComboBox()
+        self.linked_rhtp_dropdown.setMinimumWidth(120)
         self.linked_rhtp_dropdown.set_tooltips(
-            enabled_tooltip="Select the RHTP sensor to link with this CPC for database recording",
-            disabled_tooltip="Disable database first to change linked RHTP device"
+            enabled_tooltip="Select the RHTP sensor to link with this CPC",
+            disabled_tooltip="Disable database first to change"
         )
-        # Guide target will be set after checkbox is created
         self.linked_rhtp_dropdown.currentIndexChanged.connect(self.linked_rhtp_changed)
-        layout.addWidget(self.linked_rhtp_dropdown, row, 1)
-        row += 1
+        rhtp_row.addWidget(self.linked_rhtp_dropdown)
 
-        # Averaging interval dropdown (with guidance when disabled)
-        interval_label = QLabel("Averaging interval:")
-        layout.addWidget(interval_label, row, 0)
+        interval_label = QLabel("Interval:")
+        interval_label.setStyleSheet("color: #ccc; font-size: 13px;")
+        rhtp_row.addWidget(interval_label)
+
         self.interval_dropdown = GuidedComboBox()
+        self.interval_dropdown.setMinimumWidth(100)
         self.interval_dropdown.addItems(['1 minute', '5 minutes', '10 minutes', '15 minutes', '1 hour', '3 hours'])
         self.interval_dropdown.set_tooltips(
             enabled_tooltip="Select the time period for data averaging",
-            disabled_tooltip="Disable database first to change averaging interval"
+            disabled_tooltip="Disable database first to change"
         )
-        # Guide target will be set after checkbox is created
         self.interval_dropdown.currentTextChanged.connect(self.interval_changed)
-        layout.addWidget(self.interval_dropdown, row, 1)
-        row += 1
+        rhtp_row.addWidget(self.interval_dropdown)
 
-        # Separator
-        row += 1
+        rhtp_row.addStretch()
+        main_layout.addLayout(rhtp_row)
 
-        # Status section
-        status_label = QLabel("<b>This Device Status</b>")
-        layout.addWidget(status_label, row, 0, 1, 2)
-        row += 1
+        # Enable checkbox with hint (like data_settings_dialog)
+        enable_row = QHBoxLayout()
+        self.db_enabled_checkbox = QCheckBox("Enable database writes")
+        self.db_enabled_checkbox.setToolTip("Start writing averaged data to the ACTRIS database")
+        self.db_enabled_checkbox.stateChanged.connect(self.db_enabled_changed)
+        enable_row.addWidget(self.db_enabled_checkbox)
 
-        # Next Write Countdown - PROMINENT (simplified)
-        next_write_label = QLabel("Next write:")
-        next_write_label.setStyleSheet("font-size: 11pt;")
-        layout.addWidget(next_write_label, row, 0)
+        self.active_devices_count = QLabel("0 CPCs using database")
+        self.active_devices_count.setStyleSheet("color: #666; font-size: 11px; margin-left: 10px;")
+        enable_row.addWidget(self.active_devices_count)
+        enable_row.addStretch()
+        main_layout.addLayout(enable_row)
 
-        self.next_write_value = QLabel("--:--")
-        self.next_write_value.setStyleSheet("font-size: 20pt; font-weight: bold; color: #ffa726;")
-        layout.addWidget(self.next_write_value, row, 1)
-        row += 1
+        # Last write info row (like data_settings_dialog)
+        last_row = QHBoxLayout()
+        last_row.setSpacing(10)
 
-        # Current interval progress
-        progress_label = QLabel("Current interval:")
-        progress_label.setStyleSheet("font-size: 11pt;")
-        layout.addWidget(progress_label, row, 0)
-        self.progress_value = QLabel("No data")
-        self.progress_value.setStyleSheet("font-size: 11pt; color: #66bb6a;")
-        layout.addWidget(self.progress_value, row, 1)
-        row += 1
+        last_label = QLabel("Last write:")
+        last_label.setStyleSheet("color: #ccc; font-size: 13px;")
+        last_label.setFixedWidth(70)
+        last_row.addWidget(last_label)
 
-        # Device status indicator
-        db_status_label = QLabel("Status:")
-        layout.addWidget(db_status_label, row, 0)
-        self.db_status_value = QLabel("Disabled")
-        layout.addWidget(self.db_status_value, row, 1)
-        row += 1
-
-        # Last write timestamp
-        last_write_label = QLabel("Last write:")
-        layout.addWidget(last_write_label, row, 0)
         self.last_write_value = QLabel("Never")
-        layout.addWidget(self.last_write_value, row, 1)
-        row += 1
+        self.last_write_value.setStyleSheet("color: #666; font-size: 11px;")
+        last_row.addWidget(self.last_write_value)
 
-        # Records written counter
-        records_label = QLabel("Records written:")
-        layout.addWidget(records_label, row, 0)
+        records_label = QLabel("Records:")
+        records_label.setStyleSheet("color: #888; font-size: 11px; margin-left: 20px;")
+        last_row.addWidget(records_label)
+
         self.records_value = QLabel("0")
-        layout.addWidget(self.records_value, row, 1)
-        row += 1
+        self.records_value.setStyleSheet("color: #666; font-size: 11px;")
+        last_row.addWidget(self.records_value)
 
-        # Current interval progress
-        progress_label = QLabel("Current interval:")
-        layout.addWidget(progress_label, row, 0)
-        self.progress_value = QLabel("No data")
-        self.progress_value.setStyleSheet("color: gray;")
-        layout.addWidget(self.progress_value, row, 1)
-        row += 1
+        last_row.addStretch()
+        main_layout.addLayout(last_row)
 
-        # Next write countdown
-        next_write_label = QLabel("Next write in:")
-        layout.addWidget(next_write_label, row, 0)
-        self.next_write_value = QLabel("-")
-        self.next_write_value.setStyleSheet("color: gray;")
-        layout.addWidget(self.next_write_value, row, 1)
-        row += 1
+        # Set up guidance targets
+        self.linked_rhtp_dropdown.set_guide_target(
+            self.db_enabled_checkbox,
+            "Uncheck 'Enable database' to change"
+        )
+        self.interval_dropdown.set_guide_target(
+            self.db_enabled_checkbox,
+            "Uncheck 'Enable database' to change"
+        )
 
-        # Latest saved data table
-        data_table_label = QLabel("<b>Latest Saved Data</b>")
-        layout.addWidget(data_table_label, row, 0, 1, 2)
-        row += 1
+        # ===== DATA TABLE (stretches to fill space) =====
+        table_header_row = QHBoxLayout()
+        table_label = QLabel("Preview")
+        table_label.setStyleSheet("color: #888; font-size: 11px;")
+        table_header_row.addWidget(table_label)
+
+        table_header_row.addStretch()
+
+        # Delete button (small, inline)
+        self.delete_button = QPushButton("Delete selected")
+        self.delete_button.setToolTip("Delete selected rows from database")
+        self.delete_button.setStyleSheet("font-size: 10px; padding: 2px 6px; color: #888;")
+        self.delete_button.clicked.connect(self.delete_selected_rows)
+        table_header_row.addWidget(self.delete_button)
+
+        self.show_more_btn = QPushButton("Show more")
+        self.show_more_btn.setToolTip("Load 20 more rows from database")
+        self.show_more_btn.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+        self.show_more_btn.clicked.connect(self.show_more_clicked)
+        table_header_row.addWidget(self.show_more_btn)
+
+        self.refresh_preview_btn = QPushButton("Refresh")
+        self.refresh_preview_btn.setToolTip("Refresh preview from database")
+        self.refresh_preview_btn.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+        self.refresh_preview_btn.clicked.connect(self.refresh_preview_clicked)
+        table_header_row.addWidget(self.refresh_preview_btn)
+
+        main_layout.addLayout(table_header_row)
+
+        # Track how many rows we're showing
+        self._preview_row_count = 10
 
         self.data_table = QTableWidget()
         self.data_table.setColumnCount(12)
@@ -1099,65 +1753,26 @@ class CPCDatabaseTab(QWidget):
         ])
         self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.data_table.setRowCount(10)
-        self.data_table.setMaximumHeight(300)
-        # Enable row selection for deletion
         self.data_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.data_table.setSelectionMode(QTableWidget.MultiSelection)
-        # Connect cell changed signal for editing
         self.data_table.cellChanged.connect(self.cell_edited)
-        layout.addWidget(self.data_table, row, 0, 1, 2)
-        row += 1
+        main_layout.addWidget(self.data_table, 1)  # stretch factor 1 to fill space
 
-        # Delete button for selected rows
-        self.delete_button = QPushButton("Delete Selected Rows")
-        self.delete_button.clicked.connect(self.delete_selected_rows)
-        layout.addWidget(self.delete_button, row, 0, 1, 2)
-        row += 1
-
-        # Store original row data for tracking changes
-        self.row_data = {}  # {row_index: {'time': ..., 'instr_id': ..., 'data': {...}}}
-        self.editing_in_progress = False  # Flag to prevent recursive cell updates
-
-        # Error/info section
-        error_label = QLabel("<b>Messages</b>")
-        layout.addWidget(error_label, row, 0, 1, 2)
-        row += 1
-
+        # ===== MESSAGES SECTION (collapsible) =====
+        self.messages_section = CollapsibleSection("Messages", initially_collapsed=True)
         self.error_text = QTextEdit()
         self.error_text.setReadOnly(True)
-        self.error_text.setMaximumHeight(100)
-        layout.addWidget(self.error_text, row, 0, 1, 2)
-        row += 1
+        self.error_text.setMaximumHeight(60)
+        self.error_text.setStyleSheet("font-size: 11px;")
+        self.messages_section.add_widget(self.error_text)
+        main_layout.addWidget(self.messages_section)
 
-        # Set row stretches (data table and error text)
-        data_table_row = row - 2
-        error_text_row = row - 1
-        layout.setRowStretch(data_table_row, 2)  # Data table gets more space
-        layout.setRowStretch(error_text_row, 1)  # Error text gets some space
-
-        self.setLayout(layout)
-
-        # Get reference to main window for accessing database_manager
-        # Will be set when tab is added to device
-        self.main_window = None
-
-        # Set up guidance targets for dropdowns (point to checkbox when clicked while disabled)
-        self.linked_rhtp_dropdown.set_guide_target(
-            self.db_enabled_checkbox,
-            "Uncheck 'Enable database' to change linked RHTP device"
-        )
-        self.interval_dropdown.set_guide_target(
-            self.db_enabled_checkbox,
-            "Uncheck 'Enable database' to change averaging interval"
-        )
+        self.setLayout(main_layout)
 
         # Timer for periodic refresh (every 5 seconds)
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.refresh_status)
-        self.refresh_timer.start(5000)  # 5 seconds
-
-        # Don't initialize dropdowns immediately - the 5-second timer will handle it
-        # This prevents blocking during device creation
+        self.refresh_timer.start(5000)
 
     def populate_rhtp_dropdown(self):
         """Populate linked RHTP dropdown from RHTP devices in app config."""
@@ -1244,10 +1859,10 @@ class CPCDatabaseTab(QWidget):
 
         if enabled:
             self.db_status_value.setText("Enabled")
-            self.db_status_value.setStyleSheet("color: green;")
+            self.db_status_value.setStyleSheet("font-size: 11px; color: #66bb6a;")
         else:
             self.db_status_value.setText("Disabled")
-            self.db_status_value.setStyleSheet("color: gray;")
+            self.db_status_value.setStyleSheet("font-size: 11px; color: #666;")
 
     def update_last_write(self, timestamp_str):
         """Update last write timestamp display."""
@@ -1271,7 +1886,7 @@ class CPCDatabaseTab(QWidget):
 
         # Update sample count
         self.progress_value.setText(f"{samples_collected}/{total_samples} samples")
-        self.progress_value.setStyleSheet("color: green;" if samples_collected > 0 else "color: gray;")
+        self.progress_value.setStyleSheet("font-size: 11px; color: #66bb6a;" if samples_collected > 0 else "font-size: 11px; color: #666;")
 
         # Calculate time remaining
         if interval_start:
@@ -1292,20 +1907,20 @@ class CPCDatabaseTab(QWidget):
                     time_str = f"{minutes:02d}:{seconds:02d}"
 
                 self.next_write_value.setText(time_str)
-                self.next_write_value.setStyleSheet("color: orange;")
+                self.next_write_value.setStyleSheet("font-size: 20px; font-weight: bold; color: #ffa726;")
             else:
                 self.next_write_value.setText("Writing...")
-                self.next_write_value.setStyleSheet("color: green;")
+                self.next_write_value.setStyleSheet("font-size: 20px; font-weight: bold; color: #66bb6a;")
         else:
-            self.next_write_value.setText("-")
-            self.next_write_value.setStyleSheet("color: gray;")
+            self.next_write_value.setText("--:--")
+            self.next_write_value.setStyleSheet("font-size: 20px; font-weight: bold; color: #666;")
 
     def reset_progress(self):
         """Reset progress indicators."""
         self.progress_value.setText("No data")
-        self.progress_value.setStyleSheet("color: gray;")
-        self.next_write_value.setText("-")
-        self.next_write_value.setStyleSheet("color: gray;")
+        self.progress_value.setStyleSheet("font-size: 11px; color: #666;")
+        self.next_write_value.setText("--:--")
+        self.next_write_value.setStyleSheet("font-size: 20px; font-weight: bold; color: #666;")
 
     def update_data_table(self, rows):
         """
@@ -1558,10 +2173,8 @@ class CPCDatabaseTab(QWidget):
 
         if success:
             self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: {message}")
-            # Refresh table to show updated data
-            dev_id = self.device_config.device_id
-            latest_rows = self.main_window.database_manager.get_latest_rows(10, dev_id)
-            self.update_data_table(latest_rows)
+            # Refresh table to show updated data (respects current row count)
+            self.refresh_preview()
             # Clear row selection after deletion
             self.data_table.clearSelection()
         else:
@@ -1623,9 +2236,22 @@ class CPCDatabaseTab(QWidget):
                 current_time = datetime.now()
                 self.add_message(f"{current_time.strftime('%H:%M:%S')}: Averaging interval changed to {text}")
 
+    def _highlight_widget(self, widget, highlight=True):
+        """Temporarily highlight a widget with red border to indicate an error."""
+        if highlight:
+            original_style = widget.styleSheet()
+            widget.setStyleSheet(original_style + " border: 2px solid #ff5555;")
+            widget.setFocus()
+            # Remove highlight after 2 seconds
+            if self._highlight_timer:
+                self._highlight_timer.stop()
+            self._highlight_timer = QTimer()
+            self._highlight_timer.setSingleShot(True)
+            self._highlight_timer.timeout.connect(lambda: widget.setStyleSheet(original_style))
+            self._highlight_timer.start(2000)
+
     def db_enabled_changed(self, state):
         """Handle database enabled checkbox state change with full validation and connection management."""
-        from PyQt5.QtWidgets import QMessageBox
         from datetime import datetime
 
         enabled = state == Qt.Checked
@@ -1641,30 +2267,42 @@ class CPCDatabaseTab(QWidget):
             # Validation 1: Check connection string is not empty
             conn_string = self.connection_string_input.text().strip()
             if not conn_string:
-                QMessageBox.warning(self, "Database Error", "Please enter a connection string first.")
+                self._highlight_widget(self.connection_string_input)
                 self.db_enabled_checkbox.setChecked(False)
-                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - No connection string provided")
+                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - Please enter a database connection string")
+                # Expand messages section to show error
+                self.messages_section.set_collapsed(False)
                 return
 
-            # Validation 2: Check RHTP is linked (use dropdown value)
+            # Validation 2: Check RHTP is linked - show confirmation if not
             rhtp_id = self.linked_rhtp_dropdown.currentData()
             if rhtp_id is None or rhtp_id == 'None':
-                QMessageBox.warning(
+                # Show confirmation dialog
+                reply = QMessageBox.question(
                     self,
-                    "Database Error",
-                    "Please link an RHTP device first.\n\nSelect an RHTP device in the 'Linked RHTP' dropdown above."
+                    "No RHTP Device Linked",
+                    "No RHTP device is linked to this CPC.\n\n"
+                    "RHTP provides temperature, pressure, and humidity data for ACTRIS compliance.\n\n"
+                    "Do you want to continue without RHTP data?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
                 )
-                self.db_enabled_checkbox.setChecked(False)
-                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - No RHTP device linked")
-                return
+                if reply != QMessageBox.Yes:
+                    # User chose not to continue - highlight RHTP dropdown
+                    self._highlight_widget(self.linked_rhtp_dropdown)
+                    self.db_enabled_checkbox.setChecked(False)
+                    return
+                # User chose to continue without RHTP - proceed with enabling
 
-            # Validation 3: Check RHTP device exists and is connected
-            rhtp_widget = self.main_window.data_holder.device_widgets.get(rhtp_id)
-            if not rhtp_widget:
-                QMessageBox.warning(self, "Database Error", "Linked RHTP device not found.")
-                self.db_enabled_checkbox.setChecked(False)
-                self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - RHTP device not found")
-                return
+            # Validation 3: If RHTP is selected, check it exists
+            if rhtp_id and rhtp_id != 'None':
+                rhtp_widget = self.main_window.data_holder.device_widgets.get(rhtp_id)
+                if not rhtp_widget:
+                    QMessageBox.warning(self, "Database Error", "Linked RHTP device not found.")
+                    self._highlight_widget(self.linked_rhtp_dropdown)
+                    self.db_enabled_checkbox.setChecked(False)
+                    self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Error - RHTP device not found")
+                    return
 
             # Register device with database manager (connects if first device)
             success, message = self.main_window.database_manager.register_device(dev_id, conn_string)
@@ -1683,7 +2321,7 @@ class CPCDatabaseTab(QWidget):
 
                 # Update UI
                 self.db_status_value.setText("Enabled")
-                self.db_status_value.setStyleSheet("color: green;")
+                self.db_status_value.setStyleSheet("font-size: 11px; color: #66bb6a;")
                 self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Database enabled - {message}")
 
                 # Disable dropdowns to prevent changes during recording
@@ -1711,7 +2349,7 @@ class CPCDatabaseTab(QWidget):
 
             # Update UI
             self.db_status_value.setText("Disabled")
-            self.db_status_value.setStyleSheet("color: gray;")
+            self.db_status_value.setStyleSheet("font-size: 11px; color: #666;")
             self.reset_progress()  # Reset progress indicators
             self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Database disabled - {message}")
 
@@ -1734,33 +2372,67 @@ class CPCDatabaseTab(QWidget):
 
             # Auto-save will happen when app closes or user manually saves
 
-    def test_connection_clicked(self):
-        """Test database connection with current connection string."""
-        from PyQt5.QtWidgets import QMessageBox
+    def refresh_preview_clicked(self):
+        """Refresh preview table from database (resets to 10 rows)."""
+        from datetime import datetime
 
-        conn_string = self.connection_string_input.text()
-
-        if not conn_string:
-            QMessageBox.warning(self, "Database Test", "Please enter a connection string first.")
-            return
+        # Reset row count on manual refresh
+        self._preview_row_count = 10
 
         if not self.main_window or not hasattr(self.main_window, 'database_manager'):
-            QMessageBox.warning(self, "Database Test", "Database manager not available.")
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Database manager not available")
             return
 
+        conn_string = self.connection_string_input.text()
+        if not conn_string:
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: No connection string configured")
+            return
+
+        # Test connection and refresh
         success, message = self.main_window.database_manager.test_connection(conn_string)
 
         if success:
-            QMessageBox.information(self, "Database Test", f"Success!\n\n{message}")
-
-            # Refresh the preview table to show latest data
             dev_id = self.device_config.device_id
-            latest_rows = self.main_window.database_manager.get_latest_rows(10, dev_id)
+            latest_rows = self.main_window.database_manager.get_latest_rows(self._preview_row_count, dev_id)
             self.update_data_table(latest_rows)
-            from datetime import datetime
-            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Preview table refreshed")
+            self.global_connection_status.setText("Connected")
+            self.global_connection_status.setStyleSheet("color: #66bb6a; font-size: 11px; margin-left: 10px;")
         else:
-            QMessageBox.warning(self, "Database Test", f"Connection failed:\n\n{message}")
+            self.add_message(f"{datetime.now().strftime('%H:%M:%S')}: Connection failed - {message}")
+            self.global_connection_status.setText("Failed")
+            self.global_connection_status.setStyleSheet("color: #ff6b6b; font-size: 11px; margin-left: 10px;")
+
+    def show_more_clicked(self):
+        """Load 20 more rows into preview."""
+        from datetime import datetime
+
+        self._preview_row_count += 20
+
+        if not self.main_window or not hasattr(self.main_window, 'database_manager'):
+            return
+
+        if not self.main_window.database_manager.connected:
+            # Try to connect first
+            conn_string = self.connection_string_input.text()
+            if conn_string:
+                self.main_window.database_manager.test_connection(conn_string)
+
+        if self.main_window.database_manager.connected:
+            dev_id = self.device_config.device_id
+            latest_rows = self.main_window.database_manager.get_latest_rows(self._preview_row_count, dev_id)
+            self.update_data_table(latest_rows)
+
+    def refresh_preview(self):
+        """Refresh preview table (called after writes)."""
+        if not self.main_window or not hasattr(self.main_window, 'database_manager'):
+            return
+
+        if not self.main_window.database_manager.connected:
+            return
+
+        dev_id = self.device_config.device_id
+        latest_rows = self.main_window.database_manager.get_latest_rows(self._preview_row_count, dev_id)
+        self.update_data_table(latest_rows)
 
     def sync_connection_string_to_all_cpcs(self, conn_string):
         """Update connection string in all other CPC ACTRIS tabs."""

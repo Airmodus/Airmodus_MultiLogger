@@ -1,5 +1,5 @@
 from numpy import full, nan, roll
-from config import MAX_TIME_SEC, CPC, PSM, PSM2
+from config import MAX_TIME_SEC, CPC, PSM
 
 # compile settings list for CPC .par file
 def compile_cpc_settings(prnt, pall):
@@ -73,28 +73,17 @@ def cpc_flow_send(psm_widget, value, device_widgets):
     cpc_id = psm_widget.device_config.extra_params.get('connected_cpc', 'None')
     # if PSM is connected to CPC, send value to CPC
     if cpc_id != 'None':
+        # Convert to int for lookup (JSON stores as string)
+        try:
+            cpc_id = int(cpc_id)
+        except (ValueError, TypeError):
+            return
         # get connected CPC widget
         cpc_widget = device_widgets.get(cpc_id)
         if cpc_widget and cpc_widget.device_config.device_type == CPC:
             # send flow rate set value to CPC
             if cpc_widget.connection:
                 cpc_widget.connection.send_set_val(value, ":SET:FLOW ", decimals=3)
-
-# change PSM's 10 Hz parameter and button status
-def ten_hz_clicked(psm_widget, config):
-    # get current status of PSM 10 hz parameter from extra_params
-    status = psm_widget.device_config.extra_params.get('10_hz', False)
-    # if 10 hz is off, turn it on
-    if status == False:
-        # set 10 hz flag to True
-        psm_widget.device_config.extra_params['10_hz'] = True
-        psm_widget.measure_tab.ten_hz.change_color(1)
-    # if 10 hz is on, turn it off
-    elif status == True:
-        # set 10 hz flag to False
-        psm_widget.device_config.extra_params['10_hz'] = False
-        psm_widget.measure_tab.ten_hz.change_color(0)
-
 
 # when command is entered, send message to device and update .par file
 def command_entered(dev_id, device_widgets, config):
@@ -268,7 +257,7 @@ def compute_unique_short_ids(serial_numbers):
 __all__ = [
     'compile_cpc_settings', 'compile_psm_settings',
     '_manage_plot_array', '_roll_pulse_array', 'psm_update', 'psm_flow_send', 'cpc_flow_send',
-    'ten_hz_clicked', 'command_entered',
+    'command_entered',
     'parse_idn_response', 'create_data_response', 'create_error_response',
     'compute_unique_short_ids'
 ]

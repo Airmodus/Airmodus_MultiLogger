@@ -7,7 +7,9 @@ To add a new device, simply add one entry to this registry.
 New devices can use the @register_device decorator for automatic registration.
 """
 
-from config import (CPC, PSM, PSM2, ELECTROMETER, CO2_SENSOR, RHTP, AFM,
+import logging
+
+from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM,
                    EDILUTER, TSI_CPC, AFC, EXAMPLE_DEVICE)
 
 
@@ -83,16 +85,16 @@ def setup_cpc_connections(widget, device_config, connection, app):
     widget.set_tab.command_widget.command_input.returnPressed.connect(
         lambda: command_entered(device_id, app.data_holder.device_widgets, app.config))
 
-    # Set points
+    # Set points - stepChanged for arrows, editingFinished for typed values
     widget.set_tab.set_saturator_temp.value_spinbox.stepChanged.connect(
         lambda value: connection.send_set_val(value, ":SET:TEMP:SAT "))
-    widget.set_tab.set_saturator_temp.value_input.returnPressed.connect(
-        lambda: connection.send_set_val(float(widget.set_tab.set_saturator_temp.value_input.text()), ":SET:TEMP:SAT "))
+    widget.set_tab.set_saturator_temp.value_spinbox.editingFinished.connect(
+        lambda: connection.send_set_val(widget.set_tab.set_saturator_temp.value_spinbox.value(), ":SET:TEMP:SAT "))
 
     widget.set_tab.set_condenser_temp.value_spinbox.stepChanged.connect(
         lambda value: connection.send_set_val(value, ":SET:TEMP:CON "))
-    widget.set_tab.set_condenser_temp.value_input.returnPressed.connect(
-        lambda: connection.send_set_val(float(widget.set_tab.set_condenser_temp.value_input.text()), ":SET:TEMP:CON "))
+    widget.set_tab.set_condenser_temp.value_spinbox.editingFinished.connect(
+        lambda: connection.send_set_val(widget.set_tab.set_condenser_temp.value_spinbox.value(), ":SET:TEMP:CON "))
 
     # Averaging time with special formatting
     def send_averaging_time(value: float):
@@ -100,8 +102,8 @@ def setup_cpc_connections(widget, device_config, connection, app):
         connection.send_set_val(output, ":SET:TAVG ")
 
     widget.set_tab.set_averaging_time.value_spinbox.stepChanged.connect(send_averaging_time)
-    widget.set_tab.set_averaging_time.value_input.returnPressed.connect(
-        lambda: send_averaging_time(float(widget.set_tab.set_averaging_time.value_input.text())))
+    widget.set_tab.set_averaging_time.value_spinbox.editingFinished.connect(
+        lambda: send_averaging_time(widget.set_tab.set_averaging_time.value_spinbox.value()))
 
     # Pulse quality
     widget.pulse_quality.history_time_select.currentIndexChanged.connect(
@@ -111,23 +113,44 @@ def setup_cpc_connections(widget, device_config, connection, app):
     widget.pulse_quality.start_analysis.clicked.connect(
         lambda: app.data_logger.pulse_analysis_start(device_id, device_config))
 
+    # Simple mode toggle connections (same functionality as Advanced mode)
+    widget.control_tab.simple_drain.clicked.connect(
+        lambda: connection.send_message(":SET:DRN " + str(int(widget.control_tab.simple_drain.isChecked()))))
+    widget.control_tab.simple_autofill.clicked.connect(
+        lambda: connection.send_message(":SET:AFLL " + str(int(widget.control_tab.simple_autofill.isChecked()))))
+    widget.control_tab.simple_water_removal.clicked.connect(
+        lambda: connection.send_message(":SET:WREM " + str(int(widget.control_tab.simple_water_removal.isChecked()))))
+
 
 def setup_psm_connections(widget, device_config, connection, app):
     """Set up PSM-specific connections."""
-    from utils import command_entered, ten_hz_clicked, psm_update, psm_flow_send, cpc_flow_send
+    from utils import command_entered, psm_update, psm_flow_send, cpc_flow_send
 
     device_id = device_config.device_id
     device_type = device_config.device_type
 
-    # Measure tab buttons
-    widget.measure_tab.scan.clicked.connect(
-        lambda: connection.send_message(widget.measure_tab.compile_scan()))
-    widget.measure_tab.step.clicked.connect(
-        lambda: connection.send_message(widget.measure_tab.compile_step()))
-    widget.measure_tab.fixed.clicked.connect(
-        lambda: connection.send_message(widget.measure_tab.compile_fixed()))
-    widget.measure_tab.ten_hz.clicked.connect(
-        lambda: ten_hz_clicked(widget, app.config))
+    # Mode dropdown just lets user browse - button sends the command
+    def on_update_clicked():
+        if not connection or not connection._connected:
+            return
+        widget.measure_tab._on_update_sending()
+        mode_index = widget.measure_tab.mode_selector.currentIndex()
+        if mode_index == 0:
+            cmd = widget.measure_tab.compile_scan()
+        elif mode_index == 1:
+            cmd = widget.measure_tab.compile_step()
+        elif mode_index == 2:
+            cmd = widget.measure_tab.compile_fixed()
+        else:
+            return
+        if cmd:
+            connection.send_message(cmd)
+            widget.measure_tab.save_settings(device_config.extra_params)
+            widget.measure_tab._mark_settings_clean()
+            if hasattr(widget, 'on_config_changed'):
+                widget.on_config_changed()
+
+    widget.measure_tab.update_button.clicked.connect(on_update_clicked)
 
     # Temperature setpoints
     temps = [
@@ -144,9 +167,9 @@ def setup_psm_connections(widget, device_config, connection, app):
             lambda value, cmd=command: connection.send_set_val(value, cmd))
         set_widget.value_spinbox.stepChanged.connect(
             lambda: psm_update(device_id, app.data_holder.device_widgets))
-        set_widget.value_input.returnPressed.connect(
-            lambda cmd=command, attr=attr_name: connection.send_set_val(float(getattr(widget.set_tab, attr).value_input.text()), cmd))
-        set_widget.value_input.returnPressed.connect(
+        set_widget.value_spinbox.editingFinished.connect(
+            lambda cmd=command, attr=attr_name: connection.send_set_val(getattr(widget.set_tab, attr).value_spinbox.value(), cmd))
+        set_widget.value_spinbox.editingFinished.connect(
             lambda: psm_update(device_id, app.data_holder.device_widgets))
 
     # CPC inlet flow
@@ -154,28 +177,33 @@ def setup_psm_connections(widget, device_config, connection, app):
         lambda value: psm_flow_send(widget, value))
     widget.set_tab.set_cpc_inlet_flow.value_spinbox.stepChanged.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
-    widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(
-        lambda: psm_flow_send(widget, float(widget.set_tab.set_cpc_inlet_flow.value_input.text())))
-    widget.set_tab.set_cpc_inlet_flow.value_input.returnPressed.connect(
+    widget.set_tab.set_cpc_inlet_flow.value_spinbox.editingFinished.connect(
+        lambda: psm_flow_send(widget, widget.set_tab.set_cpc_inlet_flow.value_spinbox.value()))
+    widget.set_tab.set_cpc_inlet_flow.value_spinbox.editingFinished.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
 
     # CPC sample flow
     widget.set_tab.set_cpc_sample_flow.value_spinbox.stepChanged.connect(
         lambda value: cpc_flow_send(widget, value, app.data_holder.device_widgets))
-    widget.set_tab.set_cpc_sample_flow.value_input.returnPressed.connect(
-        lambda: cpc_flow_send(widget, float(widget.set_tab.set_cpc_sample_flow.value_input.text()), app.data_holder.device_widgets))
+    widget.set_tab.set_cpc_sample_flow.value_spinbox.editingFinished.connect(
+        lambda: cpc_flow_send(widget, widget.set_tab.set_cpc_sample_flow.value_spinbox.value(), app.data_holder.device_widgets))
 
-    # CO flow (PSM Retrofit only) - Save to extra_params
+    # CO flow (PSM Retrofit only) - Save to extra_params and sync simple mode
     from config import PSM
-    if device_type == PSM:
+    if device_type == PSM and hasattr(widget.set_tab, 'set_co_flow'):
+        def update_co_flow_value(value):
+            device_config.extra_params.update({'co_flow': str(round(value, 3))})
+            # Sync to simple mode display
+            if hasattr(widget.control_tab, 'simple_co_flow'):
+                widget.control_tab.simple_co_flow.change_value(f"{value:.3f} lpm")
+
         widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(
             lambda: psm_update(device_id, app.data_holder.device_widgets))
-        widget.set_tab.set_co_flow.value_input.returnPressed.connect(
+        widget.set_tab.set_co_flow.value_spinbox.editingFinished.connect(
             lambda: psm_update(device_id, app.data_holder.device_widgets))
-        widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(
-            lambda value: device_config.extra_params.update({'co_flow': str(round(value, 3))}))
-        widget.set_tab.set_co_flow.value_input.returnPressed.connect(
-            lambda: device_config.extra_params.update({'co_flow': widget.set_tab.set_co_flow.value_input.text()}))
+        widget.set_tab.set_co_flow.value_spinbox.stepChanged.connect(update_co_flow_value)
+        widget.set_tab.set_co_flow.value_spinbox.editingFinished.connect(
+            lambda: update_co_flow_value(widget.set_tab.set_co_flow.value_spinbox.value()))
 
     # Command input
     widget.set_tab.command_widget.command_input.returnPressed.connect(
@@ -183,25 +211,43 @@ def setup_psm_connections(widget, device_config, connection, app):
     widget.set_tab.command_widget.command_input.returnPressed.connect(
         lambda: psm_update(device_id, app.data_holder.device_widgets))
 
-    # Liquid operations
-    widget.set_tab.autofill.clicked.connect(
-        lambda: connection.send_message(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked()))))
-    widget.set_tab.drain.clicked.connect(
-        lambda: connection.send_message(":SET:DRN " + str(int(widget.set_tab.drain.isChecked()))))
-    widget.set_tab.drying.clicked.connect(
-        lambda: connection.send_message(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())]))
+    # Advanced mode liquid operations - separate controls for autofill and drain
+    def on_autofill_toggled():
+        import time
+        widget.control_tab._autofill_cooldown = time.time() + 2.0
+        connection.send_message(":SET:AFLL " + str(int(widget.set_tab.autofill.isChecked())))
+    widget.set_tab.autofill.clicked.connect(on_autofill_toggled)
 
-    # Wire up connected CPC device reference
-    def update_connected_cpc():
-        """Update PSM's reference to connected CPC widget."""
-        cpc_id = device_config.extra_params.get('connected_cpc', 'None')
-        if cpc_id != 'None':
-            widget.connected_cpc_device = app.data_holder.device_widgets.get(cpc_id)
-        else:
-            widget.connected_cpc_device = None
+    def on_drain_toggled():
+        import time
+        widget.control_tab._drain_cooldown = time.time() + 2.0
+        connection.send_message(":SET:DRN " + str(int(widget.set_tab.drain.isChecked())))
+    widget.set_tab.drain.clicked.connect(on_drain_toggled)
 
-    # Set initial reference
-    update_connected_cpc()
+    def on_drying_toggled():
+        import time
+        widget.control_tab._drying_cooldown = time.time() + 2.0
+        connection.send_message(widget.set_tab.drying.messages[int(widget.set_tab.drying.isChecked())])
+    widget.set_tab.drying.clicked.connect(on_drying_toggled)
+
+    # Simple mode individual toggle connections
+    def on_simple_autofill_toggled():
+        import time
+        widget.control_tab._autofill_cooldown = time.time() + 2.0
+        connection.send_message(":SET:AFLL " + str(int(widget.control_tab.simple_autofill.isChecked())))
+    widget.control_tab.simple_autofill.clicked.connect(on_simple_autofill_toggled)
+
+    def on_simple_drain_toggled():
+        import time
+        widget.control_tab._drain_cooldown = time.time() + 2.0
+        connection.send_message(":SET:DRN " + str(int(widget.control_tab.simple_drain.isChecked())))
+    widget.control_tab.simple_drain.clicked.connect(on_simple_drain_toggled)
+
+    def on_simple_drying_toggled():
+        import time
+        widget.control_tab._drying_cooldown = time.time() + 2.0
+        connection.send_message(widget.control_tab.simple_drying.messages[int(widget.control_tab.simple_drying.isChecked())])
+    widget.control_tab.simple_drying.clicked.connect(on_simple_drying_toggled)
 
 
 def setup_ediluter_connections(widget, device_config, connection, app):
@@ -274,11 +320,7 @@ DEVICE_REGISTRY = {
         has_special_setup=False
     ),
 
-    PSM2: DeviceConfig(
-        widget_class=PSMWidget,
-        setup_connections_func=setup_psm_connections,
-        has_special_setup=False
-    ),
+    # PSM2 removed - configs migrated to PSM, version determined by firmware
 
     ELECTROMETER: DeviceConfig(
         widget_class=ElectrometerWidget,

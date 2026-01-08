@@ -24,7 +24,6 @@ class PlotManager:
                 if device_widget and hasattr(device_widget, 'is_connected') and device_widget.is_connected:
                     device_widget.perform_pre_plot_calculations(self.data_holder)
             except Exception as e:
-                print(traceback.format_exc())
                 logging.exception(e)
 
         # ----- update plot data -----
@@ -83,7 +82,6 @@ class PlotManager:
                                     self.data_holder.plot_data, self.data_holder
                                 )
                             except PulseAnalysisError as e:
-                                print(traceback.format_exc())
                                 logging.exception(e)
                                 # Stop pulse analysis if exception occurs
                                 self.main_window.data_logger.pulse_analysis_stop(dev_id, device_config)
@@ -98,7 +96,6 @@ class PlotManager:
                     )
 
             except Exception as e:
-                print(traceback.format_exc())
                 logging.exception(e)
 
     # update plots with plot data lists
@@ -174,7 +171,7 @@ class PlotManager:
                         )
 
                         # Update auxiliary displays (e.g., PSM contour plot)
-                        device_widget.update_auxiliary_displays()
+                        device_widget.update_auxiliary_displays(self.data_holder)
 
                         # scale x-axis range if Follow is on
                         if self.config.plot_settings.follow:
@@ -188,7 +185,6 @@ class PlotManager:
                     device_widget.validate_connected_devices(device_config, self.data_holder, self.config)
 
             except Exception as e:
-                print(traceback.format_exc())
                 logging.exception(e)
 
         # update axes # TODO add flag for updating axes, activate flag when any 'Plot to main' option is changed

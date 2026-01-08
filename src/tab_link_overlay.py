@@ -91,6 +91,53 @@ class TabLinkOverlay(QWidget):
 
         return local_pos.x()
 
+    def _lines_overlap(self, line1, line2):
+        """Check if two horizontal line segments overlap in X range.
+
+        Args:
+            line1: Tuple (x1, x2) for first line
+            line2: Tuple (x1, x2) for second line
+
+        Returns:
+            True if the lines' X ranges intersect
+        """
+        x1_min, x1_max = min(line1), max(line1)
+        x2_min, x2_max = min(line2), max(line2)
+
+        # Check if ranges intersect
+        return x1_min < x2_max and x2_min < x1_max
+
+    def _assign_line_levels(self, line_segments):
+        """Assign vertical levels to lines, using higher levels only when overlapping.
+
+        Args:
+            line_segments: List of (source_id, target_id, x1, x2) tuples
+
+        Returns:
+            Dict mapping (source_id, target_id) -> level (0, 1, 2, ...)
+        """
+        if not line_segments:
+            return {}
+
+        levels = {}
+        lines_at_level = {}  # level -> list of (x1, x2)
+
+        for source_id, target_id, x1, x2 in line_segments:
+            line = (x1, x2)
+            # Find first level with no overlaps
+            level = 0
+            while True:
+                lines_at_this_level = lines_at_level.get(level, [])
+                has_overlap = any(self._lines_overlap(line, other) for other in lines_at_this_level)
+                if not has_overlap:
+                    break
+                level += 1
+
+            levels[(source_id, target_id)] = level
+            lines_at_level.setdefault(level, []).append(line)
+
+        return levels
+
     def paintEvent(self, event):
         """Draw connector lines between linked tabs."""
         painter = QPainter(self)
@@ -112,11 +159,8 @@ class TabLinkOverlay(QWidget):
         links = self._links.get(link_type, {})
         color = self.COLORS.get(link_type, QColor(100, 100, 100))
 
-        pen = QPen(color, 3)
-        pen.setCapStyle(Qt.RoundCap)
-        pen.setJoinStyle(Qt.RoundJoin)
-        painter.setPen(pen)
-
+        # Collect all line segments first
+        line_segments = []
         for source_id, target_id in links.items():
             if target_id == 'None' or target_id is None:
                 continue
@@ -128,9 +172,22 @@ class TabLinkOverlay(QWidget):
             target_x = self._get_tab_center_x(target_idx)
 
             if source_x is not None and target_x is not None:
-                self._draw_bracket(painter, source_x, target_x, color)
+                line_segments.append((source_id, target_id, source_x, target_x))
 
-    def _draw_bracket(self, painter, x1, x2, color):
+        # Assign levels to avoid overlapping lines
+        levels = self._assign_line_levels(line_segments)
+
+        # Draw each line at its assigned level
+        pen = QPen(color, 3)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+
+        for source_id, target_id, x1, x2 in line_segments:
+            level = levels.get((source_id, target_id), 0)
+            self._draw_bracket(painter, x1, x2, color, level)
+
+    def _draw_bracket(self, painter, x1, x2, color, level=0):
         """Draw a horizontal line connector between two tabs.
 
         Args:
@@ -138,9 +195,11 @@ class TabLinkOverlay(QWidget):
             x1: X coordinate of first tab center
             x2: X coordinate of second tab center
             color: Color for the bracket
+            level: Vertical level (0 = closest to tabs, higher = further up)
         """
-        # Draw at bottom of overlay (which sits at top of tabs)
-        y_line = self.height() - 4
+        # Draw near top of overlay (like before), with higher levels going down
+        # Level 0 = near top, level 1 = 10px lower, etc.
+        y_line = 8 + (level * 10)
 
         # Draw the horizontal connecting line
         pen = QPen(color, 3)

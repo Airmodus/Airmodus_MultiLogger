@@ -10,14 +10,13 @@ from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QSize
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QApplication, QTabWidget, QLabel,
     QFileDialog, QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QTabBar, QStackedWidget, QStyle, QLayout, QSizePolicy)
 from PyQt5.QtGui import QCursor
-from widgets import TabConfirmationPopup, BrowserStyleTabBar
+from widgets import TabConfirmationPopup, BrowserStyleTabBar, UpdateBanner
 
 from config import *
 from utils import (
     psm_update,
     psm_flow_send,
     cpc_flow_send,
-    ten_hz_clicked,
     command_entered
 )
 from plots import (
@@ -120,17 +119,23 @@ class MainWindow(QMainWindow):
         # load ini file if available (with auto-migration)
         self.load_ini()
 
-        # Update PSM connected CPC references after all devices are loaded
-        self._update_psm_cpc_connections()
-
         # Initialize device links and reorder tabs for linked devices
         self._initialize_device_links()
+
+        # Update all CPC dropdowns after device links are initialized
+        self._update_all_cpc_dropdowns()
 
         # Set initial window size
         self.resize(1500, 1040)
 
         # Set minimum width to prevent window from becoming too narrow
         self.setMinimumWidth(1000)
+
+        # Initialize update manager for automatic updates
+        from managers.update_manager import UpdateManager
+        self.update_manager = UpdateManager(self)
+        self._setup_update_signals()
+        self.update_manager.start()
 
     def _setup_gui(self):
         """Build main layout, splitters, tabs, etc."""
@@ -146,6 +151,11 @@ class MainWindow(QMainWindow):
         container_layout.setSizeConstraint(QLayout.SetNoConstraint)
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(0)
+
+        # Update banner (hidden by default, shown when update available)
+        self.update_banner = UpdateBanner()
+        self.update_banner.hide()
+        container_layout.addWidget(self.update_banner)
 
         # create horizontal top bar: [Logo] [Plus] [Tab Bar] [Gear]
         top_bar_widget = QWidget()
@@ -167,6 +177,7 @@ class MainWindow(QMainWindow):
 
         # Create container for tab bar
         tab_bar_container = QWidget()
+        tab_bar_container.setStyleSheet("background: transparent;")
         tab_bar_container_layout = QHBoxLayout(tab_bar_container)
         tab_bar_container_layout.setContentsMargins(0, 0, 0, 0)
         tab_bar_container_layout.setSpacing(0)
@@ -174,7 +185,10 @@ class MainWindow(QMainWindow):
         # create tab bar (ONLY the tabs, not the content)
         self.device_tab_bar = BrowserStyleTabBar()
         self.device_tab_bar.setStyleSheet("""
-            QTabBar::tab {
+            QTabBar#mainDeviceTabBar {
+                background: transparent;
+            }
+            QTabBar#mainDeviceTabBar::tab {
                 min-width: 150px;
                 max-width: 200px;
                 height: 53px;
@@ -182,29 +196,34 @@ class MainWindow(QMainWindow):
                 background-color: #3a3a3a;
                 color: #cccccc;
                 border: none;
+                margin: 0px;
                 margin-right: 2px;
                 font-size: 14px;
                 font-weight: 500;
             }
-            QTabBar::tab:selected {
+            QTabBar#mainDeviceTabBar::tab:selected {
                 background-color: #2a2a2a;
                 color: #ffffff;
+                border: none;
+                border-bottom: 5px solid #ffffff;
+                padding-bottom: 3px;
             }
-            QTabBar::tab:hover {
+            QTabBar#mainDeviceTabBar::tab:hover:!selected {
                 background-color: #4a4a4a;
             }
 
             /* Hide native scroll buttons (we use custom overlays) */
-            QTabBar::scroller {
+            QTabBar#mainDeviceTabBar::scroller {
                 width: 0px;
             }
-            QTabBar QToolButton {
+            QTabBar#mainDeviceTabBar QToolButton {
                 width: 0px;
                 height: 0px;
             }
         """)
         self.device_tab_bar.currentChanged.connect(self._on_tab_changed)
         self.device_tab_bar.tabMoved.connect(self._on_tab_moved)
+        self.device_tab_bar.tabBarClicked.connect(self._on_tab_clicked)
 
         tab_bar_container_layout.addWidget(self.device_tab_bar, stretch=1)
 
@@ -292,6 +311,14 @@ class MainWindow(QMainWindow):
             if 0 <= saved < device_widget.count():
                 device_widget.setCurrentIndex(saved)
 
+    def _on_tab_clicked(self, index):
+        """Handle tab click - ensure close button visibility is updated.
+
+        This is needed because currentChanged doesn't fire when clicking
+        an already-selected tab.
+        """
+        self._update_close_button_visibility()
+
     def _on_tab_moved(self, from_index, to_index):
         """Handle user drag-drop tab reordering - sync QStackedWidget and protect Main plot.
 
@@ -322,6 +349,30 @@ class MainWindow(QMainWindow):
         if widget:
             self.device_tabs.removeWidget(widget)
             self.device_tabs.insertWidget(to_index, widget)
+
+        # Reorder config.devices to match the new tab order
+        self._sync_config_devices_order()
+
+        # Save the configuration
+        self.save_ini()
+
+    def _sync_config_devices_order(self):
+        """Reorder config.devices list to match current tab order."""
+        # Build new device order based on tab positions (skip index 0 = Main plot)
+        new_order = []
+        for i in range(1, self.device_tabs.count()):
+            widget = self.device_tabs.widget(i)
+            if widget and hasattr(widget, 'dev_id'):
+                dev_id = widget.dev_id
+                # Find the matching device config
+                for dc in self.config.devices:
+                    if dc.device_id == dev_id:
+                        new_order.append(dc)
+                        break
+
+        # Replace devices list with new order
+        if len(new_order) == len(self.config.devices):
+            self.config.devices = new_order
 
     def _create_error_indicator_icon(self, color="#F57C00"):
         """Create a small colored dot icon for tab error indicators.
@@ -526,6 +577,11 @@ class MainWindow(QMainWindow):
             self.device_tabs.removeWidget(widget)
             self.device_tab_bar.removeTab(widget_index)
 
+        # Update close button visibility after tab removal
+        # Use immediate update plus deferred update to handle Qt's async tab state changes
+        self._update_close_button_visibility()
+        QTimer.singleShot(0, self._update_close_button_visibility)
+
         # Clear data holder
         self.data_holder.clear_for_device(dev_id)
 
@@ -591,7 +647,6 @@ class MainWindow(QMainWindow):
         """Open dialog to add a new device."""
         from dialogs import PortSelectionDialog
         from devices.device_data import create_device_settings
-        from config_migration import _get_device_type_name
 
         # Show port selection dialog
         dialog = PortSelectionDialog(self.device_manager, self.data_holder)
@@ -601,6 +656,7 @@ class MainWindow(QMainWindow):
         selected_port = dialog.get_selected_port()
         device_type_name = dialog.get_selected_type()
         serial_number = dialog.get_selected_serial_number()
+        firmware_version = dialog.get_selected_firmware()
 
         if not selected_port or not device_type_name:
             return  # Invalid selection
@@ -640,6 +696,20 @@ class MainWindow(QMainWindow):
         device_class = DEVICE_REGISTRY[device_type].widget_class
         extra_params = device_class.get_default_extra_params(device_type)
 
+        # Store firmware version if detected during port scan
+        if firmware_version:
+            extra_params['firmware_version'] = firmware_version
+
+        # For PSM devices, show bottle setup dialog
+        if device_type == PSM:
+            from dialogs import PSMBottleDialog
+            bottle_dialog = PSMBottleDialog(self)
+            if bottle_dialog.exec_() == bottle_dialog.Accepted:
+                extra_params['bottles_connected'] = bottle_dialog.bottles_connected()
+            else:
+                # User closed dialog - default to bottles connected for safety
+                extra_params['bottles_connected'] = True
+
         # Create device configuration
         device_config = DeviceConfig(
             device_id=self._next_device_id,
@@ -674,7 +744,7 @@ class MainWindow(QMainWindow):
         # This prevents blocking the main thread during device addition
         # Mark all PSMs as needing dropdown updates
         for device_config in self.config.devices:
-            if device_config.device_type in [PSM, PSM2]:
+            if device_config.device_type == PSM:
                 psm_widget = self.data_holder.device_widgets.get(device_config.device_id)
                 if psm_widget and hasattr(psm_widget, '_needs_cpc_dropdown_update'):
                     psm_widget._needs_cpc_dropdown_update = True
@@ -846,6 +916,11 @@ class MainWindow(QMainWindow):
 
         # Create serial connection (runtime state, stored in widget)
         connection = SerialDeviceConnection()
+
+        # Disable DTR for Arduino-based devices (prevents auto-reset on connect)
+        if device_config.device_type == AFM:
+            connection.disable_dtr = True
+
         if device_config.com_port:
             # Don't connect immediately - just set the port
             # The device_manager.connection_test() will handle actual connection
@@ -1000,22 +1075,6 @@ class MainWindow(QMainWindow):
                 cpc_widget.database_tab.update_global_connection_status()
                 cpc_widget.database_tab.sync_global_status_to_all_cpcs()
 
-    def _update_psm_cpc_connections(self):
-        """Update PSM connected CPC references after all devices are loaded."""
-        for device_config in self.config.devices:
-            if device_config.device_type not in [PSM, PSM2]:
-                continue
-
-            cpc_id = device_config.extra_params.get('connected_cpc', 'None')
-            if cpc_id == 'None':
-                continue
-
-            psm_widget = self.data_holder.device_widgets.get(device_config.device_id)
-            if psm_widget and hasattr(psm_widget, 'connected_cpc_device'):
-                cpc_widget = self.data_holder.device_widgets.get(cpc_id)
-                if cpc_widget:
-                    psm_widget.connected_cpc_device = cpc_widget
-
     def _update_cpc_dict(self):
         """Update CPC dictionary for PSM device linking."""
         self.cpc_dict = {'None': 'None'}
@@ -1114,7 +1173,12 @@ class MainWindow(QMainWindow):
             if device_id in self._device_links[link_type]:
                 del self._device_links[link_type][device_id]
         else:
-            self._device_links[link_type][device_id] = new_target
+            # Convert to int if string (JSON stores as string)
+            try:
+                new_target_int = int(new_target) if isinstance(new_target, str) else new_target
+                self._device_links[link_type][device_id] = new_target_int
+            except (ValueError, TypeError):
+                pass
 
         # Reorder tabs if connecting (not disconnecting)
         if new_target != 'None' and new_target is not None:
@@ -1122,6 +1186,28 @@ class MainWindow(QMainWindow):
 
         # Update visual connectors
         self._update_tab_link_overlay()
+
+        # Notify affected CPCs to update their dropdown visibility
+        if link_type == 'psm_cpc':
+            # Notify old CPC (if any) that PSM disconnected
+            if old_target and old_target != 'None':
+                try:
+                    old_cpc_id = int(old_target) if isinstance(old_target, str) else old_target
+                    old_cpc_widget = self.data_holder.device_widgets.get(old_cpc_id)
+                    if old_cpc_widget and hasattr(old_cpc_widget, 'update_main_plot_dropdown_visibility'):
+                        old_cpc_widget.update_main_plot_dropdown_visibility(self.config)
+                except (ValueError, TypeError):
+                    pass
+
+            # Notify new CPC (if any) that PSM connected
+            if new_target and new_target != 'None':
+                try:
+                    new_cpc_id = int(new_target) if isinstance(new_target, str) else new_target
+                    new_cpc_widget = self.data_holder.device_widgets.get(new_cpc_id)
+                    if new_cpc_widget and hasattr(new_cpc_widget, 'update_main_plot_dropdown_visibility'):
+                        new_cpc_widget.update_main_plot_dropdown_visibility(self.config)
+                except (ValueError, TypeError):
+                    pass
 
     def _update_tab_link_overlay(self):
         """Update the visual connector overlay with current link data."""
@@ -1133,26 +1219,38 @@ class MainWindow(QMainWindow):
             )
 
     def _initialize_device_links(self):
-        """Initialize device links from config and reorder tabs on startup.
+        """Initialize device links from config on startup.
 
-        Called after all devices are loaded to restore tab grouping.
+        Called after all devices are loaded. Does NOT auto-reorder tabs since
+        the saved device order in config already reflects the user's preferred order.
+        Auto-reordering only happens when a NEW link is created.
         """
         # Populate link registry from device configs
         for device_config in self.config.devices:
             # PSM -> CPC links
-            if device_config.device_type in [PSM, PSM2]:
+            if device_config.device_type == PSM:
                 cpc_id = device_config.extra_params.get('connected_cpc', 'None')
                 if cpc_id != 'None' and cpc_id is not None:
-                    self._device_links['psm_cpc'][device_config.device_id] = cpc_id
+                    # Convert to int (JSON stores as string)
+                    try:
+                        cpc_id_int = int(cpc_id)
+                        self._device_links['psm_cpc'][device_config.device_id] = cpc_id_int
+                    except (ValueError, TypeError):
+                        pass
 
             # CPC -> RHTP links
             if device_config.device_type == CPC:
                 rhtp_id = device_config.extra_params.get('linked_rhtp', 'None')
                 if rhtp_id != 'None' and rhtp_id is not None:
-                    self._device_links['cpc_rhtp'][device_config.device_id] = rhtp_id
+                    # Convert to int (JSON stores as string)
+                    try:
+                        rhtp_id_int = int(rhtp_id)
+                        self._device_links['cpc_rhtp'][device_config.device_id] = rhtp_id_int
+                    except (ValueError, TypeError):
+                        pass
 
-        # Reorder tabs to group linked devices
-        self._reorder_linked_tabs()
+        # Don't reorder tabs on startup - respect the saved device order
+        # Auto-reordering only happens when creating a new link (in _on_device_link_changed)
 
         # Update visual connectors
         self._update_tab_link_overlay()
@@ -1161,10 +1259,22 @@ class MainWindow(QMainWindow):
         """Refresh Connected CPC dropdowns in all PSM widgets."""
         # Use pre-built cpc_dict for performance (avoids nested iteration)
         for device_config in self.config.devices:
-            if device_config.device_type in [PSM, PSM2]:
+            if device_config.device_type == PSM:
                 psm_widget = self.data_holder.device_widgets.get(device_config.device_id)
                 if psm_widget and hasattr(psm_widget, '_populate_cpc_dropdown'):
                     psm_widget._populate_cpc_dropdown(self.cpc_dict)
+
+    def _update_all_cpc_dropdowns(self):
+        """Update main plot dropdown visibility for all CPC and TSI CPC widgets.
+
+        Called after device links are initialized to ensure CPCs know if they
+        have a PSM connected to them.
+        """
+        for device_config in self.config.devices:
+            if device_config.device_type in (CPC, TSI_CPC):
+                cpc_widget = self.data_holder.device_widgets.get(device_config.device_id)
+                if cpc_widget and hasattr(cpc_widget, 'update_main_plot_dropdown_visibility'):
+                    cpc_widget.update_main_plot_dropdown_visibility(self.config)
 
     def x_range_changed(self, viewbox):
         # if autoscale y is on
@@ -1218,9 +1328,61 @@ class MainWindow(QMainWindow):
         if tab_index >= 0:
             self.device_tab_bar.setTabText(tab_index, device_name)
 
+    # ==================== Update Manager ====================
+
+    def _setup_update_signals(self):
+        """Connect update manager signals to UI handlers."""
+        # UpdateManager signals
+        self.update_manager.update_available.connect(self._on_update_available)
+        # Note: update_ready not connected - auto-download disabled until code signing is added
+        self.update_manager.error.connect(self._on_update_error)
+
+        # Banner signals
+        self.update_banner.clicked.connect(self._on_banner_clicked)
+        self.update_banner.dismissed.connect(self._on_banner_dismissed)
+
+    def _on_update_available(self, version_info: dict):
+        """New version found - show banner (no auto-download)."""
+        self._pending_version_info = version_info
+        # Show banner immediately - user will download from GitHub
+        self.update_banner.show_update_available(version_info)
+
+    def _on_banner_clicked(self):
+        """User clicked banner - open GitHub releases in browser."""
+        import webbrowser
+        if hasattr(self, '_pending_version_info') and self._pending_version_info:
+            # Use changelog_url from version.json, fallback to download_url
+            url = self._pending_version_info.get('changelog_url') or \
+                  self._pending_version_info.get('download_url', '')
+            if url:
+                webbrowser.open(url)
+                self.update_banner.hide()
+
+    def _on_banner_dismissed(self):
+        """User dismissed the banner - defer update for this session."""
+        self.update_manager.defer_update()
+
+    def _on_update_error(self, error_msg: str):
+        """Handle update error."""
+        logging.error(f"Update error: {error_msg}")
+        # Only show error to user if it's an install-related error (user-initiated action)
+        if "Cannot self-update" in error_msg or "Auto-update is only supported" in error_msg or "No update file" in error_msg:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Update Error", error_msg)
+
+    # ==================== Close Event ====================
+
     def closeEvent(self, event):
         """Handle application close event - cleanup all resources."""
         logging.info("Application closing, cleaning up resources...")
+
+        # Stop update manager
+        if hasattr(self, 'update_manager'):
+            try:
+                self.update_manager.stop()
+                logging.info("Update manager stopped")
+            except Exception as e:
+                logging.error(f"Error stopping update manager: {e}")
 
         # Stop timer service first (stops data acquisition loop)
         if hasattr(self, 'timer_service'):
