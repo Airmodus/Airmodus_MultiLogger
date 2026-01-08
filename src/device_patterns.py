@@ -19,6 +19,7 @@ DEVICE_TYPE_NAMES = {
     7: 'PSM',  # PSM 2.0 - maps to same "PSM" for backwards compatibility
     8: 'TSI CPC',
     9: 'AFM',
+    10: 'AFC',
     -1: 'Example device'
 }
 
@@ -58,6 +59,9 @@ class DeviceIdentifier:
         'Electrometer': [
             r'(?i)NewEMDAQ',  # Contains "NewEMDAQ" (case insensitive)
             r'(?i)Electrometer',  # Or contains "Electrometer"
+        ],
+        'AFC': [
+            r'(?i)AFC',  # Contains "AFC" (case insensitive)
         ],
     }
 

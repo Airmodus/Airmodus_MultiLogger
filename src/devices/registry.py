@@ -10,7 +10,7 @@ New devices can use the @register_device decorator for automatic registration.
 import logging
 
 from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM,
-                   EDILUTER, TSI_CPC, EXAMPLE_DEVICE)
+                   EDILUTER, TSI_CPC, AFC, EXAMPLE_DEVICE)
 
 
 # Decorator for automatic device registration
@@ -288,6 +288,15 @@ def setup_tsi_cpc_connections(widget, device_config, connection, app):
         connection.set_baud_rate(115200)
 
 
+def setup_afc_connections(widget, device_config, connection, app):
+    """Set up AFC-specific connections."""
+    # Flow setpoint
+    widget.control_tab.set_flow.value_spinbox.stepChanged.connect(
+        lambda value: connection.send_set_val(value, ":SET:FLOW "))
+    widget.control_tab.set_flow.value_input.returnPressed.connect(
+        lambda: connection.send_set_val(float(widget.control_tab.set_flow.value_input.text()), ":SET:FLOW "))    
+
+
 from devices.cpc import CPCWidget
 from devices.psm import PSMWidget
 from devices.rhtp import RHTPWidget
@@ -295,6 +304,7 @@ from devices.afm import AFMWidget
 from devices.ediluter import eDiluterWidget
 from devices.electrometer import ElectrometerWidget
 from devices.tsi_cpc import TSIWidget
+from devices.afc import AFCWidget
 
 
 DEVICE_REGISTRY = {
@@ -339,6 +349,12 @@ DEVICE_REGISTRY = {
     TSI_CPC: DeviceConfig(
         widget_class=TSIWidget,
         setup_connections_func=setup_tsi_cpc_connections,
+        has_special_setup=False
+    ),
+
+    AFC: DeviceConfig(
+        widget_class=AFCWidget,
+        setup_connections_func=setup_afc_connections,
         has_special_setup=False
     ),
 

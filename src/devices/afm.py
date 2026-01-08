@@ -68,7 +68,7 @@ class AFMWidget(SimpleDevice):
             if len(readings) == 5:
                 # Update data object
                 self.current_data.flow = float(readings[0])
-                self.current_data.saturator_flow = float(readings[1])
+                self.current_data.standard_flow = float(readings[1])
                 self.current_data.humidity = float(readings[2])
                 self.current_data.temperature = float(readings[3])
                 self.current_data.pressure = float(readings[4])

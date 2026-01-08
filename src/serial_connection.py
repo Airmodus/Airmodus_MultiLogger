@@ -27,11 +27,10 @@ class SerialDeviceConnection():
             self.connection.close()
         except: # if fails (i.e. port has not been open) continue normally
             pass
-        # For Arduino devices, disable DTR to prevent auto-reset when opening connection
-        if self.disable_dtr:
-            self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout, dsrdtr=False, dtr=False)
-        else:
-            self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout)
+
+        self.connection = Serial(self.serial_port, self.baud_rate, timeout=self.timeout) #, rtscts=True)
+        self.connection.setRTS(False)
+        print("Connected to %s" % self.serial_port)
 
     def connect_async(self, callback=None):
         """
@@ -48,7 +47,7 @@ class SerialDeviceConnection():
         def _connect_worker():
             success = False
             try:
-                self.connect()  # Existing blocking connect
+                self.connect()
                 success = hasattr(self, 'connection') and self.connection.is_open
                 self._connected = success  # Set flag for thread-safe checking
             except Exception as e:

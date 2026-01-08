@@ -4,7 +4,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Optional, List, Literal
 from utils import _manage_plot_array
-from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, TSI_CPC)
+
+from config import (CPC, PSM, ELECTROMETER, CO2_SENSOR, RHTP, AFM, EDILUTER, EXAMPLE_DEVICE, TSI_CPC, AFC)
 
 
 @dataclass
@@ -140,7 +141,8 @@ class DataHolder:
         # Error history for diagnostics
         self.error_history = ErrorHistoryManager()
         # Device names (static, move here for centralization)
-        self.device_names = {CPC: 'CPC', PSM: 'PSM', ELECTROMETER: 'Electrometer', CO2_SENSOR: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', EDILUTER: 'eDiluter', TSI_CPC: 'TSI CPC', EXAMPLE_DEVICE: 'Example device'}  # PSM2 removed - version determined by firmware
+
+        self.device_names = {CPC: 'CPC', PSM: 'PSM', ELECTROMETER: 'Electrometer', CO2_SENSOR: 'CO2 sensor', RHTP: 'RHTP', AFM: 'AFM', EDILUTER: 'eDiluter', TSI_CPC: 'TSI CPC', AFC: 'AFC', EXAMPLE_DEVICE: 'Example device'}  # PSM2 removed - version determined by firmware
 
         # Timer variables
         self.first_connection = False # once first connection has been made, set to True

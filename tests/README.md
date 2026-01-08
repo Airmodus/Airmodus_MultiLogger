@@ -107,7 +107,7 @@ Complete eDiluter device tests:
 Complete tests for all simple devices:
 - **RHTP**: RH, Temperature, Pressure parsing
 - **CO2 Sensor**: CO2 concentration (with optional T/RH)
-- **AFM**: Flow, saturator flow, environmental data
+- **AFM**: Flow, standard flow, environmental data
 - **Electrometer**: Single/triple voltage channels
 - **TSI CPC**: Concentration with error hex
 - **Example Device**: Template device implementation

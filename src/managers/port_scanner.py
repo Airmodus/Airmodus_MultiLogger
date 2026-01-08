@@ -424,6 +424,8 @@ class PortScannerThread(QThread):
                 write_timeout=self.connection_timeout
             )
 
+            ser.setRTS(False)
+
             # Small delay before sending command
             time.sleep(0.4)
 
@@ -497,6 +499,7 @@ class PortScannerThread(QThread):
         try:
             # Try to open the port exclusively
             ser = serial.Serial(port, timeout=0.05)
+            ser.setRTS(False)
             ser.close()
             return False
         except serial.SerialException:

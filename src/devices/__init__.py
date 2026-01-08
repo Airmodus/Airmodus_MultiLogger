@@ -6,4 +6,5 @@ from .rhtp import RHTPWidget
 from .ediluter import eDiluterWidget
 from .afm import AFMWidget
 from .tsi_cpc import TSIWidget
+from .afc import AFCWidget
 from .example import ExampleDeviceWidget

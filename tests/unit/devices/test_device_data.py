@@ -203,10 +203,10 @@ class TestSimpleDeviceData:
         assert arr[2] == 345.67
 
     def test_afm_data(self):
-        """Test AFM (Air Flow Meter) data structure."""
+        """Test AFM (Airmodus Flow Meter) data structure."""
         data = AFMData()
         data.flow = 1.25
-        data.saturator_flow = 0.8
+        data.standard_flow = 0.8
         data.temperature = 25.3
         data.pressure = 1013.2
         data.humidity = 45.0

@@ -382,11 +382,19 @@ class RHTPDataWriter(BaseDataWriter):
 
 
 class AFMDataWriter(BaseDataWriter):
-    """Data writer for AFM (Air Flow Meter) devices."""
+    """Data writer for AFM (Airmodus Flow Meter) devices."""
 
     def get_dat_header(self):
         """Return AFM .dat file header."""
         return 'YYYY.MM.DD hh:mm:ss,Flow (lpm),Standard flow (slpm),RH (%),T (C),P (Pa)'
+
+
+class AFCDataWriter(BaseDataWriter):
+    """Data writer for AFC (Airmodus Flow Controller) devices."""
+
+    def get_dat_header(self):
+        """Return AFC .dat file header."""
+        return 'YYYY.MM.DD hh:mm:ss,Standard flow (slpm),10 second average (slpm),T (C),Flow setpoint (slpm),Error status'
 
 
 class EDiluterDataWriter(BaseDataWriter):
