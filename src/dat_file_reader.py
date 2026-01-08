@@ -828,7 +828,6 @@ def find_inversion_csv_files(file_path: str, serial_number: str = None,
 
     # Get dates to search based on hours parameter
     now = datetime.now()
-    cutoff_time = now - timedelta(hours=hours)
     dates_to_search = set()
 
     # Calculate how many days back we need to search
@@ -848,22 +847,12 @@ def find_inversion_csv_files(file_path: str, serial_number: str = None,
             pattern = os.path.join(file_path, f"{date_str}_*_dNdlogDp.csv")
         all_matching_files.extend(glob.glob(pattern))
 
-    # Filter by time: parse timestamp from filename and check against cutoff
-    valid_files = []
-    for filepath in all_matching_files:
-        filename = os.path.basename(filepath)
-        # Extract timestamp from filename: YYYYMMDD_HHMMSS_...
-        try:
-            timestamp_str = filename[:15]  # "YYYYMMDD_HHMMSS"
-            file_time = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
-            if file_time >= cutoff_time:
-                valid_files.append(filepath)
-        except (ValueError, IndexError):
-            # If can't parse timestamp, include the file anyway
-            valid_files.append(filepath)
-
-    # Sort by filename (chronological)
-    return sorted(valid_files)
+    # Don't filter by file creation timestamp - the timestamp in the filename
+    # is when the file was created (typically at midnight), not when data ends.
+    # Files from relevant dates may contain data within the time window.
+    # Actual time filtering happens when loading individual scans from the CSV.
+    # Just return all files from relevant dates, sorted chronologically.
+    return sorted(all_matching_files)
 
 
 def load_scans_from_inversion_csv(csv_path: str, expected_bin_limits: np.ndarray = None) -> Tuple[Optional[List[Dict]], bool]:
