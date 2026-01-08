@@ -3280,56 +3280,37 @@ class PSMContourTab(QWidget):
             scans_in_range = [(ts, scan) for ts, scan in zip(scan_timestamps, self.scan_buffer)
                               if ts >= time_window_ago]
 
-            # Create time grid with bin size scaled to window (more bins for shorter windows)
-            # Aim for ~360 bins regardless of window size
-            time_bin_size_seconds = max(60, int(self.time_window_hours * 3600 / 360))
-            n_time_bins = int(self.time_window_hours * 3600 / time_bin_size_seconds)
-
-            # Create data matrix with NaN for gaps (will show as black)
-            data_matrix = np.full((num_bins, n_time_bins), np.nan)
-
-            # Place each scan at its time position within the time window
-            # Fill forward to the next scan to avoid gaps between scans
+            # Sort scans by time - one column per scan (no time binning)
             sorted_scans = sorted(scans_in_range, key=lambda x: x[0])
+            n_scans = len(sorted_scans)
+
+            if n_scans == 0:
+                self.image_item.clear()
+                self._last_file_ranges = []
+                self._last_scans_in_range = None
+                return
+
+            # Create data matrix with one column per scan
+            data_matrix = np.full((num_bins, n_scans), np.nan)
+
+            # Store scan timestamps for x-axis mapping
+            self._scan_timestamps = [ts for ts, _ in sorted_scans]
+
+            # Fill data matrix - one scan per column
             for i, (ts, scan) in enumerate(sorted_scans):
-                # Calculate seconds since window start
-                seconds_since_start = (ts - time_window_ago).total_seconds()
-                time_idx_start = int(seconds_since_start / time_bin_size_seconds)
-                time_idx_start = max(0, min(time_idx_start, n_time_bins - 1))
-
-                # Determine end index: fill until next scan or current time
-                if i + 1 < len(sorted_scans):
-                    next_ts = sorted_scans[i + 1][0]
-                    seconds_to_next = (next_ts - time_window_ago).total_seconds()
-                    time_idx_end = int(seconds_to_next / time_bin_size_seconds)
-                else:
-                    # Last scan: fill to current time
-                    seconds_to_now = (now - time_window_ago).total_seconds()
-                    time_idx_end = int(seconds_to_now / time_bin_size_seconds) + 1
-                time_idx_end = max(0, min(time_idx_end, n_time_bins))
-
                 dN_dlogDp = scan['dN_dlogDp']
                 if len(dN_dlogDp) == num_bins:
-                    # Fill all bins from this scan to the next
-                    for time_idx in range(time_idx_start, time_idx_end):
-                        if np.isnan(data_matrix[0, time_idx]):
-                            data_matrix[:, time_idx] = dN_dlogDp
-                        else:
-                            data_matrix[:, time_idx] = (data_matrix[:, time_idx] + dN_dlogDp) / 2
+                    data_matrix[:, i] = dN_dlogDp
 
             # Apply averaging if enabled
             if self.averaging_enabled and self.avg_n > 1:
                 data_matrix = self._apply_scan_averaging(data_matrix, self.avg_n)
 
-            # Take log10, keeping NaN for gaps
-            valid_mask = ~np.isnan(data_matrix)
-            data_matrix_log = np.full_like(data_matrix, np.nan)
-            data_matrix_log[valid_mask] = np.where(
-                data_matrix[valid_mask] > 0.1,
-                data_matrix[valid_mask],
-                0.1
-            )
-            z = np.log10(data_matrix_log)
+            # Take log10 - replace NaN and values < 0.1 with 0.1 so they show as blue
+            # (Previously NaN showed as black, now all empty/zero values show as blue)
+            data_matrix_filled = np.where(np.isnan(data_matrix), 0.1, data_matrix)
+            data_matrix_filled = np.where(data_matrix_filled < 0.1, 0.1, data_matrix_filled)
+            z = np.log10(data_matrix_filled)
 
             # Calculate min/max for colorbar from valid data only
             valid_z = z[~np.isnan(z)]
@@ -3344,11 +3325,19 @@ class PSMContourTab(QWidget):
             lut = self.data_cmap.getLookupTable(nPts=256)
             self.image_item.setImage(z.T, autoLevels=False, levels=(min_z, max_z), lut=lut)
 
-            # Set image position and scale
-            # X-axis: hours from start of time window, mapped to actual clock times
-            start_hour = time_window_ago.hour + time_window_ago.minute / 60
+            # Set image position and scale based on scan timestamps
+            # X-axis: hours from first to last scan time
+            first_ts = sorted_scans[0][0]
+            last_ts = sorted_scans[-1][0]
+            start_hour = first_ts.hour + first_ts.minute / 60 + first_ts.second / 3600
+            end_hour = last_ts.hour + last_ts.minute / 60 + last_ts.second / 3600
+
+            # Handle crossing midnight (end_hour would be less than start_hour)
+            if end_hour < start_hour:
+                end_hour += 24
+
             pos_x = start_hour
-            width = self.time_window_hours
+            width = max(end_hour - start_hour, 0.1)  # Minimum width to avoid zero-width image
 
             # Y-axis uses bin indices (0 to num_bins) - equal height bins
             pos_y = 0
@@ -3365,6 +3354,7 @@ class PSMContourTab(QWidget):
             self._last_pos_x = pos_x
             self._last_width = width
             self._last_num_bins = num_bins
+            self._last_n_scans = n_scans  # Number of scan columns
 
             # Update axis label
             self.plot.setLabel('bottom', 'Time')
