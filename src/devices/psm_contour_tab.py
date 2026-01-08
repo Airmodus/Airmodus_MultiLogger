@@ -1581,16 +1581,14 @@ class PSMContourTab(QWidget):
 
     def _set_time_window(self, hours):
         """Set the time window for the contour plot."""
-        old_hours = self.time_window_hours
         self.time_window_hours = hours
         self._save_contour_settings()
 
-        # If increasing the time window, need to reload historical data
-        if hours > old_hours:
-            self._historical_data_loaded = False
-            self._start_historical_data_load()
-        else:
-            self._render_contour()
+        # Always reload data when time window changes to ensure grid alignment
+        # (Different time windows use different bin sizes, so the scan buffer
+        # must be reloaded to prevent display artifacts like solid color bands)
+        self._historical_data_loaded = False
+        self._start_historical_data_load()
 
     def _set_colormap(self, cmap_name):
         """Set the colormap for the contour plot."""
